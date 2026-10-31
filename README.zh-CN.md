@@ -57,6 +57,6 @@
 
 CDDA 主体源代码与游戏内容主要采用 **CC BY-SA 3.0（署名—相同方式共享）**；部分字体、依赖与第三方资源采用其他独立许可。发布及二次分发时必须保留相关版权与许可证。详见 [版权和素材来源说明](docs/ATTRIBUTION.md)以及仓库原始 [LICENSE.txt](LICENSE.txt)。
 
-开发者本地图块包 **UndeadPeople** 来自独立仓库，位于本项目的外层 `assets/` 开发目录，并非本源码仓库的一部分。是否能够将这些素材包含到公开 Release，必须单独核对来源、许可证和资源作者授权。项目并未将 Minecraft Photon 光影包纳入本仓库。
+开发者本地图块包 **UndeadPeople** 来自独立仓库，位于本项目的外层 `assets/` 开发目录，并非本源码仓库的一部分。是否能够将这些素材包含到公开 Release，必须单独核对来源、许可证和资源作者授权。
 
 [原版 CDDA README 备份](docs/UPSTREAM_README.md) 已保留，以便查阅项目历史及贡献者。
