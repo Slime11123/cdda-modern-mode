@@ -1,0 +1,11 @@
+[
+  {
+    "type": "MOD_INFO",
+    "id": "fp3d_qa_fixture",
+    "name": "FP3D isolated combat QA fixture",
+    "authors": [ "Local QA" ],
+    "description": "Test directory only: spawn one ordinary zombie adjacent on load; combat rules unchanged.",
+    "category": "misc_additions",
+    "dependencies": [ "dda" ]
+  }
+]

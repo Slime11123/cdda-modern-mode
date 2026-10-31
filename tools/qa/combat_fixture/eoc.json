@@ -1,0 +1,19 @@
+[
+  {
+    "type": "effect_on_condition",
+    "id": "EOC_FP3D_QA_COMBAT_TARGET",
+    "eoc_type": "EVENT",
+    "required_event": "game_load",
+    "effect": [
+      { "u_location_variable": { "context_val": "qa_target" }, "x_adjust": 1 },
+      {
+        "u_spawn_monster": "mon_zombie",
+        "real_count": 1,
+        "min_radius": 0,
+        "max_radius": 0,
+        "target_var": { "context_val": "qa_target" },
+        "spawn_message": "QA fixture: ordinary zombie placed one tile east for input regression."
+      }
+    ]
+  }
+]

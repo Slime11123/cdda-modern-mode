@@ -1,0 +1,45 @@
+#pragma once
+#ifndef CATA_SRC_FP3D_INPUT_H
+#define CATA_SRC_FP3D_INPUT_H
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include <string>
+#include <deque>
+#include <map>
+#include "input_enums.h"
+#include "action.h"
+
+class input_context;
+struct input_event;
+namespace fp3d_input
+{
+enum class mode { original_2d, first_person_3d };
+input_context context();
+bool modifier_binding_editor();
+void register_world_actions( input_context &world );
+// One physical press, classified at the input boundary. No world mutations.
+class gestures
+{
+        struct held {
+            std::string command;
+            unsigned started = 0;
+            bool fired = false;
+        };
+        std::map<std::pair<input_event_t, int>, held> buttons;
+        std::deque<std::string> pending;
+        bool expanded = false;
+    public:
+        bool event( const input_event &input, bool down, unsigned now );
+        std::string poll( unsigned now );
+        void cancel();
+        bool expanded_hud() const {
+            return expanded;
+        }
+};
+gestures &world_gestures();
+// Translate profile commands into native actions; never change world state.
+std::string resolve( mode controls, const input_event &event, float yaw, bool driving = false );
+bool vehicle_controls();
+action_id display_bindings( input_context &original );
+}
+#endif
+#endif
