@@ -1743,6 +1743,10 @@ void clear_resume()
     resume_after_activity = false;
     retained_panel.reset();
 }
+int scale_percent()
+{
+    return 100 + scale_choice * 25;
+}
 bool transfer_pending()
 {
     return retained_panel != nullptr;

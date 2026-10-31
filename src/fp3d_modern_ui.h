@@ -12,6 +12,7 @@ namespace fp3d_modern_ui
 {
 std::unique_ptr<cataimgui::window> create( avatar &you, map &here, int scale_percent = 0,
         bool nearby = false, int initial_page = -1, item_location initial_use = {} );
+int scale_percent();
 bool transfer_pending();
 bool take_resume();
 void clear_resume();

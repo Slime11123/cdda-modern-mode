@@ -391,3 +391,18 @@ ON runtime/modern-controls-navigation、OFF 构建完成，启动器已更新。
 最终功能68用例/2056断言（`modern-surface-focused-cpu.log`），图形2326（`modern-surface-focused-gl.log`），ON/OFF（`modern-surface-focused-rebuild.log` / `modern-surface-focused-off.log`）通过；完整三回合对照 `modern-surface-focused-world-turn/20261031-190927-268` 再次得到完全相同SHA256 FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。
 
 根目录“启动3D操作修复验证.cmd”更新到 `runtime/modern-controls-surface-focused`；并行主入口仍不变。当前产品没有楼板缓存或逐格计时探针。下一步从仍为原版行动列表兼容入口的Q，继续计划中的现代快捷轮盘。
+
+
+### 2026-10-31：P5.1 / P5.4 Q 快捷行动轮盘与 M 分发修复
+
+Q 现打开同一3D窗口中的半透明八向轮盘：投掷、拖拽、变异能力、仿生装置、装填、附近物品、生存面板、更多行动。鼠标点击执行，方向键选择/Enter确认；Esc、右键或点击空白取消。普通文字白色，选中项金色，保持3D视口位置与比例的GPU背景快照，不将视口拉伸到整个窗口。沿用生存面板的100/125/150%会话缩放。Q仍通过独立FP3D绑定配置，可改键，2D映射保持。
+
+轮盘绘制/悬停只产生选择结果；关闭后才交给原版throw/grab/bionics/mutations/reload等动作或既有现代面板，保留原版后续选择与规则。取消、F5切出、关闭恢复输入上下文并清理手势。能力、投掷、拖拽等后续原版子界面仍是兼容入口，本轮未重写其深层流程。HUD增加Q提示。
+
+同时复现并修复M实际分发遗漏：mapper返回FP3D_MAP，但DEFAULTMODE未注册该命令，过去可能落回原版地图。新增跨模块回归在修复前4断言中1失败（`modern-map-dispatch-before.log`），补齐FP3D_MAP/FP3D_ACTIONS注册后通过；不是仅检查键映射函数的字符串返回。
+
+功能72用例/2127断言（`modern-wheel-cpu.log`），图形2462（`modern-wheel-gl.log`）通过。原生ImGui/SDL后端覆盖1280×720、1920×1080各100/150%两种贴图包，30帧悬停、点击产生面板请求、右键取消；时间/AP/位置/HP/耐力/饥渴/RNG保持。检查截图中白字与单项金色、扇区及底部说明可读。预览 `modern-wheel-gl/UNDEAD_PEOPLE_BASE-wheel-1920-100.png` 和 `...-1280-150.png`。实体键鼠的完整Q打开/退出流程仍待验收，自动测试未冒称实体已通过。
+
+ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整三回合独立进程原版/3D对照 `modern-wheel-world-turn/20261031-225120-773` 再次输出相同SHA256 FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。定向测试初次编译缺少input.h、随后尝试调用私有改键方法失败，已改用原版偏好文件加载器并保留失败记录，未开放原版私有接口。
+
+“启动3D操作修复验证.cmd”更新到 `runtime/modern-controls-wheel`。主入口由并行任务更新为render-exclusive，保留原设置；只按行提交本轮在input/compositor和图形测试中的改动，不混入并行的三模式/独占绘制改动。

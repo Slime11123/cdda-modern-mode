@@ -88,14 +88,13 @@ std::string resolve( mode controls, const input_event &event, float yaw, bool dr
                  std::pair{ "FP3D_RELOAD", ACTION_RELOAD_WIELDED },
                  std::pair{ "FP3D_RUN", ACTION_TOGGLE_RUN },
                  std::pair{ "FP3D_CROUCH", ACTION_TOGGLE_CROUCH },
-                 std::pair{ "FP3D_WAIT", ACTION_PAUSE },
-                 std::pair{ "FP3D_ACTIONS", ACTION_ACTIONMENU }
+                 std::pair{ "FP3D_WAIT", ACTION_PAUSE }
              } ) {
             if( command == entry.first ) {
                 return action_ident( entry.second );
             }
         }
-        if( command == "FP3D_PANEL" || command == "FP3D_MAP" ||
+        if( command == "FP3D_PANEL" || command == "FP3D_MAP" || command == "FP3D_ACTIONS" ||
             command.compare( 0, 10, "FP3D_SLOT_" ) == 0 ) {
             return command;
         }
@@ -121,7 +120,7 @@ void register_world_actions( input_context &world )
 {
     for( const char *command : {
              "FP3D_INTERACT", "FP3D_INTERACT_LONG", "FP3D_PICKUP",
-             "FP3D_PICKUP_LONG", "FP3D_ATTACK", "FP3D_AIM", "FP3D_PANEL"
+             "FP3D_PICKUP_LONG", "FP3D_ATTACK", "FP3D_AIM", "FP3D_PANEL", "FP3D_MAP", "FP3D_ACTIONS"
          } ) {
         world.register_action( command );
     }

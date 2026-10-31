@@ -142,4 +142,19 @@ TEST_CASE( "fp3d_hotbar_and_modifier_commands_are_independent", "[fp3d][input]" 
     CHECK( fp3d_input::resolve( fp3d_input::mode::original_2d,
                                 input_event( '1', input_event_t::keyboard_code ), 0 ).empty() );
 }
+
+TEST_CASE( "fp3d_map_intent_reaches_the_native_world_dispatcher", "[fp3d][input][map_dispatch]" )
+{
+    restore_on_out_of_scope restore_manager( inp_mngr );
+    inp_mngr = input_manager();
+    inp_mngr.init();
+    const auto world = get_default_mode_input_context();
+    const input_event key( 'm', input_event_t::keyboard_code );
+    const auto native = world.input_to_action( key );
+    const auto mapped = fp3d_input::resolve( fp3d_input::mode::first_person_3d, key, 0 );
+    REQUIRE( mapped == "FP3D_MAP" );
+    CHECK( world.is_registered_action( mapped ) );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::original_2d, key, 0 ).empty() );
+    CHECK( world.input_to_action( key ) == native );
+}
 #endif

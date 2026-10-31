@@ -6,6 +6,8 @@
 #include "fp3d_inventory.h"
 #include "fp3d_journal.h"
 #include "fp3d_modern_ui.h"
+#include "fp3d_compositor.h"
+#include "fp3d_quick_menu.h"
 #include "game.h"
 #include "gun_mode.h"
 #include "item.h"
@@ -66,6 +68,14 @@ bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p )
 std::optional<request> resolve( const std::string &command,
                                 const std::optional<fp3d_targeting::target> &candidate, avatar &you, map &here )
 {
+    if( command == "FP3D_ACTIONS" ) {
+        const auto choice = fp3d_quick_menu::show();
+        if( !choice || !fp3d_compositor::turn_based() ) { return std::nullopt; }
+        if( choice->command ) {
+            return resolve( choice->command, candidate, you, here );
+        }
+        return request{ choice->action, std::nullopt, false };
+    }
     if( command.compare( 0, 10, "FP3D_SLOT_" ) == 0 ) {
         const int current = fp3d_inventory::active_slot();
         const int index = command == "FP3D_SLOT_NEXT" ? ( current + 1 ) % 8 : command == "FP3D_SLOT_PREV" ?

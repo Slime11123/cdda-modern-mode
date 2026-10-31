@@ -408,8 +408,8 @@ std::vector<std::string> hud_lines()
     const auto target = interaction_target();
     const bool reachable = target && target->position.z() == latest_scene->origin.z() &&
                            square_dist( target->position, latest_scene->origin ) <= 1;
-    lines.push_back( reachable ? "E 交互 / F 拾取 / Tab 生存面板" : target ?
-                     "目标超出触及范围 / 请靠近并保持同层" : "Tab 生存面板 / Alt 状态 / F6 键位" );
+    lines.push_back( reachable ? "E 交互 / F 拾取 / Tab 面板 / Q 行动轮盘" : target ?
+                     "目标超出触及范围 / 请靠近并保持同层" : "Tab 面板 / Q 行动轮盘 / Alt 状态 / F6 键位" );
     return lines;
 }
 

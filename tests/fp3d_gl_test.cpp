@@ -17,6 +17,7 @@
 #include "avatar.h"
 #include "cata_imgui.h"
 #include "fp3d_modern_ui.h"
+#include "fp3d_quick_menu.h"
 #include "mission.h"
 #include "character_id.h"
 #include "npc.h"
@@ -1083,6 +1084,75 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                                               layout[0] ) + "-" + std::to_string( layout[2] ) + ".png" );
                     CHECK( IMG_SavePNG( picture.get(), output.u8string().c_str() ) == 0 );
                 }
+            }
+            // The radial menu uses the same native ImGui backend and preserves
+            // the map viewport instead of stretching the frozen 3D scene.
+            {
+                const auto old_viewport = fp3d_compositor::viewport_pixels();
+                fp3d_compositor::set_viewport( 0, 0, layout[0] * 3 / 4, layout[1], layout[0], layout[1] );
+                on_out_of_scope restore_viewport( [&]() {
+                    fp3d_compositor::set_viewport( old_viewport[0], old_viewport[1], old_viewport[2],
+                                                  old_viewport[3], layout[0], layout[1] );
+                } );
+                const auto wheel_position = you.pos_abs();
+                const int wheel_hp = you.get_hp();
+                const int wheel_stamina = you.get_stamina();
+                const int wheel_hunger = you.get_hunger();
+                const int wheel_thirst = you.get_thirst();
+                auto radial = fp3d_quick_menu::create( layout[2] );
+                const ImVec2 center( layout[0] * .375f, layout[1] * .5f );
+                for( int frame = 0; frame < 30; ++frame ) {
+                    ImGui_ImplSDLRenderer2_NewFrame();
+                    ImGui_ImplSDL2_NewFrame();
+                    ImGui::GetIO().AddMousePosEvent( center.x - 160, center.y );
+                    ImGui::GetIO().AddMouseButtonEvent( 0, frame == 28 );
+                    ImGui::NewFrame();
+                    radial->draw();
+                    if( frame == 27 ) { CHECK( radial->get_is_open() ); }
+                    if( frame == 28 ) {
+                        CHECK_FALSE( radial->get_is_open() );
+                        CHECK( radial->get_button_action() == "FP3D_PANEL" );
+                    }
+                    ImGui::Render();
+                    SDL_SetRenderDrawColor( renderer.get(), 12, 16, 20, 255 );
+                    SDL_RenderClear( renderer.get() );
+                    ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+                    if( frame == 8 ) {
+                        REQUIRE( ImGui::GetDrawData()->TotalVtxCount > 100 );
+                        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                            std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
+                            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                          pixels.data(), layout[0] * 4 ) == 0 );
+                            SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), layout[0],
+                                                   layout[1], 32, layout[0] * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                            REQUIRE( image );
+                            const auto filename = std::filesystem::path( directory ) /
+                                                  ( pack + "-wheel-" + std::to_string( layout[0] ) + "-" +
+                                                    std::to_string( layout[2] ) + ".png" );
+                            CHECK( IMG_SavePNG( image.get(), filename.u8string().c_str() ) == 0 );
+                        }
+                    }
+                }
+                auto cancelled = fp3d_quick_menu::create( layout[2] );
+                for( int frame = 0; frame < 3; ++frame ) {
+                    ImGui_ImplSDLRenderer2_NewFrame();
+                    ImGui_ImplSDL2_NewFrame();
+                    ImGui::GetIO().AddMousePosEvent( center.x, center.y );
+                    ImGui::GetIO().AddMouseButtonEvent( 1, frame == 1 );
+                    ImGui::NewFrame();
+                    cancelled->draw();
+                    ImGui::Render();
+                }
+                CHECK_FALSE( cancelled->get_is_open() );
+                CHECK_FALSE( cancelled->has_button_action() );
+                CHECK( calendar::turn == before_time );
+                CHECK( you.get_moves() == before_moves );
+                CHECK( you.pos_abs() == wheel_position );
+                CHECK( you.get_hp() == wheel_hp );
+                CHECK( you.get_stamina() == wheel_stamina );
+                CHECK( you.get_hunger() == wheel_hunger );
+                CHECK( you.get_thirst() == wheel_thirst );
+                CHECK( rng_get_engine() == before_rng );
             }
         }
 
