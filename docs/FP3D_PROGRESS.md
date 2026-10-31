@@ -434,3 +434,12 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 证据 `modern-indoor-final-movement` / `modern-stairs-final-movement` 的frames.csv、result.json和sampling-debug.log；综合记录 `modern-interior-validation.json`。原生日志分别持续保持z=1，以及在固定xy的z=0/1间交替。通过桌面窗口观察确认室内墙/地板/天花板显示及楼层变化。该人工世界含test_data及recurrence测试效果，角色后续寒冷、楼梯耐力耗尽/喘息仍按原版发生；它不是正式城市/复杂装修、敌人战斗或实体WASD验收。测量时未并行编译/跑其他测试，桌面并非独占环境，不据此声称帧率提升或硬件上限。
 
 保留所有失败与无效记录：最初在建筑生成前放置二楼角色触发原版坠落；随后未对齐地图保存层导致实际载入z=0，均已修正测试构造。两轮室内记录分别821/835失焦帧，仅作诊断，未作为正式帧率。正式241文件在整个采样前后哈希完全相同。产品构建沿用上一里程碑已通过功能73/2307、图形2462及ON/OFF的modern-controls-mouse，当前增量只有测试场景和报告。
+
+
+### 2026-10-31：P5.4 UI-S4 队友页列表、详情与操作布局
+
+将队友页由逐行罗列改为左侧可见人物列表、中间所选人物详情、右侧操作；较窄窗口和大缩放时将操作放入详情栏。新增当前可见人物姓名搜索，选择按原版人物ID保持；刷新后身份消失时回到可见列表首项。普通文字白色、选中行沿用金色强调，不显示隐藏或其他楼层人物。详情仅使用已有原版可公开的姓名、态度、距离、楼层、队友与跟随状态，没有增加平行NPC状态或AI。
+
+交谈操作保持原有ID/位置/可见性/相邻复查与原版ACTION_CHAT请求，在绘制后执行。交易、招募、跟随等仍明确标为原版对话确认，本轮不是完整现代队友命令交付。
+
+功能73用例/2307断言（`modern-people-cpu.log`），图形2462（`modern-people-gl.log`），ON/OFF（`modern-people-on.log` / `modern-people-off.log`）通过。两个贴图包、720p/1080p与100%/150%实际生产页面各30帧，保持时间/AP/RNG；检查 `modern-people-gl/UNDEAD_PEOPLE_BASE-people-1920-100.png` 与 `...-1280-150.png`，确认三栏和窄屏折叠、文字可读无重叠。实体点击/搜索输入法不冒称已验收。独立验证入口更新至 `runtime/modern-controls-people`，主入口仍保留render-exclusive。

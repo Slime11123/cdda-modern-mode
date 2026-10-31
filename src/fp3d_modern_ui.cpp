@@ -72,6 +72,8 @@ class panel : public cataimgui::window
         fp3d_journal::model journal;
         int mission_state = 0;
         size_t selected_mission = 0;
+        int selected_person = -1;
+        std::string people_search;
         std::string mission_search;
         bool projects_loaded = false;
         std::vector<fp3d_construction::project> projects;
@@ -989,26 +991,58 @@ class panel : public cataimgui::window
             }
             const float height = ImGui::GetContentRegionAvail().y - 85 * scale;
             if( people ) {
-                ImGui::BeginChild( "可见人物", ImVec2( 0, height ), true );
-                ImGui::TextWrapped( "当前同层可见人物；交易、招募和队友命令仍通过原版对话确认。" );
+                const float width = ImGui::GetContentRegionAvail().x;
+                const bool compact = width < 1250 * scale;
+                ImGui::BeginChild( "可见人物", ImVec2( width * .29f, height ), true );
+                ImGui::SetNextItemWidth( -1 );
+                ImGui::InputTextWithHint( "##人物搜索", "搜索可见人物", &people_search );
                 if( ImGui::Button( "刷新人物列表" ) ) { journal_loaded = false; }
-                if( journal.people.empty() ) {
-                    ImGui::TextUnformatted( "附近没有当前可见人物。" );
+                std::vector<const fp3d_journal::person_entry *> filtered;
+                const fp3d_journal::person_entry *person = nullptr;
+                for( const auto &entry : journal.people ) {
+                    if( !people_search.empty() && entry.name.find( people_search ) == std::string::npos ) {
+                        continue;
+                    }
+                    filtered.push_back( &entry );
+                    if( entry.id == selected_person ) {
+                        person = &entry;
+                    }
                 }
-                for( const auto &person : journal.people ) {
-                    ImGui::Separator();
-                    ImGui::TextWrapped( "%s / %s", person.name.c_str(), person.attitude.c_str() );
-                    ImGui::TextWrapped( "距离 %d 格 / %s", person.distance,
-                                        person.following ? "正在跟随" : person.ally ? "队友" : "尚未入队" );
-                    ImGui::PushID( person.id );
-                    ImGui::BeginDisabled( person.distance > 1 );
+                if( !person && !filtered.empty() ) {
+                    person = filtered.front();
+                    selected_person = person->id;
+                }
+                for( const auto *entry : filtered ) {
+                    ImGui::PushID( entry->id );
+                    if( ImGui::Selectable( entry->name.c_str(), selected_person == entry->id ) ) {
+                        selected_person = entry->id;
+                        person = entry;
+                    }
+                    if( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip( "%s", entry->name.c_str() );
+                    }
+                    ImGui::TextDisabled( "%d 格 / %s", entry->distance,
+                                         entry->following ? "正在跟随" : entry->ally ? "队友" : "尚未入队" );
+                    ImGui::PopID();
+                }
+                if( filtered.empty() ) {
+                    ImGui::TextWrapped( "没有匹配的当前同层可见人物。" );
+                }
+                ImGui::EndChild();
+                const auto actions = [&]() {
+                    ImGui::TextUnformatted( "人物操作" );
+                    if( !person ) {
+                        ImGui::TextDisabled( "先从左侧选择人物" );
+                        return;
+                    }
+                    ImGui::BeginDisabled( person->distance > 1 );
                     if( ImGui::Button( "与此人物交谈…" ) ) {
-                        if( fp3d_journal::dialogue_target( you, here, person.id, person.position ) ) {
+                        if( fp3d_journal::dialogue_target( you, here, person->id, person->position ) ) {
                             fp3d_inventory::operation request;
                             request.kind = fp3d_inventory::operation_kind::native;
                             request.native_action = ACTION_CHAT;
-                            request.talking_npc_id = person.id;
-                            request.destination_tile = person.position;
+                            request.talking_npc_id = person->id;
+                            request.destination_tile = person->position;
                             result = std::move( request );
                             is_open = false;
                         } else {
@@ -1017,10 +1051,34 @@ class panel : public cataimgui::window
                         }
                     }
                     ImGui::EndDisabled();
-                    if( person.distance > 1 ) { ImGui::TextDisabled( "靠近到相邻一格后可交谈" ); }
-                    ImGui::PopID();
+                    if( person->distance > 1 ) {
+                        ImGui::TextWrapped( "靠近到相邻一格后可交谈。" );
+                    }
+                    ImGui::TextWrapped( "交易、招募和跟随等指令暂由原版对话确认。" );
+                };
+                ImGui::SameLine();
+                ImGui::BeginChild( "人物详情", ImVec2( compact ? 0 : width * .43f, height ), true );
+                if( person ) {
+                    ImGui::TextWrapped( "%s", person->name.c_str() );
+                    ImGui::Separator();
+                    ImGui::TextWrapped( "态度：%s", person->attitude.c_str() );
+                    ImGui::TextWrapped( "距离：%d 格 / 楼层：%d", person->distance, person->position.z() );
+                    ImGui::TextWrapped( "关系：%s", person->ally ? "队友" : "尚未入队" );
+                    ImGui::TextWrapped( "跟随状态：%s", person->following ? "正在跟随" : "当前没有跟随" );
+                } else {
+                    ImGui::TextWrapped( "这里只列出角色当前可以看见的同层人物。" );
+                }
+                if( compact ) {
+                    ImGui::Separator();
+                    actions();
                 }
                 ImGui::EndChild();
+                if( !compact ) {
+                    ImGui::SameLine();
+                    ImGui::BeginChild( "队友操作", ImVec2( 0, height ), true );
+                    actions();
+                    ImGui::EndChild();
+                }
                 compatible( ACTION_CHAT, "对话与队友指令（原版确认）" );
                 return;
             }
