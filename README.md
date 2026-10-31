@@ -54,7 +54,7 @@ This project is **not affiliated with or endorsed by the official CDDA maintaine
 
 CDDA's main source/content license is **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)**; some included dependencies, fonts and other files have separate licenses. Preserve applicable upstream notices and the original [LICENSE.txt](LICENSE.txt). Read [Attribution and redistribution notes](docs/ATTRIBUTION.md).
 
-The project's local development environment uses an external **UndeadPeople** tileset, but those downloaded/generated assets are held outside this Git source tree. Their availability in a local build does **not** establish permission to redistribute them in a GitHub Release. Confirm their separate provenance and licenses before packaging. No Minecraft Photon shader pack is included with this repository.
+The project's local development environment uses an external **UndeadPeople** tileset, but those downloaded/generated assets are held outside this Git source tree. Their availability in a local build does **not** establish permission to redistribute them in a GitHub Release. Confirm their separate provenance and licenses before packaging.
 
 ## Contributing and support
 
