@@ -323,11 +323,8 @@ bool process_event( const SDL_Event &event )
     }
     if( captures_game_input() && ( event.type == SDL_MOUSEBUTTONDOWN ||
                                    event.type == SDL_MOUSEBUTTONUP ) ) {
-        const auto button = event.button.button == SDL_BUTTON_LEFT ? MouseInput::LeftButtonPressed :
-                            event.button.button == SDL_BUTTON_RIGHT ? MouseInput::RightButtonPressed :
-                            MouseInput::X1ButtonPressed;
-        fp3d_input::world_gestures().event( input_event( button, input_event_t::mouse ),
-                                            event.type == SDL_MOUSEBUTTONDOWN, SDL_GetTicks() );
+        fp3d_input::world_gestures().mouse_button( event.button.button,
+                event.type == SDL_MOUSEBUTTONDOWN, SDL_GetTicks() );
         return true; // Never let a world click become native 2D auto-travel.
     }
     if( event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_F5 ) {

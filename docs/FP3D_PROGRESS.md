@@ -406,3 +406,12 @@ Q 现打开同一3D窗口中的半透明八向轮盘：投掷、拖拽、变异�
 ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整三回合独立进程原版/3D对照 `modern-wheel-world-turn/20261031-225120-773` 再次输出相同SHA256 FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。定向测试初次编译缺少input.h、随后尝试调用私有改键方法失败，已改用原版偏好文件加载器并保留失败记录，未开放原版私有接口。
 
 “启动3D操作修复验证.cmd”更新到 `runtime/modern-controls-wheel`。主入口由并行任务更新为render-exclusive，保留原设置；只按行提交本轮在input/compositor和图形测试中的改动，不混入并行的三模式/独占绘制改动。
+
+
+### 2026-10-31：P5.1 鼠标侧键身份与重绑定分发
+
+修复3D捕获鼠标时将中键、第二侧键及未知按钮一律解释成第一侧键的问题。按原版支持的左/右/X1/X2分别转换，中键与未知按钮不触发3D动作；世界鼠标事件仍不落入2D点击寻路。面板、地图、轮盘、装填、等待、键位设置及快捷栏改绑到鼠标后，现通过手势队列提交一次；按住、重复按下和松开不会重复触发。键盘对应命令继续走既有分发，未改原版零超时轮询。
+
+新增 `tests/fp3d_mouse_bindings_test.cpp`，使用原版偏好文件加载器逐项载入真实侧键绑定，覆盖X1交互与X2动作独立、中键/未知按钮不误触、单次提交、取消丢弃队列、2D映射保持，以及时间/AP/位置/RNG不变。定向180断言通过（`modern-mouse-focused.log`）；功能73用例/2307断言（`modern-mouse-cpu.log`），图形2462（`modern-mouse-gl.log`），ON/OFF（`modern-mouse-on.log` / `modern-mouse-off.log`）通过。完整三回合对照 `modern-mouse-world-turn/20261031-231133-534` SHA256仍为FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。
+
+本轮覆盖原版可配置的按下型鼠标侧键，不冒称实体F6流程、鼠标移动绑定或自动行走中弹出菜单已经验收。独立“启动3D操作修复验证.cmd”指向 `runtime/modern-controls-mouse`；主入口及其他任务改动保留。下一步补三层室内连续原版移动的实际一分钟性能采样。

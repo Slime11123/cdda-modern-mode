@@ -10,6 +10,7 @@
 #include "input_context.h"
 #include "translations.h"
 #include "uilist.h"
+#include "sdl_wrappers.h"
 
 namespace fp3d_input
 {
@@ -137,6 +138,19 @@ gestures &world_gestures()
     return value;
 }
 
+bool gestures::mouse_button( unsigned button, bool down, unsigned now )
+{
+    MouseInput key;
+    switch( button ) {
+        case SDL_BUTTON_LEFT: key = MouseInput::LeftButtonPressed; break;
+        case SDL_BUTTON_RIGHT: key = MouseInput::RightButtonPressed; break;
+        case SDL_BUTTON_X1: key = MouseInput::X1ButtonPressed; break;
+        case SDL_BUTTON_X2: key = MouseInput::X2ButtonPressed; break;
+        default: return false;
+    }
+    return event( input_event( key, input_event_t::mouse ), down, now );
+}
+
 bool gestures::event( const input_event &input, bool down, unsigned now )
 {
     if( input.sequence.empty() ) {
@@ -157,7 +171,13 @@ bool gestures::event( const input_event &input, bool down, unsigned now )
         return true;
     }
     const std::string command = context().input_to_action( input );
-    if( command != "FP3D_INTERACT" && command != "FP3D_PICKUP" && command != "FP3D_ATTACK" &&
+    // Keyboard commands continue through the native dispatcher. Mouse buttons
+    // are consumed by the compositor, so queue their rebound one-shot actions.
+    const bool mouse_action = input.type == input_event_t::mouse &&
+                              ( command == "FP3D_PANEL" || command == "FP3D_MAP" || command == "FP3D_ACTIONS" ||
+                                command == "FP3D_RELOAD" || command == "FP3D_WAIT" || command == "FP3D_BINDINGS" ||
+                                command.compare( 0, 10, "FP3D_SLOT_" ) == 0 );
+    if( !mouse_action && command != "FP3D_INTERACT" && command != "FP3D_PICKUP" && command != "FP3D_ATTACK" &&
         command != "FP3D_AIM" && command != "FP3D_STATUS" && command != "FP3D_RUN" &&
         command != "FP3D_CROUCH" ) {
         return false;
@@ -165,13 +185,13 @@ bool gestures::event( const input_event &input, bool down, unsigned now )
     if( buttons.count( key ) ) {
         return true;
     }
-    const bool immediate = command == "FP3D_ATTACK" || command == "FP3D_AIM" ||
+    const bool immediate = mouse_action || command == "FP3D_ATTACK" || command == "FP3D_AIM" ||
                            command == "FP3D_STATUS" || command == "FP3D_RUN" || command == "FP3D_CROUCH";
     buttons.emplace( key, held{ command, now, immediate } );
     if( command == "FP3D_STATUS" ) {
         expanded = true;
     } else if( immediate && pending.size() < 4 ) {
-        pending.push_back( command == "FP3D_RUN" || command == "FP3D_CROUCH" ?
+        pending.push_back( mouse_action || command == "FP3D_RUN" || command == "FP3D_CROUCH" ?
                            resolve( mode::first_person_3d, input, 0 ) : command );
     }
     return true;

@@ -29,6 +29,7 @@ class gestures
         bool expanded = false;
     public:
         bool event( const input_event &input, bool down, unsigned now );
+        bool mouse_button( unsigned button, bool down, unsigned now );
         std::string poll( unsigned now );
         void cancel();
         bool expanded_hud() const {
