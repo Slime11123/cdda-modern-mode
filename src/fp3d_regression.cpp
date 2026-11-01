@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <numeric>
 #include <vector>
 #include <cstring>
@@ -55,6 +56,7 @@ struct frame_sample_state {
     std::vector<double> distant_costs;
     std::vector<double> perception_costs;
     std::vector<double> cell_costs;
+    std::map<std::string, std::vector<double>> stage_costs;
 };
 frame_sample_state frame_samples;
 bool world_ready = false;
@@ -123,7 +125,7 @@ void check_idle_world()
     }
 }
 }
-turn_probe::turn_probe()
+turn_probe::turn_probe( const char *initial_stage ) : current( initial_stage )
 {
     if( frame_sampling_requested() && world_ready && !frame_samples.done ) {
         started = SDL_GetPerformanceCounter();
@@ -140,6 +142,9 @@ void turn_probe::stage( const char *name )
     }
     const auto now = SDL_GetPerformanceCounter();
     const double milliseconds = ( now - started ) * 1000.0 / SDL_GetPerformanceFrequency();
+    if( frame_samples.started && !frame_samples.done && started >= frame_samples.started ) {
+        frame_samples.stage_costs[current].push_back( milliseconds );
+    }
     if( milliseconds >= 50 && g && !g->new_game ) {
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST native_stage=" << current
                                    << ", ms=" << milliseconds << ", turn=" << to_turn<int>( calendar::turn )
@@ -267,6 +272,9 @@ void presented( SDL_Renderer *renderer )
     log_frame_distribution( "snapshot_distant", state.distant_costs );
     log_frame_distribution( "snapshot_perception", state.perception_costs );
     log_frame_distribution( "snapshot_cells", state.cell_costs );
+    for( const auto &entry : state.stage_costs ) {
+        log_frame_distribution( ( "stage_" + entry.first ).c_str(), entry.second );
+    }
     if( const char *path = std::getenv( "CDDA_FP3D_FRAME_REPORT" ) ) {
         std::ofstream report( path );
         report << std::setprecision( 15 ) << "kind,index,milliseconds\n";
@@ -281,6 +289,9 @@ void presented( SDL_Renderer *renderer )
         write_samples( "snapshot_distant", state.distant_costs );
         write_samples( "snapshot_perception", state.perception_costs );
         write_samples( "snapshot_cells", state.cell_costs );
+        for( const auto &entry : state.stage_costs ) {
+            write_samples( ( "stage_" + entry.first ).c_str(), entry.second );
+        }
         report.close();
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST raw_report=" << path
                                    << ", written=" << !report.fail();

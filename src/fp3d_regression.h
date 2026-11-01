@@ -8,7 +8,7 @@ namespace fp3d_regression
 class turn_probe
 {
     public:
-        turn_probe();
+        explicit turn_probe( const char *initial_stage = "setup" );
         ~turn_probe();
         void stage( const char *name );
     private:

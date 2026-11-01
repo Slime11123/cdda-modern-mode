@@ -571,6 +571,9 @@ void refresh_display()
         return;
     }
 
+#if defined(ENABLE_FP3D)
+    fp3d_regression::turn_probe display_probe( "display_prepare" );
+#endif
     // Select default target (the window), copy rendered buffer
     // there, present it, select the buffer as target again.
     SetRenderTarget( renderer, nullptr );
@@ -591,15 +594,19 @@ void refresh_display()
     draw_virtual_joystick();
 #endif
 #if defined(ENABLE_FP3D)
+    display_probe.stage( "display_compose" );
     fp3d_compositor::compose();
+    display_probe.stage( "display_hud" );
     draw_fp3d_hud();
     if( font ) {
         fp3d_entry::draw( renderer, geometry, *font, fp3d_compositor::viewport_pixels(),
                           fp3d_compositor::captures_game_input() );
     }
+    display_probe.stage( "display_present" );
 #endif
     SDL_RenderPresent( renderer.get() );
 #if defined(ENABLE_FP3D)
+    display_probe.stage( "display_finish" );
     fp3d_regression::presented( renderer.get() );
 #endif
     SetRenderTarget( renderer, display_buffer );
