@@ -456,3 +456,10 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 图形测试曾因在解绑后查询材质、首张截图目录未建、准星覆盖中心点而失败；修正测试生命周期后，Retrodays字形贴图的单点透明仍触发错误预期，现改为门洞区域比较，未关闭或跳过任一贴图包。失败日志 `modern-blueprint-gl.log` / `modern-blueprint-gl-pass.log` 与中间通过记录保留。完整三回合对照 `modern-blueprint-world-turn/20261101-100628-824` 再次得到相同SHA256 FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。
 
 独立操作验证入口更新至 `runtime/modern-controls-blueprint`；主入口保留render-exclusive。只提交本轮共享源码的对应行，不混入其他任务的墙面比例、三模式或独占渲染改动。实体选项目—瞄准—确认施工的完整键鼠流程仍待验收。
+
+
+### 2026-11-01：P5.4 制作筛选与选中条目保持一致
+
+修复搜索/技能筛选排除当前配方后，右侧仍保留旧配方并可跳转制作的问题。筛选有结果时，选中项若已不在结果中则改选首个匹配项并刷新详情；没有匹配项时显示空结果说明，不绘制旧配方的制作按钮。完整原版制作兼容入口保留。
+
+这是面板内的筛选修复，未改制作规则或执行链。ON打包通过（`modern-craft-filter-on.log`），既有实际生产面板图形回归2694断言通过（`modern-craft-filter-gl.log`）；该回归包含两图块包/两分辨率/两缩放，但不冒称实体搜索输入或IME已验收。功能基线仍为最近蓝图里程碑74用例/2360断言。本轮未为这项低影响筛选修改新增重复实现的单元测试。验证入口更新至 `runtime/modern-controls-craft-filter`。

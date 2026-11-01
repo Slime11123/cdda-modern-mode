@@ -1178,6 +1178,13 @@ class panel : public cataimgui::window
                     filtered.push_back( i );
                 }
             }
+            if( !filtered.empty() && std::find( filtered.begin(), filtered.end(), selected_recipe ) == filtered.end() ) {
+                selected_recipe = filtered.front();
+                recipe_details = fp3d_crafting::details( recipes[selected_recipe].id );
+            }
+            if( filtered.empty() ) {
+                ImGui::TextWrapped( "没有匹配的配方，请修改搜索或主技能筛选。" );
+            }
             const float area = ImGui::GetContentRegionAvail().x;
             const int columns = std::max( 1, static_cast<int>( area / ( 175 * scale ) ) );
             const float cell = ( area - ( columns - 1 ) * ImGui::GetStyle().ItemSpacing.x ) / columns;
@@ -1233,7 +1240,7 @@ class panel : public cataimgui::window
             ImGui::EndChild();
             ImGui::SameLine();
             ImGui::BeginChild( "配方详情", ImVec2( 0, height ), true );
-            if( !recipes.empty() ) {
+            if( !filtered.empty() ) {
                 const auto &entry = recipes[selected_recipe];
                 ImGui::TextWrapped( "%s", entry.name.c_str() );
                 ImGui::TextWrapped( "主技能：%s / 难度 %d", entry.skill.c_str(), entry.difficulty );
@@ -1249,7 +1256,7 @@ class panel : public cataimgui::window
                 ImGui::Separator();
                 ImGui::TextWrapped( "%s", recipe_details.c_str() );
             } else {
-                ImGui::TextWrapped( "当前没有可用配方。" );
+                ImGui::TextWrapped( recipes.empty() ? "当前没有可用配方。" : "没有匹配的配方。" );
             }
             ImGui::EndChild();
             compatible( ACTION_CRAFT, "完整制作菜单（原版兼容）" );
