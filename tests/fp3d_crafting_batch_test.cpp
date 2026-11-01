@@ -53,6 +53,48 @@ static int ground_planks()
     return result;
 }
 
+TEST_CASE( "fp3d_material_preview_matches_native_batch_requirements_without_consumption",
+           "[fp3d][crafting]" )
+{
+    prepare_batch_craft();
+    avatar &you = get_avatar();
+    const recipe_id id( "makeshift_crowbar_test_no_tools" );
+    const int moves = you.get_moves();
+    const auto clock = calendar::turn;
+    const auto engine = rng_get_engine();
+    for( const int batch : {
+             1, 5, 6
+         } ) {
+        CAPTURE( batch );
+        bool native;
+        {
+            scoped_rng_restore preserve;
+            native = id->deduped_requirements().can_make_with_inventory( you.crafting_inventory(),
+                     id->get_component_filter( recipe_filter_flags::none ), batch, craft_flags::start_only );
+        }
+        REQUIRE( native == ( batch <= 5 ) );
+        const auto view = fp3d_crafting::details( id, you, batch );
+        CHECK( view.find( native ? "开工材料与工具：已满足。" :
+                          "开工材料与工具：尚未满足。" ) !=
+               std::string::npos );
+        CHECK( ( view.find( "当前缺少：" ) != std::string::npos ) == !native );
+        CHECK( ground_planks() == 5 );
+        CHECK_FALSE( you.activity );
+        CHECK( you.get_moves() == moves );
+        CHECK( calendar::turn == clock );
+        CHECK( rng_get_engine() == engine );
+    }
+    get_map().i_clear( you.pos_bub() );
+    you.invalidate_crafting_inventory();
+    const auto after_removal = fp3d_crafting::details( id, you );
+    CHECK( after_removal.find( "开工材料与工具：尚未满足。" ) != std::string::npos );
+    CHECK( after_removal.find( "当前缺少：" ) != std::string::npos );
+    CHECK( ground_planks() == 0 );
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == clock );
+    CHECK( rng_get_engine() == engine );
+}
+
 TEST_CASE( "fp3d_preview_restores_normal_distribution_spare_samples", "[fp3d][crafting]" )
 {
     prepare_batch_craft();

@@ -10,6 +10,7 @@
 #include "scoped_rng.h"
 #include "rng.h"
 #include "itype.h"
+#include "inventory.h"
 #include "output.h"
 #include "recipe.h"
 #include "recipe_dictionary.h"
@@ -100,6 +101,25 @@ std::string details( const recipe_id &id, const avatar &crafter, int batch_size 
     }
     if( crafter.morale_crafting_speed_multiplier( *id ) <= 0 ) {
         result += "当前士气不足，无法制作此配方。\n";
+    }
+    const inventory &available = crafter.crafting_inventory();
+    const auto filter = id->get_component_filter( recipe_filter_flags::none );
+    // Requirement checks cache availability inside their data; keep previews
+    // local so they cannot change another native crafting menu's checks.
+    const auto deduped = id->deduped_requirements();
+    const bool materials = deduped.can_make_with_inventory( available, filter, batch_size,
+                           craft_flags::start_only );
+    result += materials ? "开工材料与工具：已满足。\n" :
+              "开工材料与工具：尚未满足。\n";
+    if( !materials ) {
+        const auto needed = id->simple_requirements() * static_cast<unsigned>( batch_size );
+        needed.can_make_with_inventory( available, filter, 1, craft_flags::start_only );
+        const std::string missing = needed.list_missing();
+        result += missing.empty() ? "现有物品无法同时满足所需材料组合。\n" :
+                  "当前缺少：\n" + missing;
+    }
+    if( deduped.is_too_complex() ) {
+        result += "复杂材料组合仍需原版确认。\n";
     }
     const std::string requirements = batch_size == 1 ? details( id ) :
                                      id->description.translated() + "\n" +

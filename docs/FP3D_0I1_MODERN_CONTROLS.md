@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：92 用例 / 7750 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-craft-categories-cpu-final.log`）；图形回归：2942 断言（`modern-craft-categories-gl-final.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：93 用例 / 7780 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-craft-materials-cpu.log`）；图形回归：2942 断言（`modern-craft-materials-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-craft-categories`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-craft-materials`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -596,3 +596,14 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 92用例7750断言（modern-craft-categories-cpu-final.log，含rng）、图形2942断言（modern-craft-categories-gl-final.log）、ON/OFF（modern-craft-categories-on-final.log / modern-craft-categories-off.log）通过。新增直接检查实际生产ImGui子栏位置、互不覆盖及720p/150%窄屏切换；两个贴图包、1080p/720p、100/150%既有图形组合保留。已看Undead的1080p/100%三栏和720p/150%下拉截图。首次链接因旧版crafting_category ID未实现NULL_ID失败，改用其字符串元数据判断并重建通过；初始失败日志保留。收藏与分类的实体输入、完整多语言与UI-S5正式性能仍待验收。
 
 操作验证入口更新runtime/modern-controls-craft-categories；没有覆盖主启动器及正式存档。下一步为当前材料可用性/缺项只读提示。
+
+
+### 2026-11-01：P5.4 制作材料可用性与缺项
+
+制作详情读取原版crafting_inventory及配方过滤器，以原版去重需求和start_only规则显示所选批量的开工材料/工具是否满足；不足时用按批量缩放的原版需求列出缺项。复杂、重叠需求提示仍由原版最终确认。只在局部需求副本上更新可用性缓存，整个预览保持时间/AP/物品/RNG，最终制作继续重新验证、选择材料并提交原版活动。逐件来源位置与完整来源选择仍由原版材料确认处理，未宣称现代来源面板完成。
+
+93用例7780断言（modern-craft-materials-cpu.log，含rng）、图形2942（modern-craft-materials-gl.log）、ON/OFF（modern-craft-materials-on.log / modern-craft-materials-off.log）通过。新用例对照5块木板可开工1/5批、不能开工6批，并检查移除材料后预览更新、无活动/扣物品/时间/AP/RNG变化。已看1080p Undead制作详情的缺项显示。
+
+独立进程原版两次与现代各一次对照再次通过：开工modern-craft-materials-start-compare/20261101-164911-495，SHA256 710C50B1F8147E97002ED0C5D80204B47250215BDDCC6694F46C171556BE1442；完成modern-craft-materials-finish-compare/20261101-164911-495，SHA256 9643B86CA2EE7648864028A785ED16A5F04856B9B01F8485A847AAF5689995F5。均含1/3批，结果与此前基线相同；完成对照为相同受限测试行动点预算下的原版活动执行，不是完整世界do_turn。
+
+操作验证入口更新runtime/modern-controls-craft-materials。继续建设页分类与布局；实体收藏/拖放/IME及完整正式性能仍待实机验收。
