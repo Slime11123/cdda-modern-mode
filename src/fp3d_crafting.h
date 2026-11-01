@@ -18,6 +18,7 @@ struct entry {
 };
 std::vector<entry> capture( const avatar &you );
 std::string details( const recipe_id &id );
+std::string details( const recipe_id &id, const avatar &crafter );
 }
 #endif
 #endif

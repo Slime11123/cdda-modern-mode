@@ -1146,7 +1146,7 @@ class panel : public cataimgui::window
             if( !recipes_loaded ) {
                 recipes = fp3d_crafting::capture( you );
                 if( !recipes.empty() ) {
-                    recipe_details = fp3d_crafting::details( recipes.front().id );
+                    recipe_details = fp3d_crafting::details( recipes.front().id, you );
                 }
                 recipes_loaded = true;
             }
@@ -1180,7 +1180,7 @@ class panel : public cataimgui::window
             }
             if( !filtered.empty() && std::find( filtered.begin(), filtered.end(), selected_recipe ) == filtered.end() ) {
                 selected_recipe = filtered.front();
-                recipe_details = fp3d_crafting::details( recipes[selected_recipe].id );
+                recipe_details = fp3d_crafting::details( recipes[selected_recipe].id, you );
             }
             if( filtered.empty() ) {
                 ImGui::TextWrapped( "没有匹配的配方，请修改搜索或主技能筛选。" );
@@ -1207,7 +1207,7 @@ class panel : public cataimgui::window
                         ImGui::PushID( static_cast<int>( index ) );
                         if( ImGui::Selectable( "##配方", selected_recipe == index, 0, ImVec2( cell, card_height ) ) ) {
                             selected_recipe = index;
-                            recipe_details = fp3d_crafting::details( entry.id );
+                            recipe_details = fp3d_crafting::details( entry.id, you );
                         }
                         const auto start = ImGui::GetItemRectMin();
                         const auto end = ImGui::GetItemRectMax();
