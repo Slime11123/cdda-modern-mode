@@ -536,3 +536,5 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 2026-11-01：逐施工阶段原版材料/工具/知识显示与制作/建造物品变化后刷新完成。94用例9085断言、图形3002、ON/OFF通过；入口runtime/modern-controls-build-conditions。继续活动后人物状态/人物及地图刷新。
 
 2026-11-01：同面板物品/活动返回后刷新饥渴、疼痛、效果、技能、可见人物/任务和地图；94用例9085断言、图形3002、ON/OFF通过。入口runtime/modern-controls-panel-refresh。实体连续操作与完整正式流程仍待验收。
+
+2026-11-01：用途列表完整随机保护，95用例9133断言、图形3002、ON/OFF通过。原版/现代施工续作两场景SHA2059F612CB77BE3D4B8414CB3331E592BC848E9CA215DC5AA3598859519916ED一致（预置partial_con，不含初次扣材选点）。入口runtime/modern-controls-use-preview。

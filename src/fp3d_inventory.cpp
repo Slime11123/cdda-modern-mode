@@ -22,8 +22,7 @@
 #include "units.h"
 #include "itype.h"
 #include "iuse.h"
-#include "rng.h"
-#include "cata_scope_helpers.h"
+#include "scoped_rng.h"
 namespace fp3d_inventory
 {
 namespace
@@ -60,7 +59,7 @@ bool accessible( const item_location &location, const avatar &you, const map &he
 
 std::vector<use_option> use_options( const item_location &location, const avatar &you, const map &here )
 {
-    restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
+    scoped_rng_restore restore_rng;
     std::vector<use_option> result;
     if( !accessible( location, you, here ) ) { return result; }
     const item &object = *location;

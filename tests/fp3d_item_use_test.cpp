@@ -15,6 +15,41 @@
 #include "relic.h"
 #include "player_helpers.h"
 #include "rng.h"
+#include "scoped_rng.h"
+
+TEST_CASE( "fp3d_item_use_preview_preserves_normal_samples_items_and_turn", "[fp3d][inventory]" )
+{
+    clear_avatar();
+    clear_map();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    for( const itype_id id : {
+             itype_id( "atomic_lamp" ), itype_id( "mp3" ), itype_id( "bandages" ),
+             itype_id( "aspirin" ), itype_id( "water" ), itype_id( "rock" )
+         } ) {
+        CAPTURE( id );
+        you.set_wielded_item( item( id ) );
+        const auto location = you.get_wielded_item();
+        const auto charges = location->charges;
+        const auto engine = rng_get_engine();
+        const auto clock = calendar::turn;
+        const int moves = you.get_moves();
+        double expected;
+        {
+            scoped_rng_restore preserve;
+            expected = normal_roll( 12, 3 );
+        }
+        fp3d_inventory::use_options( location, you, here );
+        CHECK( rng_get_engine() == engine );
+        CHECK( normal_roll( 12, 3 ) == expected );
+        REQUIRE( location );
+        CHECK( location->typeId() == id );
+        CHECK( location->charges == charges );
+        CHECK( you.get_moves() == moves );
+        CHECK( calendar::turn == clock );
+        CHECK_FALSE( you.activity );
+    }
+}
 
 TEST_CASE( "fp3d_item_use_choices_preserve_native_effects_and_costs", "[fp3d][inventory]" )
 {
