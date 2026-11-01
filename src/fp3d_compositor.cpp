@@ -21,6 +21,7 @@
 #include "game.h"
 #include "fp3d_camera.h"
 #include "fp3d_input.h"
+#include "imgui/imgui.h"
 #include "fp3d_inventory.h"
 #include "fp3d_materials.h"
 #include "fp3d_scene.h"
@@ -40,6 +41,7 @@ GLuint framebuffer = 0;
 GLuint color_texture = 0;
 GLuint depth_buffer = 0;
 bool enabled = false;
+bool panel_input = false;
 bool available = false;
 bool draw_permitted = true;
 bool selftest = false;
@@ -346,6 +348,11 @@ bool process_event( const SDL_Event &event )
     return false;
 }
 
+bool menu_text_input()
+{
+    return panel_input && turn_based() && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
+}
+
 bool captures_game_input()
 {
     return requested() && available && enabled && draw_permitted && latest_scene && window &&
@@ -455,6 +462,7 @@ void set_viewport( int x, int y, int width, int height, int display_width, int d
 
 void set_input_context( const std::string &category )
 {
+    panel_input = category == "FP3D_PANEL";
     if( category == "MAIN_MENU" ) { fp3d_modern_ui::clear_resume(); }
     if( !requested() ) {
         return;
@@ -761,6 +769,7 @@ void release()
     renderer = nullptr;
     window = nullptr;
     available = enabled = selftest = false;
+    panel_input = false;
     draw_permitted = true;
     latest_scene.reset();
     construction_preview.reset();

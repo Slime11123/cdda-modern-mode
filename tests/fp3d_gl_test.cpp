@@ -994,6 +994,56 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         ImGui::GetIO().IniFilename = nullptr;
         REQUIRE( ImGui::GetIO().Fonts->AddFontFromFileTTF( "data/font/unifont.ttf", 18, nullptr,
                  ImGui::GetIO().Fonts->GetGlyphRangesChineseFull() ) );
+        // Exercise a real focused ImGui text field and the native SDL backend,
+        // including committed UTF-8. No desktop keyboard or IME is controlled.
+        {
+            const auto text_time = calendar::turn;
+            const auto text_moves = you.get_moves();
+            const auto text_rng = rng_get_engine();
+            char query[64] = {};
+            fp3d_compositor::set_input_context( "FP3D_PANEL" );
+            REQUIRE( fp3d_compositor::turn_based() );
+            for( int frame = 0; frame < 10; ++frame ) {
+                ImGui_ImplSDLRenderer2_NewFrame();
+                ImGui_ImplSDL2_NewFrame();
+                if( frame == 4 ) {
+                    SDL_Event commit{};
+                    commit.type = SDL_TEXTINPUT;
+                    commit.text.windowID = SDL_GetWindowID( window.get() );
+                    SDL_strlcpy( commit.text.text, "口袋", sizeof( commit.text.text ) );
+                    REQUIRE( ImGui_ImplSDL2_ProcessEvent( &commit ) );
+                }
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos( ImVec2( 0, 0 ) );
+                ImGui::SetNextWindowSize( ImVec2( 320, 100 ) );
+                ImGui::Begin( "文字输入回归", nullptr, ImGuiWindowFlags_NoSavedSettings );
+                if( frame == 0 ) { ImGui::SetKeyboardFocusHere(); }
+                if( frame == 7 ) { ImGui::ClearActiveID(); }
+                ImGui::InputText( "##query", query, sizeof( query ) );
+                ImGui::End();
+                if( frame == 6 ) {
+                    REQUIRE( ImGui::GetIO().WantTextInput );
+                    CHECK( fp3d_compositor::menu_text_input() );
+                    CHECK( std::string( query ) == "口袋" );
+                    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+                    CHECK_FALSE( fp3d_compositor::menu_text_input() ); // Ignore stale field focus in the world.
+                    fp3d_compositor::set_input_context( "FP3D_WHEEL" );
+                    CHECK_FALSE( fp3d_compositor::menu_text_input() );
+                    fp3d_compositor::set_input_context( "FP3D_PANEL" );
+                    CHECK( fp3d_compositor::menu_text_input() );
+                }
+                if( frame == 9 ) {
+                    CHECK_FALSE( ImGui::GetIO().WantTextInput );
+                    CHECK_FALSE( fp3d_compositor::menu_text_input() );
+                }
+                ImGui::Render();
+                ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+            }
+            fp3d_compositor::set_input_context( "DEFAULTMODE" );
+            CHECK( calendar::turn == text_time );
+            CHECK( you.get_moves() == text_moves );
+            CHECK( rng_get_engine() == text_rng );
+        }
         std::ofstream ui_report;
         if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
             ui_report.open( std::filesystem::path( directory ) / ( pack + "-panel-performance.csv" ) );

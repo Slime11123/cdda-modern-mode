@@ -2740,7 +2740,8 @@ static void CheckMessages()
 {
 #if defined(ENABLE_FP3D)
     if( fp3d_compositor::requested() ) {
-        if( fp3d_compositor::captures_game_input() || !fp3d_preferred_text_input ) {
+        if( fp3d_compositor::captures_game_input() ||
+            ( !fp3d_preferred_text_input && !fp3d_compositor::menu_text_input() ) ) {
             StopTextInput();
         } else {
             StartTextInput();
@@ -4031,7 +4032,11 @@ input_event input_manager::get_input_event( const keyboard_mode preferred_keyboa
     }
 
 #if !defined(__ANDROID__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE == 1)
-    if( actual_keyboard_mode( preferred_keyboard_mode ) == keyboard_mode::keychar ) {
+    if( actual_keyboard_mode( preferred_keyboard_mode ) == keyboard_mode::keychar
+#if defined(ENABLE_FP3D)
+        || fp3d_compositor::menu_text_input()
+#endif
+      ) {
         StartTextInput();
     } else {
         StopTextInput();

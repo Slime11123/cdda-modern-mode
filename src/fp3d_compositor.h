@@ -23,6 +23,8 @@ bool requested();
 void attach( SDL_Renderer *renderer, SDL_Window *window );
 bool process_event( const SDL_Event &event );
 bool captures_game_input();
+// Text composition belongs only to an active field in the modern panel.
+bool menu_text_input();
 // The opaque 3D scene replaces this exact native map viewport.
 bool covers_map( const tripoint_abs_ms &center );
 float heading();

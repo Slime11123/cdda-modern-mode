@@ -479,3 +479,12 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 原版两次和3D一次分别在新进程运行，最终原版49/49断言、3D86断言通过，逐回合JSON及完整RNG完全一致，SHA256 05DDC8ECA5E566EB540A482B762A9CA49C68C10988E805FBDECAEFF441E60390。证据 `modern-combat-world-final/20261101-102528-832`，摘要world-combat-summary.csv。三回合后僵尸HP497→493→493，角色总HP保持在首次反击后的1015（初始1020），头部HP80、疼痛3；耐力8330→8161→8105，均与原版相同。新增断言确认敌人和角色双方实际受伤，不能仅以敌人靠近代替反击。
 
 随后关闭战斗开关重跑原导航夹具，`modern-combat-navigation-regression/20261101-102603-877` 再次得到旧SHA256 FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。首次编译尝试访问原版私有自动存档计数失败，已删除该测试访问且保留失败日志，未开放任何私有游戏API。该样本覆盖原版攻击原语与完整世界调度，不冒称实体输入分发、私有自动存档记账、枪械全流程或一分钟战斗性能已验收。产品仍为上一里程碑已验证的modern-controls-craft-details，本轮只改测试与报告。
+
+
+### 2026-11-01：P5.1 / UI-S5 现代面板文本输入请求保持
+
+源码核实：FP3D_PANEL使用keycode输入上下文，get_input_event及CheckMessages此前都会按此关闭SDL文字输入，即使ImGui文本框已获得焦点。仅改一处仍会在下一次轮询关闭组合输入。本轮为compositor增加限定于FP3D_PANEL、3D仍有效且真实ImGui字段请求文字的状态查询，两处SDL切换共同遵守它；字段持续激活时不再反复关闭文字输入。返回世界、轮盘、标题/其他上下文或释放compositor时撤销此状态。2D经典和Feature OFF仍执行原有字符/键码选择，未把世界WASD改为文本输入。
+
+隐藏原生ImGui/SDL测试实际聚焦InputText，通过SDL后端提交UTF-8“口袋”，验证字符串进入字段、失去字段焦点后请求关闭、切回DEFAULTMODE/轮盘时忽略残留字段焦点，以及时间/AP/RNG不变。功能75用例/2577断言（`modern-text-entry-cpu.log`），图形2720（`modern-text-entry-gl.log`），ON/OFF（`modern-text-entry-on.log` / `modern-text-entry-off.log`）通过。
+
+这证明文本请求状态与中文提交后端，不冒称实体中文输入法候选窗、组合串和F6键盘操作已经验收。独立基线存档 `modern-text-entry-before` 的桌面Tab未能可靠送达，未反复发送游戏按键；后续验证使用隐藏测试窗口。验证入口更新为 `runtime/modern-controls-text-entry`，主入口保持render-exclusive；共享源码仅按本轮对应行提交。
