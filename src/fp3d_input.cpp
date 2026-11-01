@@ -140,15 +140,32 @@ gestures &world_gestures()
 
 bool gestures::mouse_button( unsigned button, bool down, unsigned now )
 {
-    MouseInput key;
+    std::pair<MouseInput, MouseInput> keys;
     switch( button ) {
-        case SDL_BUTTON_LEFT: key = MouseInput::LeftButtonPressed; break;
-        case SDL_BUTTON_RIGHT: key = MouseInput::RightButtonPressed; break;
-        case SDL_BUTTON_X1: key = MouseInput::X1ButtonPressed; break;
-        case SDL_BUTTON_X2: key = MouseInput::X2ButtonPressed; break;
-        default: return false;
+        case SDL_BUTTON_LEFT:
+            keys = { MouseInput::LeftButtonPressed, MouseInput::LeftButtonReleased };
+            break;
+        case SDL_BUTTON_RIGHT:
+            keys = { MouseInput::RightButtonPressed, MouseInput::RightButtonReleased };
+            break;
+        case SDL_BUTTON_X1:
+            keys = { MouseInput::X1ButtonPressed, MouseInput::X1ButtonReleased };
+            break;
+        case SDL_BUTTON_X2:
+            keys = { MouseInput::X2ButtonPressed, MouseInput::X2ButtonReleased };
+            break;
+        default:
+            return false;
     }
-    return event( input_event( key, input_event_t::mouse ), down, now );
+    const input_event pressed( keys.first, input_event_t::mouse );
+    const input_event released( keys.second, input_event_t::mouse );
+    if( !down ) {
+        return event( pressed, false, now ) || event( released, false, now );
+    }
+    // Native preferences name both edges. In 3D they identify one physical
+    // button; timing belongs to gestures. A pressed binding wins conflicts.
+    return context().input_to_action( pressed ) != "ERROR" ?
+           event( pressed, true, now ) : event( released, true, now );
 }
 
 bool gestures::event( const input_event &input, bool down, unsigned now )

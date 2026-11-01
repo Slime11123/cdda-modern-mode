@@ -488,3 +488,10 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 隐藏原生ImGui/SDL测试实际聚焦InputText，通过SDL后端提交UTF-8“口袋”，验证字符串进入字段、失去字段焦点后请求关闭、切回DEFAULTMODE/轮盘时忽略残留字段焦点，以及时间/AP/RNG不变。功能75用例/2577断言（`modern-text-entry-cpu.log`），图形2720（`modern-text-entry-gl.log`），ON/OFF（`modern-text-entry-on.log` / `modern-text-entry-off.log`）通过。
 
 这证明文本请求状态与中文提交后端，不冒称实体中文输入法候选窗、组合串和F6键盘操作已经验收。独立基线存档 `modern-text-entry-before` 的桌面Tab未能可靠送达，未反复发送游戏按键；后续验证使用隐藏测试窗口。验证入口更新为 `runtime/modern-controls-text-entry`，主入口保持render-exclusive；共享源码仅按本轮对应行提交。
+
+
+### 2026-11-01：P5.1 原版鼠标配置按下/松开按钮名称兼容
+
+新增测试通过原版偏好加载器保存MOUSE_BACK/MOUSE_FORWARD（松开型名称）后，复现3D物理按钮不识别：修复前182断言中1失败（`modern-mouse-alias-before.log`）。3D现把同一物理按钮的按下/松开名称都接入既有手势分类；真实按下开始计时、松开结束，保留短/长交互、持续攻击、按住状态面板及单次菜单动作。配置名称不再决定3D是否能识别按钮。存在两种名称的冲突配置时，按下型绑定优先，单次物理点击不会执行两项；改绑同一按钮前需移除旧绑定。原版2D事件和配置文件格式保持。
+
+覆盖两种名称的八类现代动作、两侧键独立、长按后不补发短按、松开停止攻击/展开状态、取消清队列及冲突单次提交；时间/AP/位置/RNG不变。功能75用例/2832断言（`modern-mouse-alias-cpu.log`），图形2720（`modern-mouse-alias-gl.log`），ON/OFF（`modern-mouse-alias-on.log` / `modern-mouse-alias-off.log`）通过。使用原版配置加载不等于实体F6编辑器操作已验收，该部分继续保留待测标记。验证入口更新至 `runtime/modern-controls-mouse-alias`，主入口仍保持原设置。

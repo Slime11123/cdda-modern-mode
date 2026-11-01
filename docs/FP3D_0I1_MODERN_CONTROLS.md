@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：75 用例 / 2577 断言（`modern-text-entry-cpu.log`）；图形回归：2720 断言（`modern-text-entry-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：75 用例 / 2832 断言（`modern-mouse-alias-cpu.log`）；图形回归：2720 断言（`modern-mouse-alias-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-text-entry`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-mouse-alias`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -523,3 +523,10 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 隐藏原生ImGui/SDL测试实际聚焦InputText，通过SDL后端提交UTF-8“口袋”，验证字符串进入字段、失去字段焦点后请求关闭、切回DEFAULTMODE/轮盘时忽略残留字段焦点，以及时间/AP/RNG不变。功能75用例/2577断言（`modern-text-entry-cpu.log`），图形2720（`modern-text-entry-gl.log`），ON/OFF（`modern-text-entry-on.log` / `modern-text-entry-off.log`）通过。
 
 这证明文本请求状态与中文提交后端，不冒称实体中文输入法候选窗、组合串和F6键盘操作已经验收。独立基线存档 `modern-text-entry-before` 的桌面Tab未能可靠送达，未反复发送游戏按键；后续验证使用隐藏测试窗口。验证入口更新为 `runtime/modern-controls-text-entry`，主入口保持render-exclusive；共享源码仅按本轮对应行提交。
+
+
+### 2026-11-01：P5.1 原版鼠标配置按下/松开按钮名称兼容
+
+新增测试通过原版偏好加载器保存MOUSE_BACK/MOUSE_FORWARD（松开型名称）后，复现3D物理按钮不识别：修复前182断言中1失败（`modern-mouse-alias-before.log`）。3D现把同一物理按钮的按下/松开名称都接入既有手势分类；真实按下开始计时、松开结束，保留短/长交互、持续攻击、按住状态面板及单次菜单动作。配置名称不再决定3D是否能识别按钮。存在两种名称的冲突配置时，按下型绑定优先，单次物理点击不会执行两项；改绑同一按钮前需移除旧绑定。原版2D事件和配置文件格式保持。
+
+覆盖两种名称的八类现代动作、两侧键独立、长按后不补发短按、松开停止攻击/展开状态、取消清队列及冲突单次提交；时间/AP/位置/RNG不变。功能75用例/2832断言（`modern-mouse-alias-cpu.log`），图形2720（`modern-mouse-alias-gl.log`），ON/OFF（`modern-mouse-alias-on.log` / `modern-mouse-alias-off.log`）通过。使用原版配置加载不等于实体F6编辑器操作已验收，该部分继续保留待测标记。验证入口更新至 `runtime/modern-controls-mouse-alias`，主入口仍保持原设置。
