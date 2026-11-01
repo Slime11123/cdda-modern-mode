@@ -573,6 +573,9 @@ bool do_turn()
     if( !u.has_effect( effect_sleep ) || g->uquit == QUIT_WATCH ) {
         if( u.get_moves() > 0 || g->uquit == QUIT_WATCH ) {
             while( u.get_moves() > 0 || g->uquit == QUIT_WATCH ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+                fp3d_regression::turn_probe action_probe( "action_preprocess" );
+#endif
                 m.process_falling();
                 g->cleanup_dead();
                 g->mon_info_update();
@@ -584,6 +587,9 @@ bool do_turn()
                 }
                 explosion_handler::process_explosions();
                 sounds::process_sound_markers( &u );
+#if defined(TILES) && defined(ENABLE_FP3D)
+                action_probe.stage( "action_redraw" );
+#endif
                 if( !u.activity && g->uquit != QUIT_WATCH
                     && ( !u.has_distant_destination() || calendar::once_every( 10_seconds ) ) ) {
                     g->wait_popup_reset();
@@ -595,10 +601,16 @@ bool do_turn()
                     g->queue_screenshot = false;
                 }
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+                action_probe.stage( "action_dispatch" );
+#endif
                 if( g->handle_action() ) {
                     ++g->moves_since_last_save;
                     u.action_taken();
                 }
+#if defined(TILES) && defined(ENABLE_FP3D)
+                action_probe.stage( "action_finalize" );
+#endif
 
                 if( g->is_game_over() ) {
                     return turn_handler::cleanup_at_end();

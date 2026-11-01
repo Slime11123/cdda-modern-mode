@@ -17,7 +17,7 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返及20栋三层密集街道各一分钟采样；早期正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：150 用例 / 12928 断言（`[fp3d],[npc_talk],[rng]`，含原版NPC对话和3个RNG用例；`modern-perf-stages-cpu.log`，退出0）；图形回归：4434 断言（`modern-perf-stages-gl.log`，退出0）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：150 用例 / 12928 断言（`[fp3d],[npc_talk],[rng]`，含原版NPC对话和3个RNG用例；`modern-action-profile-cpu.log`，退出0）；图形回归：4434 断言（`modern-perf-stages-gl.log`，退出0）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
 当前两个3D启动器均指向 `runtime/native-info-font`，包含E单件自动收纳/多件两栏拾取，以及已合并的NPC对话、交易、准星近战、入场资料与原版信息/字体修复。继续使用 `runtime/0i1/user` 用户目录；自动检查使用独立QA目录。基础功能合并点为 `749ee5a7`，后续增量见下文。下文保留历史实施记录，以本节及带日期增量为最新结论。
 
@@ -718,3 +718,13 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 显示阶段嵌套在原版阶段内，两组不能相加当作总帧时间。证据`qa/0i1/modern-city-stage-control/{frames.csv,result.json,validation.json,stage-analysis.json,sampling-debug.log}`；校验要求关键阶段确实有样本、持续位移至末尾及焦点/尺寸满足。瓶颈首先落在原版玩家动作范围内，下一步继续细分其中的准备、重绘和动作分发，而不是削减NPC AI或地图规则。
 
 功能`[fp3d],[npc_talk],[rng]`150用例/12928断言（`modern-perf-stages-cpu.log`）、隐藏SDL/OpenGL4434断言（`modern-perf-stages-gl.log`）均退出0；ON/OFF及测试构建通过（`modern-perf-stages-{on,off,tests-build}.log`）。三组完整世界战斗新进程原版两次/现代一次结果一致，SHA256仍为`05DDC8ECA5E566EB540A482B762A9CA49C68C10988E805FBDECAEFF441E60390`，证据`modern-perf-stages-world-combat/20261101-223415-401`。计时验证包`runtime/modern-controls-perf-stages`仅供本轮QA，用户启动器继续保留`native-info-font`全部功能版本。
+
+## 2026-11-01 增量：P5.7 玩家动作重绘归因
+
+仅在QA采样开启时，把原版玩家动作循环分成准备、界面重绘、分发与收尾，再将handle_action分成准备、输入、解释、执行与收尾。没有改写原版控制流；普通启动均走空计时器。
+
+同一密集街道前台完整60005.4ms、2388帧、39.7964FPS，P95 27.6223ms、P99 30.4412ms；2058次位移快照持续至59999.6ms，无失焦/改尺寸。按呈现帧归一化：action_redraw 15.2216ms，action_dispatch 5.3567ms；分发中的输入5.1952ms、实际动作执行0.1504ms。阶段为嵌套关系，不跨层相加。证据`qa/0i1/modern-city-action-control/{validation.json,stage-analysis.json,frames.csv,sampling-debug.log}`。核对确认原版自动行走仍使用handle_input(0)，没有把它改成固定16ms等待。
+
+150用例/12928断言和ON/OFF/测试构建通过（`modern-action-profile-{cpu,on,off,tests-build}.log`）；三组原版/现代完整世界战斗仍为SHA256 `05DDC8ECA5E566EB540A482B762A9CA49C68C10988E805FBDECAEFF441E60390`，证据`modern-action-profile-world-combat/20261101-224533-786`。本轮未改显示路径，SDL/OpenGL图形证据沿用上一计时里程碑4434断言。QA包`runtime/modern-controls-action-profile`，用户启动器保持native-info-font。
+
+下一步检查game::draw在常规准备本层视野后，又由3D prepare_view准备同一本层的重复调用；需先验证光照/可见性等价再调整。

@@ -6,6 +6,7 @@
 #include "fp3d_interaction.h"
 #include "fp3d_inventory.h"
 #include "fp3d_modern_ui.h"
+#include "fp3d_regression.h"
 #include "input.h"
 #include "talker.h"
 #endif
@@ -3157,6 +3158,7 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
 bool game::handle_action()
 {
 #if defined(ENABLE_FP3D)
+    fp3d_regression::turn_probe dispatch_probe( "dispatch_prepare" );
     fp3d_compositor::begin_action();
     fp3d_inventory::clear_pending();
 #endif
@@ -3167,6 +3169,9 @@ bool game::handle_action()
     action_id act = ACTION_NULL;
     user_turn current_turn;
     avatar &player_character = get_avatar();
+#if defined(ENABLE_FP3D)
+    dispatch_probe.stage( "dispatch_input" );
+#endif
     // Check if we have an auto-move destination
     if( player_character.has_destination() ) {
         act = player_character.get_next_auto_move_direction();
@@ -3192,6 +3197,9 @@ bool game::handle_action()
         ctxt = get_player_input( action );
     }
 
+#if defined(ENABLE_FP3D)
+    dispatch_probe.stage( "dispatch_resolve" );
+#endif
     // Remove asynchronous animations if any action taken before the input timeout
     // Otherwise repeated input can cause animations to accumulate as the timeout is never reached
     g->void_async_anim_curses();
@@ -3382,6 +3390,9 @@ bool game::handle_action()
         do_deathcam_action( act, player_character );
     }
 
+#if defined(ENABLE_FP3D)
+    dispatch_probe.stage( "dispatch_execute" );
+#endif
     // actions allowed only while alive
     if( !player_character.is_dead_state() ) {
         if( !do_regular_action( act, player_character, mouse_target, quick_pickup, targeted_pickup,
@@ -3389,6 +3400,9 @@ bool game::handle_action()
             return false;
         }
     }
+#if defined(ENABLE_FP3D)
+    dispatch_probe.stage( "dispatch_finalize" );
+#endif
     if( act != ACTION_TIMEOUT
 #if defined(ENABLE_FP3D)
         && !fp3d_compositor::turn_based()
