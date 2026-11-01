@@ -517,3 +517,6 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 功能79用例/3812断言（modern-context-cpu.log）：新增六种真实NPC状态的只读可用性重复查询及短按E身份一次性提交；既有原版守卫/跟随消耗测试继续通过。图形2808断言（modern-context-gl.log）：真实ImGui鼠标点击禁用守卫后保持轮盘且无动作、点击合法交谈后只返回交谈请求、点击取消无动作，并验证时间/AP/位置/HP/耐力/饥渴/RNG保持。覆盖Retrodays/Undead、1280×720/1920×1080及100/150%缩放，保留8张context截图；查看Undead 720p/150%与Retrodays 1080p/100%无标签或说明重叠。这是隐藏窗口的生产组件绘制/选择，不冒称实体长按E到原版交谈完整流程已验收。
 
 首次构建发现只读map不提供i_at；改用原版只读maptile物品数量接口，未放宽接口或强转，失败日志modern-context-tests-build.log保留。产品ON/OFF（modern-context-on.log / modern-context-off.log）通过；操作入口更新runtime/modern-controls-context-wheel。共享图形测试只提交本轮新增段，其他任务修改和主入口保留。
+
+
+2026-11-01：P5.4 制作页加入原版1–50批直接制作，提交前重查并复用原版ACT_CRAFT；活动后保留同一页面。启动/完成三进程对照分别通过，SHA256 710C50B1…BE1442 / 9643B86C…9995F5；测试完成只提供相同有限AP预算，未宣称完整世界回合。详情与失败修正记录见FP3D_0I1_MODERN_CONTROLS.md。

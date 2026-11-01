@@ -45,13 +45,14 @@ struct model {
 };
 model capture( avatar &you, map &here );
 bool accessible( const item_location &location, const avatar &you, const map &here );
-enum class operation_kind { pickup, drop, wield, wear, takeoff, use, insert, place, native, follower_order, completed };
+enum class operation_kind { pickup, drop, wield, wear, takeoff, use, insert, place, native, follower_order, craft, completed };
 struct operation {
     operation_kind kind = operation_kind::pickup;
     drop_locations items;
     item_location destination;
     action_id native_action = ACTION_NULL;
     recipe_id crafting_recipe;
+    int crafting_batch = 1;
     std::optional<int> tracking_mission;
     std::optional<int> talking_npc_id;
     std::optional<npc_orders::kind> follower_command;

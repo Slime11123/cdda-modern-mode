@@ -1,4 +1,5 @@
 #include "rng.h"
+#include "scoped_rng.h"
 
 #include <algorithm>
 #include <chrono>
@@ -77,10 +78,20 @@ float normal_roll_chance( float center, float stddev, float difficulty )
     return 0.5 * compl_erf;
 }
 
+static std::normal_distribution<double> &normal_distribution()
+{
+    static std::normal_distribution<double> distribution;
+    return distribution;
+}
+scoped_rng_restore::scoped_rng_restore() : engine( rng_get_engine() ), normal( normal_distribution() ) {}
+scoped_rng_restore::~scoped_rng_restore()
+{
+    rng_get_engine() = engine;
+    normal_distribution() = normal;
+}
 double normal_roll( double mean, double stddev )
 {
-    static std::normal_distribution<double> rng_normal_dist;
-    return rng_normal_dist( rng_get_engine(), std::normal_distribution<>::param_type( mean, stddev ) );
+    return normal_distribution()( rng_get_engine(), std::normal_distribution<>::param_type( mean, stddev ) );
 }
 
 double exponential_roll( double lambda )

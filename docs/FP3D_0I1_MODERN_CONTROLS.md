@@ -552,3 +552,14 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 功能79用例/3812断言（modern-context-cpu.log）：新增六种真实NPC状态的只读可用性重复查询及短按E身份一次性提交；既有原版守卫/跟随消耗测试继续通过。图形2808断言（modern-context-gl.log）：真实ImGui鼠标点击禁用守卫后保持轮盘且无动作、点击合法交谈后只返回交谈请求、点击取消无动作，并验证时间/AP/位置/HP/耐力/饥渴/RNG保持。覆盖Retrodays/Undead、1280×720/1920×1080及100/150%缩放，保留8张context截图；查看Undead 720p/150%与Retrodays 1080p/100%无标签或说明重叠。这是隐藏窗口的生产组件绘制/选择，不冒称实体长按E到原版交谈完整流程已验收。
 
 首次构建发现只读map不提供i_at；改用原版只读maptile物品数量接口，未放宽接口或强转，失败日志modern-context-tests-build.log保留。产品ON/OFF（modern-context-on.log / modern-context-off.log）通过；操作入口更新runtime/modern-controls-context-wheel。共享图形测试只提交本轮新增段，其他任务修改和主入口保留。
+
+
+### 2026-11-01：P5.4 原版批量制作接入现代制作页
+
+制作页新增1–50批数量、随数量刷新的原版预计耗时/材料清单和“制作所选批量”。绘制只产生请求，退出绘制后重新校验配方可访问性、主技能、材料工具、容器、光照及士气，调用原版make_craft启动ACT_CRAFT；材料替代、特殊确认和其他制作人仍保留原版选择入口。成功进入活动后保留制作页，由原版活动循环结算，完成或中断后恢复，刷新目录时按配方ID保持选择。
+
+复用原版制作GUI的确认检查，没有复制材料扣除或制造公式。只读目录/详情/资格检查现在同时恢复随机引擎与normal_roll的缓存样本，避免预览影响后续随机结果；不在实际制作期间恢复RNG。初次对照发现仅恢复引擎仍改变随机结果（modern-craft-batch-start-compare/20261101-113241-702），该失败证据保留；补齐分布状态保护与原版菜单资格准备后复验通过。
+
+原版动作原语两次独立进程与现代请求路径，分别验证1批/3批启动及制作完成。启动对照SHA256 710C50B1F8147E97002ED0C5D80204B47250215BDDCC6694F46C171556BE1442，证据modern-craft-batch-start-fixed-compare/20261101-162450-250；完成对照SHA256 9643B86CA2EE7648864028A785ED16A5F04856B9B01F8485A847AAF5689995F5，证据modern-craft-batch-finish-fixed-compare/20261101-162704-391。完成场景原版两次各21断言、现代23断言，产物数1/3、剩余木料4/2、制作消耗30218/90400行动点及完整导出RNG均一致。完成测试向同一个原版活动提供相同的有限测试AP预算，不冒称包含世界AI/天气/钟表的完整do_turn验收；产品不补充AP。
+
+最新合并工作树功能及原版RNG回归91用例/7735断言（modern-context-targets-cpu-complete.log），包含无效批量、失效配方、材料移除、主技能不足、重复提交及只读AP/时间/RNG保护。图形2882断言（modern-context-targets-gl-complete.log）；ON/OFF产品构建通过。场景为测试配方，特殊容器确认和实体连续制作仍待实机验收。

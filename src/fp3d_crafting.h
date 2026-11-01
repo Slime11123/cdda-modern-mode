@@ -18,7 +18,8 @@ struct entry {
 };
 std::vector<entry> capture( const avatar &you );
 std::string details( const recipe_id &id );
-std::string details( const recipe_id &id, const avatar &crafter );
+std::string details( const recipe_id &id, const avatar &crafter, int batch_size = 1 );
+bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error );
 }
 #endif
 #endif

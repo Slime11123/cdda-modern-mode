@@ -4,7 +4,10 @@
 #include <utility>
 #include "avatar.h"
 #include "calendar.h"
-#include "cata_scope_helpers.h"
+#include "crafting.h"
+#include "crafting_gui.h"
+#include "uistate.h"
+#include "scoped_rng.h"
 #include "rng.h"
 #include "itype.h"
 #include "output.h"
@@ -18,7 +21,7 @@ std::vector<entry> capture( const avatar &you )
 {
     // Native crafting inventory builds temporary item variants. This is a
     // main-thread read-only preview; actual crafting runs outside this scope.
-    restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
+    scoped_rng_restore restore_rng;
     std::vector<entry> result;
     for( const recipe *rec : you.get_group_available_recipes() ) {
         if( rec->obsolete || rec->is_nested() ) {
@@ -43,18 +46,19 @@ std::string details( const recipe_id &id )
         return {};
     }
     // Native requirement formatting constructs temporary component items too.
-    restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
+    scoped_rng_restore restore_rng;
     return remove_color_tags( id->description.translated() + "\n" +
                               id->simple_requirements().list_all() );
 }
-std::string details( const recipe_id &id, const avatar &crafter )
+std::string details( const recipe_id &id, const avatar &crafter, int batch_size )
 {
-    if( !id.is_valid() ) {
+    if( !id.is_valid() || batch_size < 1 || batch_size > 50 ) {
         return {};
     }
-    restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
-    std::string result = "单批预计耗时：" +
-                         to_string( time_duration::from_moves( crafter.expected_time_to_craft( *id ) ) ) + "\n";
+    scoped_rng_restore restore_rng;
+    std::string result = ( batch_size == 1 ? "单批" : std::to_string( batch_size ) + "批" ) +
+                         std::string( "预计耗时：" ) + to_string( time_duration::from_moves(
+                                 crafter.expected_time_to_craft( *id, batch_size ) ) ) + "\n";
     for( const auto &skill : id->required_skills ) {
         result += "所需技能：" + skill.first->name() + " " + std::to_string( skill.second ) + "\n";
     }
@@ -73,7 +77,40 @@ std::string details( const recipe_id &id, const avatar &crafter )
     if( crafter.morale_crafting_speed_multiplier( *id ) <= 0 ) {
         result += "当前士气不足，无法制作此配方。\n";
     }
-    return remove_color_tags( result + "\n" + details( id ) );
+    const std::string requirements = batch_size == 1 ? details( id ) :
+                                     id->description.translated() + "\n" +
+                                     ( id->simple_requirements() * static_cast<unsigned>( batch_size ) ).list_all();
+    return remove_color_tags( result + "\n" + requirements );
+}
+
+bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error )
+{
+    error.clear();
+    if( you.is_dead_state() || you.activity || !id.is_valid() || batch_size < 1 || batch_size > 50 ||
+        id->obsolete || id->is_nested() ) {
+        error = "配方、批量或人物状态无效，请刷新制作页。";
+        return false;
+    }
+    {
+        // Selection/eligibility only. Product rolls belong to make_craft below.
+        scoped_rng_restore restore_rng;
+        you.invalidate_crafting_inventory();
+        if( !you.get_group_available_recipes().contains( &*id ) ) {
+            error = "此配方已不在原版当前可用配方中，请刷新制作页。";
+            return false;
+        }
+        if( !confirm_crafting_recipe( you, *id, batch_size ) || !crafting_allowed( you, *id ) ) {
+            error = "原版制作条件未通过，或确认已取消。";
+            return false;
+        }
+    }
+    uistate.read_recipes.insert( id );
+    you.make_craft( id, batch_size );
+    if( !you.activity ) {
+        error = "制作未开始，材料选择或原版确认可能已取消。";
+        return false;
+    }
+    return true;
 }
 
 }

@@ -6,6 +6,7 @@
 
 class Character;
 class item;
+class recipe;
 template <typename E> struct enum_traits;
 
 enum class craft_flags : int {
@@ -17,6 +18,9 @@ template<>
 struct enum_traits<craft_flags> {
     static constexpr bool is_flag_enum = true;
 };
+
+// Native action restrictions after recipe and quantity selection.
+bool crafting_allowed( const Character &crafter, const recipe &rec );
 
 // removes any (removable) ammo from the item and stores it in the
 // players inventory.

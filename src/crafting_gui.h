@@ -29,6 +29,9 @@ std::pair<Character *, const recipe *> select_crafter_and_crafting_recipe( int &
 std::pair<std::vector<const recipe *>, bool> recipes_from_cat( const recipe_subset
         &available_recipes, const crafting_category_id &cat, const std::string &subcat );
 
+// Apply the same native final checks as selecting this recipe in the menu.
+bool confirm_crafting_recipe( Character &crafter, const recipe &rec, int batch_size );
+
 void load_recipe_category( const JsonObject &jsobj, const std::string &src );
 void reset_recipe_categories();
 

@@ -1,4 +1,5 @@
 #include "fp3d_inventory.h"
+#include "fp3d_crafting.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <functional>
@@ -285,6 +286,13 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
     if( action.kind == operation_kind::completed ) {
         return true;
     }
+    if( action.kind == operation_kind::craft ) {
+        std::string crafting_error;
+        if( !fp3d_crafting::start( you, action.crafting_recipe, action.crafting_batch, crafting_error ) ) {
+            return fail( crafting_error );
+        }
+        return true;
+    }
     if( action.kind == operation_kind::follower_order ) {
         if( !action.talking_npc_id || !action.destination_tile || !action.follower_command ||
             !fp3d_journal::issue_order( you, here, *action.talking_npc_id, *action.destination_tile,
@@ -443,6 +451,7 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
             return true;
         }
         case operation_kind::native:
+        case operation_kind::craft:
         case operation_kind::follower_order:
             return false;
     }

@@ -259,6 +259,21 @@ struct availability {
                 }
             }
         }
+        bool confirm( int batch_size ) const {
+            if( !can_craft || !crafter_has_primary_skill ) {
+                popup( _( "Crafter can't craft that!" ) );
+                return false;
+            }
+            if( inv_override == nullptr &&
+                !crafter.check_eligible_containers_for_crafting( *rec, batch_size ) ) {
+                return false;
+            }
+            if( crafter.lighting_craft_speed_multiplier( *rec ) <= 0.0f ) {
+                popup( _( "Crafter can't see!" ) );
+                return false;
+            }
+            return true;
+        }
         Character &crafter;
         bool can_craft;
         // group can introduce recipe this crafter cannot craft because of low primary skill
@@ -359,6 +374,11 @@ struct availability {
         }
 };
 } // namespace
+
+bool confirm_crafting_recipe( Character &crafter, const recipe &rec, int batch_size )
+{
+    return availability( crafter, &rec, batch_size ).confirm( batch_size );
+}
 
 static std::string craft_success_chance_string( const recipe &recp, const Character &guy )
 {
@@ -1886,14 +1906,8 @@ std::pair<Character *, const recipe *> select_crafter_and_crafting_recipe( int &
                 popup( _( "Nothing selected!" ) );
             } else if( current[line]->is_nested() ) {
                 nested_toggle( current[line]->ident(), recalc, keepline );
-            } else if( !available[line].can_craft ||
-                       !available[line].crafter_has_primary_skill ) {
-                popup( _( "Crafter can't craft that!" ) );
-            } else if( available[line].inv_override == nullptr &&
-                       !crafter->check_eligible_containers_for_crafting( *current[line], batch ? line + 1 : 1 ) ) {
-                // popup is already inside check
-            } else if( crafter->lighting_craft_speed_multiplier( *current[line] ) <= 0.0f ) {
-                popup( _( "Crafter can't see!" ) );
+            } else if( !available[line].confirm( batch ? line + 1 : 1 ) ) {
+                // The native checks already display the failure reason.
             } else {
                 chosen = current[line];
                 batch_size_out = batch ? line + 1 : 1;

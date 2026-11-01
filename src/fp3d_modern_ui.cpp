@@ -68,6 +68,7 @@ class panel : public cataimgui::window
         std::string recipe_skill;
         std::string recipe_details;
         size_t selected_recipe = 0;
+        int crafting_batch = 1;
         bool journal_loaded = false;
         fp3d_journal::model journal;
         int mission_state = 0;
@@ -1158,10 +1159,14 @@ class panel : public cataimgui::window
         }
         void crafting() {
             if( !recipes_loaded ) {
+                const recipe_id previous = selected_recipe < recipes.size() ? recipes[selected_recipe].id : recipe_id();
                 recipes = fp3d_crafting::capture( you );
-                if( !recipes.empty() ) {
-                    recipe_details = fp3d_crafting::details( recipes.front().id, you );
-                }
+                const auto found = std::find_if( recipes.begin(), recipes.end(), [&]( const auto &entry ) {
+                    return entry.id == previous;
+                } );
+                selected_recipe = found != recipes.end() ? static_cast<size_t>( found - recipes.begin() ) : 0;
+                recipe_details = recipes.empty() ? std::string() :
+                                 fp3d_crafting::details( recipes[selected_recipe].id, you, crafting_batch );
                 recipes_loaded = true;
             }
             const float height = ImGui::GetContentRegionAvail().y - 85 * scale;
@@ -1194,7 +1199,7 @@ class panel : public cataimgui::window
             }
             if( !filtered.empty() && std::find( filtered.begin(), filtered.end(), selected_recipe ) == filtered.end() ) {
                 selected_recipe = filtered.front();
-                recipe_details = fp3d_crafting::details( recipes[selected_recipe].id, you );
+                recipe_details = fp3d_crafting::details( recipes[selected_recipe].id, you, crafting_batch );
             }
             if( filtered.empty() ) {
                 ImGui::TextWrapped( "没有匹配的配方，请修改搜索或主技能筛选。" );
@@ -1221,7 +1226,7 @@ class panel : public cataimgui::window
                         ImGui::PushID( static_cast<int>( index ) );
                         if( ImGui::Selectable( "##配方", selected_recipe == index, 0, ImVec2( cell, card_height ) ) ) {
                             selected_recipe = index;
-                            recipe_details = fp3d_crafting::details( entry.id, you );
+                            recipe_details = fp3d_crafting::details( entry.id, you, crafting_batch );
                         }
                         const auto start = ImGui::GetItemRectMin();
                         const auto end = ImGui::GetItemRectMax();
@@ -1258,7 +1263,20 @@ class panel : public cataimgui::window
                 const auto &entry = recipes[selected_recipe];
                 ImGui::TextWrapped( "%s", entry.name.c_str() );
                 ImGui::TextWrapped( "主技能：%s / 难度 %d", entry.skill.c_str(), entry.difficulty );
-                ImGui::TextWrapped( "材料、工具、批量、光照和士气由原版最终确认。" );
+                ImGui::TextWrapped( "由玩家制作；材料、工具、技能、容器、光照和士气按原版检查。" );
+                ImGui::SetNextItemWidth( 100 * scale );
+                if( ImGui::InputInt( "批量（1-50）", &crafting_batch ) ) {
+                    crafting_batch = std::clamp( crafting_batch, 1, 50 );
+                    recipe_details = fp3d_crafting::details( entry.id, you, crafting_batch );
+                }
+                if( ImGui::Button( "制作所选批量" ) ) {
+                    fp3d_inventory::operation request;
+                    request.kind = fp3d_inventory::operation_kind::craft;
+                    request.crafting_recipe = entry.id;
+                    request.crafting_batch = crafting_batch;
+                    result = std::move( request );
+                }
+                ImGui::TextWrapped( "材料替代与特殊确认仍由原版处理；选择其他制作人请用下方完整菜单。" );
                 if( ImGui::Button( "在原版确认制作" ) ) {
                     fp3d_inventory::operation request;
                     request.kind = fp3d_inventory::operation_kind::native;
@@ -1780,10 +1798,14 @@ class panel : public cataimgui::window
                                 result->kind == fp3d_inventory::operation_kind::wield ||
                                 result->kind == fp3d_inventory::operation_kind::wear ||
                                 result->kind == fp3d_inventory::operation_kind::takeoff ||
-                                result->kind == fp3d_inventory::operation_kind::follower_order ) ) {
+                                result->kind == fp3d_inventory::operation_kind::follower_order ||
+                                result->kind == fp3d_inventory::operation_kind::craft ) ) {
                     std::string error;
                     if( fp3d_inventory::execute( *result, you, here, &error ) ) {
                         direct_action_completed = true;
+                        if( result->kind == fp3d_inventory::operation_kind::craft ) {
+                            recipes_loaded = false;
+                        }
                         if( result->kind == fp3d_inventory::operation_kind::follower_order ) {
                             journal_loaded = false;
                         }
@@ -1796,6 +1818,9 @@ class panel : public cataimgui::window
                         refresh_items();
                     } else {
                         action_message = std::move( error );
+                        if( result->kind == fp3d_inventory::operation_kind::craft ) {
+                            recipes_loaded = false;
+                        }
                         if( result->kind == fp3d_inventory::operation_kind::follower_order ) {
                             journal_loaded = false;
                         }
