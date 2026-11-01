@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 #include "avatar.h"
+#include "avatar_action.h"
+#include "bodypart.h"
+#include "fp3d_interaction.h"
 #include "calendar.h"
 #include "cata_catch.h"
 #include "cata_scope_helpers.h"
@@ -28,8 +31,10 @@
 #include "weather.h"
 #include "weather_type.h"
 
-// Bounded full world turns. A long native destination prevents the engine from
-// requesting desktop input before each tested turn exhausts its action points.
+// Bounded full world turns. Navigation uses a native destination. Optional
+// combat drains AP with native attack primitives before each world turn, so
+// neither scenario needs desktop input. Combat covers AI, not the input loop
+// or private autosave bookkeeping.
 TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_compare]" )
 {
     const char *mode = std::getenv( "CDDA_FP3D_COMBAT_MODE" );
@@ -37,6 +42,8 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
     REQUIRE( mode );
     REQUIRE( report );
     const bool modern = std::string( mode ) == "modern";
+    const char *combat_flag = std::getenv( "CDDA_FP3D_WORLD_COMBAT" );
+    const bool combat = combat_flag && std::string( combat_flag ) == "1";
     REQUIRE( ( modern || std::string( mode ) == "native" ) );
     REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
     on_out_of_scope quit_video( []() {
@@ -80,12 +87,20 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
         route.push_back( p );
     }
     here.ter_set( you.pos_bub( here ), ter_str_id( "t_pavement" ) );
-    you.set_destination( route );
+    if( !combat ) {
+        you.set_destination( route );
+    }
     you.set_moves( 100 );
-    monster &enemy = spawn_test_monster( "mon_zombie", you.pos_bub( here ) + tripoint_rel_ms( 8, 0,
-                                         0 ) );
+    monster &enemy = spawn_test_monster( "mon_zombie", you.pos_bub( here ) +
+                                         ( combat ? tripoint_rel_ms::north : tripoint_rel_ms( 8, 0, 0 ) ) );
+    if( combat ) {
+        // Fixture health keeps a short comparison from ending at an input prompt.
+        enemy.set_hp( 500 );
+    }
+    const int enemy_initial_hp = enemy.get_hp();
     const auto enemy_start = enemy.pos_abs();
     const auto player_start = you.pos_abs();
+    const int player_initial_hp = you.get_hp();
     g->set_safe_mode( SAFE_MODE_OFF );
     override_option real_time( "TURN_DURATION", "0" );
     override_option autosave( "AUTOSAVE", "false" );
@@ -118,7 +133,9 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
     json.start_array();
     for( int turn = 0; turn < 3; ++turn ) {
         CAPTURE( mode, turn );
-        REQUIRE( you.has_destination() );
+        if( !combat ) {
+            REQUIRE( you.has_destination() );
+        }
         if( modern ) {
             const auto engine = rng_get_engine();
             const int moves = you.get_moves();
@@ -126,9 +143,43 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
             CHECK( rng_get_engine() == engine );
             CHECK( you.get_moves() == moves );
         }
+        if( combat ) {
+            // Native action primitives exhaust the current action budget. The
+            // complete native world turn then runs AI, attacks and AP recovery.
+            // No test-side AP refill, clock increment or manual monster attack.
+            int attacks = 0;
+            while( you.get_moves() > 0 ) {
+                REQUIRE( ++attacks <= 8 );
+                REQUIRE_FALSE( enemy.is_dead() );
+                REQUIRE( enemy.pos_abs() == enemy_start );
+                tripoint_rel_ms delta = tripoint_rel_ms::north;
+                if( modern ) {
+                    const auto engine = rng_get_engine();
+                    const int moves = you.get_moves();
+                    fp3d_snapshot::prepare_view( you, here );
+                    const auto target = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, 0 );
+                    REQUIRE( target );
+                    REQUIRE( target->position == enemy.pos_abs() );
+                    const auto request = fp3d_interaction::resolve( "FP3D_ATTACK", target, you, here );
+                    REQUIRE( request );
+                    REQUIRE( request->position == enemy.pos_bub( here ) );
+                    delta = tripoint_rel_ms( get_delta_from_movement_action( request->action, iso_rotate::yes ), 0 );
+                    CHECK( rng_get_engine() == engine );
+                    CHECK( you.get_moves() == moves );
+                }
+                const int before = you.get_moves();
+                avatar_action::move( you, here, delta );
+                REQUIRE( you.get_moves() < before );
+                you.movecounter = before - you.get_moves();
+                you.action_taken();
+            }
+            REQUIRE( you.get_moves() <= 0 );
+        }
         REQUIRE_FALSE( do_turn() );
         CHECK( calendar::turn == clock + ( turn + 1 ) * 1_seconds );
-        REQUIRE( you.has_destination() );
+        if( !combat ) {
+            REQUIRE( you.has_destination() );
+        }
         json.start_object();
         json.member( "turn", turn );
         json.member( "elapsed_seconds", to_seconds<int>( calendar::turn - clock ) );
@@ -144,13 +195,27 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
         json.member( "enemy_x", enemy.pos_abs().x() );
         json.member( "enemy_y", enemy.pos_abs().y() );
         json.member( "enemy_hp", enemy.get_hp() );
+        if( combat ) {
+            json.member( "scenario", "native_melee_then_full_world_turn" );
+            json.member( "enemy_initial_hp", enemy_initial_hp );
+            json.member( "enemy_moves", enemy.get_moves() );
+            json.member( "pain", you.get_pain() );
+            json.member( "head_hp", you.get_part_hp_cur( bodypart_str_id( "head" ).id() ) );
+            json.member( "torso_hp", you.get_part_hp_cur( bodypart_str_id( "torso" ).id() ) );
+        }
         std::ostringstream engine;
         engine << rng_get_engine();
         json.member( "rng", engine.str() );
         json.end_object();
     }
-    CHECK( you.pos_abs() != player_start );
-    CHECK( enemy.pos_abs() != enemy_start );
+    if( combat ) {
+        CHECK( you.pos_abs() == player_start );
+        CHECK( enemy.get_hp() < enemy_initial_hp );
+        CHECK( you.get_hp() < player_initial_hp );
+    } else {
+        CHECK( you.pos_abs() != player_start );
+        CHECK( enemy.pos_abs() != enemy_start );
+    }
     json.end_array();
     output.flush();
     REQUIRE( output.good() );
