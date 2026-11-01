@@ -354,7 +354,8 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             }
             const auto empty_room = render();
             const auto empty_scene = scene;
-            for( const std::string id : { "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window" } ) {
+            for( const std::string id : { "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window",
+                                         "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half" } ) {
                 CAPTURE( id );
                 construction project{};
                 project.post_terrain = id;

@@ -24,7 +24,10 @@ TEST_CASE( "fp3d_construction_ghost_uses_completed_terrain_without_building_it",
              std::pair{ "t_wall_wood", kind::wall },
              std::pair{ "t_door_c", kind::closed_door },
              std::pair{ "t_door_o", kind::open_door },
-             std::pair{ "t_window", kind::window }
+             std::pair{ "t_window", kind::window },
+             std::pair{ "t_stairs_up", kind::floor },
+             std::pair{ "t_wood_stairs_up", kind::floor },
+             std::pair{ "t_wood_stairs_up_half", kind::floor }
          } ) {
         CAPTURE( entry.first );
         construction project{};
@@ -38,9 +41,11 @@ TEST_CASE( "fp3d_construction_ghost_uses_completed_terrain_without_building_it",
         CHECK_FALSE( ghost->exterior_only );
         CHECK_FALSE( ghost->ceiling_present );
         CHECK( ghost->floor_present );
+        CHECK( ghost->goes_up == ( std::string( entry.first ) == "t_stairs_up" ||
+                                  std::string( entry.first ) == "t_wood_stairs_up" ) );
     }
     for( const std::string id : {
-             "t_open_air", "t_stairs_up", "t_stairs_down", "t_tree",
+             "t_open_air", "t_stairs_down", "t_tree",
              "not_a_terrain", "t_null", ""
          } ) {
         CAPTURE( id );
@@ -52,6 +57,23 @@ TEST_CASE( "fp3d_construction_ghost_uses_completed_terrain_without_building_it",
     furniture.post_is_furniture = true;
     furniture.post_terrain = "f_crate_c";
     CHECK_FALSE( fp3d_construction::terrain_preview( furniture, position ) );
+    bool frame = false;
+    bool completed = false;
+    for( const construction &project : get_constructions() ) {
+        if( project.group != construction_group_str_id( "build_wooden_staircase" ) ) {
+            continue;
+        }
+        if( project.post_terrain == "t_wood_stairs_up_half" ||
+            project.post_terrain == "t_wood_stairs_up" ) {
+            const auto ghost = fp3d_construction::terrain_preview( project, position );
+            REQUIRE( ghost );
+            CHECK( ghost->goes_up == ( project.post_terrain == "t_wood_stairs_up" ) );
+            frame = frame || project.post_terrain == "t_wood_stairs_up_half";
+            completed = completed || project.post_terrain == "t_wood_stairs_up";
+        }
+    }
+    CHECK( frame );
+    CHECK( completed );
     CHECK( here.ter( here.get_bub( position ) ) == original );
     CHECK( you.pos_abs() == position );
     CHECK( calendar::turn == time );

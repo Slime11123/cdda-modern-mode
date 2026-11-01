@@ -210,6 +210,18 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         floor( 0, 0, 0, fp3d_materials::lookup( "t_floor" ) );
         glPopMatrix();
     }
+    if( tile.terrain == "t_wood_stairs_up_half" ) {
+        // The native unfinished stage has stringers, but no usable stair link.
+        // Its presentation never grants GOES_UP to the actual terrain.
+        glPushMatrix();
+        glTranslatef( x + .25f, fp3d_camera::floor_height / 2, z );
+        glRotatef( std::atan( fp3d_camera::floor_height ) * 180 / 3.14159265f, 1, 0, 0 );
+        const float length = std::sqrt( 1 + fp3d_camera::floor_height * fp3d_camera::floor_height );
+        for( const float side : { -.21f, .21f } ) {
+            box( side, 0, .07f, length, -.04f, .04f, material );
+        }
+        glPopMatrix();
+    }
     if( tile.goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
                           ( !above && !tile.ceiling_present && !tile.exterior_only &&
                             tile.known == fp3d_snapshot::knowledge::visible ) ) ) {
