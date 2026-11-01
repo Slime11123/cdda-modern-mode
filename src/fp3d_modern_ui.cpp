@@ -76,7 +76,7 @@ class panel : public cataimgui::window
         bool journal_loaded = false;
         fp3d_journal::model journal;
         int mission_state = 0;
-        size_t selected_mission = 0;
+        int selected_mission = -1;
         int selected_person = -1;
         std::string people_search;
         std::string mission_search;
@@ -1132,62 +1132,88 @@ class panel : public cataimgui::window
                 return;
             }
             const float width = ImGui::GetContentRegionAvail().x;
-            ImGui::BeginChild( "任务列表", ImVec2( width * .44f, height ), true );
-            ImGui::Combo( "状态", &mission_state, "进行中\0已完成\0失败\0" );
+            const bool compact = width < 1250 * scale;
+            ImGui::BeginChild( "任务列表", ImVec2( width * .29f, height ), true );
+            ImGui::TextUnformatted( "任务状态" );
+            ImGui::SetNextItemWidth( -1 );
+            ImGui::Combo( "##任务状态", &mission_state, "进行中\0已完成\0失败\0" );
             ImGui::SetNextItemWidth( -1 );
             ImGui::InputTextWithHint( "##任务搜索", "搜索任务", &mission_search );
-            bool any = false;
-            bool selected_visible = false;
-            std::optional<size_t> first_match;
-            for( size_t i = 0; i < journal.missions.size(); ++i ) {
-                const auto &entry = journal.missions[i];
+            if( ImGui::Button( "刷新任务列表" ) ) { journal_loaded = false; }
+            std::vector<const fp3d_journal::mission_entry *> filtered;
+            const fp3d_journal::mission_entry *mission = nullptr;
+            for( const auto &entry : journal.missions ) {
                 if( entry.state != mission_state || !lcmatch( entry.name, mission_search ) ) {
                     continue;
                 }
-                any = true;
-                if( !first_match ) {
-                    first_match = i;
+                filtered.push_back( &entry );
+                if( entry.id == selected_mission ) {
+                    mission = &entry;
                 }
-                ImGui::PushID( static_cast<int>( i ) );
-                if( ImGui::Selectable( ( ( entry.tracked ? "[追踪] " : "" ) + entry.name ).c_str(),
-                                       selected_mission == i ) ) {
-                    selected_mission = i;
+            }
+            if( !mission && !filtered.empty() ) {
+                mission = filtered.front();
+                selected_mission = mission->id;
+            }
+            for( const auto *entry : filtered ) {
+                ImGui::PushID( entry->id );
+                if( ImGui::Selectable( ( ( entry->tracked ? "[追踪] " : "" ) + entry->name ).c_str(),
+                                       selected_mission == entry->id ) ) {
+                    selected_mission = entry->id;
+                    mission = entry;
                 }
-                selected_visible = selected_visible || selected_mission == i;
                 if( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip( "%s", entry.name.c_str() );
+                    ImGui::SetTooltip( "%s", entry->name.c_str() );
                 }
                 ImGui::PopID();
             }
-            if( !selected_visible && first_match ) {
-                selected_mission = *first_match;
-            }
-            if( !any ) {
+            if( filtered.empty() ) {
                 ImGui::TextUnformatted( "没有匹配的任务。" );
             }
             ImGui::EndChild();
-            ImGui::SameLine();
-            ImGui::BeginChild( "任务详情", ImVec2( 0, height ), true );
-            if( any && selected_mission < journal.missions.size() &&
-                journal.missions[selected_mission].state == mission_state ) {
-                const auto &entry = journal.missions[selected_mission];
-                ImGui::TextWrapped( "%s", entry.name.c_str() );
-                ImGui::TextWrapped( "%s", entry.destination.c_str() );
-                if( !entry.deadline.empty() ) {
-                    ImGui::TextWrapped( "%s", entry.deadline.c_str() );
+            const auto actions = [&]() {
+                ImGui::TextUnformatted( "任务操作" );
+                if( !mission ) {
+                    ImGui::TextWrapped( "先从左侧选择任务。" );
+                    return;
                 }
-                ImGui::Separator();
-                ImGui::TextWrapped( "%s", entry.description.c_str() );
-                if( entry.state == 0 && !entry.tracked && ImGui::Button( "追踪此任务" ) ) {
+                if( mission->tracked ) {
+                    ImGui::TextWrapped( "正在追踪此任务。" );
+                } else if( mission->state != 0 ) {
+                    ImGui::TextWrapped( "仅进行中的任务可以设为追踪目标。" );
+                } else if( ImGui::Button( "追踪此任务" ) ) {
                     fp3d_inventory::operation request;
                     request.kind = fp3d_inventory::operation_kind::native;
                     request.native_action = ACTION_MISSIONS;
-                    request.tracking_mission = entry.id;
+                    request.tracking_mission = mission->id;
                     result = std::move( request );
                     is_open = false;
                 }
+            };
+            ImGui::SameLine();
+            ImGui::BeginChild( "任务详情", ImVec2( compact ? 0 : width * .43f, height ), true );
+            if( mission ) {
+                ImGui::TextWrapped( "%s", mission->name.c_str() );
+                ImGui::TextWrapped( "%s", mission->destination.c_str() );
+                if( !mission->deadline.empty() ) {
+                    ImGui::TextWrapped( "%s", mission->deadline.c_str() );
+                }
+                ImGui::Separator();
+                ImGui::TextWrapped( "%s", mission->description.c_str() );
+            } else {
+                ImGui::TextWrapped( "从左侧选择任务后查看目标、期限与说明。" );
+            }
+            if( compact ) {
+                ImGui::Separator();
+                actions();
             }
             ImGui::EndChild();
+            if( !compact ) {
+                ImGui::SameLine();
+                ImGui::BeginChild( "任务操作", ImVec2( 0, height ), true );
+                actions();
+                ImGui::EndChild();
+            }
             compatible( ACTION_MISSIONS, "完整任务管理（原版兼容）" );
         }
         void crafting() {

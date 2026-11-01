@@ -1249,6 +1249,37 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 REQUIRE( ImGui::GetDrawData()->TotalVtxCount > 100 );
                 CHECK( ImGui::GetDrawData()->TotalVtxCount < 20000 );
+                if( page == 4 ) {
+                    CAPTURE( layout[0], layout[1], layout[2] );
+                    ImGuiWindow *list = nullptr;
+                    ImGuiWindow *details = nullptr;
+                    ImGuiWindow *actions = nullptr;
+                    for( ImGuiWindow *child : GImGui->Windows ) {
+                        if( !child->Active ) {
+                            continue;
+                        }
+                        const std::string name = child->Name;
+                        if( name.find( "/任务列表_" ) != std::string::npos ) {
+                            list = child;
+                        } else if( name.find( "/任务详情_" ) != std::string::npos ) {
+                            details = child;
+                        } else if( name.find( "/任务操作_" ) != std::string::npos ) {
+                            actions = child;
+                        }
+                    }
+                    REQUIRE( list );
+                    REQUIRE( details );
+                    CHECK( list->Pos.x + list->Size.x <= details->Pos.x );
+                    CHECK( details->Pos.x + details->Size.x <= layout[0] );
+                    CHECK( details->Pos.y + details->Size.y <= layout[1] );
+                    if( layout[0] == 1920 && layout[2] == 100 ) {
+                        REQUIRE( actions );
+                        CHECK( details->Pos.x + details->Size.x <= actions->Pos.x );
+                        CHECK( actions->Pos.x + actions->Size.x <= layout[0] );
+                    } else {
+                        CHECK_FALSE( actions );
+                    }
+                }
                 if( page == 3 || page == 6 ) {
                     CAPTURE( page, layout[0], layout[1], layout[2] );
                     const std::string category_name = page == 3 ? "/配方分类_" : "/建造分类_";

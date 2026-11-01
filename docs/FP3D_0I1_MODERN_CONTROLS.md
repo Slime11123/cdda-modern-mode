@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：96 用例 / 9168 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-hold-delay-final-cpu.log`）；图形回归：3018 断言（`modern-hold-delay-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：96 用例 / 9168 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-missions-cpu.log`）；图形回归：3070 断言（`modern-missions-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-hold-delay`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-missions`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -660,3 +660,10 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 - 新增时间边界回归：互动/拾取短长按、释放后不双发、调整时清除旧输入、范围限制、同值保留、计时器回绕及攻击节奏。`modern-hold-delay-final-cpu.log`：96用例/9168断言（含3个原版RNG用例）。初次版本为`modern-hold-delay-cpu.log`，补边界后以final日志为准。
 - 图形回归通过3018断言（`modern-hold-delay-gl.log`）；通过实际菜单行鼠标事件进入设置页，覆盖两个贴图包、720p/1080p、100%/150%缩放。检查Undead的720p150%及1080p100%截图，滑条、数值、恢复和说明均可见。图片位于`qa/0i1/modern-hold-delay-gl-images`。这不替代实体键盘/IME/高DPI综合验收。
 - ON/OFF构建通过：`modern-hold-delay-on.log`、`modern-hold-delay-off.log`；测试构建日志`modern-hold-delay-final-tests-build.log`。验证包`runtime/modern-controls-hold-delay`，根目录“启动3D操作修复验证.cmd”已更新；正式存档和其他任务主启动器保持原配置。
+
+## 2026-11-01 增量：P5.4 任务列表、详情与操作布局
+
+- 任务页与队友页采用同样的响应式结构：宽屏左任务列表、中目标/期限/描述、右操作；窄屏或较大界面缩放将操作放在详情内。三个区域使用独立子窗口，长任务名保留悬停全文。状态筛选与搜索使用左栏完整宽度。
+- 新增刷新任务列表；选择记录由列表位置改为原版任务ID。刷新/重排后保留同一任务；筛选不包含原任务时选择首个可见任务，无匹配时隐藏详情及追踪操作。追踪请求仍在绘制结束后由原版任务接口执行，并复查是否仍进行中；不新增任务状态或推进回合。
+- 功能回归96用例/9168断言（`modern-missions-cpu.log`），含原版任务追踪、无效/过期任务身份拒绝与时间/AP/RNG检查。图形3070断言（`modern-missions-gl.log`），新增52条实际子窗口边界/分栏检查，覆盖两种贴图包、720p/1080p、100%/150%缩放；检查Undead宽屏与720p150%任务截图，操作区及详情均可见。图片`qa/0i1/modern-missions-gl-images`。
+- ON/OFF构建通过：`modern-missions-on.log`、`modern-missions-off.log`；测试构建`modern-missions-tests-build.log`。验证包与根目录操作修复启动器更新至`runtime/modern-controls-missions`。实体IME/高DPI、完整实际施工和正式城市性能仍待验收。
