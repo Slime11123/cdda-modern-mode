@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "type_id.h"
+#include "fp3d_snapshot.h"
 #include "coordinates.h"
 struct construction;
 class avatar;
@@ -29,6 +30,9 @@ bool begin( const construction_group_str_id &group );
 // Read-only legality check shared by the preview and its final position confirmation.
 bool preview_allowed( avatar &you, map &here, const construction &project,
                       const fp3d_targeting::target &target );
+// Single-cell completed terrain, without changing the map or running post-effects.
+std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
+        const tripoint_abs_ms &position );
 // Only selects a native validated position; never consumes resources or starts work.
 std::optional<tripoint_bub_ms> choose( const std::map<tripoint_bub_ms, const construction *>
                                        &valid );

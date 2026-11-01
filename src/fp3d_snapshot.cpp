@@ -289,6 +289,11 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
 }
 } // namespace
 
+terrain_kind terrain_shape( const std::string &id )
+{
+    return classify( id );
+}
+
 void prepare_view( avatar &you, map &here )
 {
     const auto p = you.pos_bub( here );

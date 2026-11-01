@@ -32,6 +32,8 @@ enum class knowledge { visible, remembered };
 enum class window_pane { glazed, opening, covered };
 
 enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle };
+// Read-only terrain-definition classification, also used by construction ghosts.
+terrain_kind terrain_shape( const std::string &id );
 
 struct cell {
     tripoint_abs_ms position;

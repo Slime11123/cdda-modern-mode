@@ -40,6 +40,8 @@
 #include "fp3d_materials.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_scene.h"
+#include "fp3d_construction.h"
+#include "construction.h"
 #include "options.h"
 #include "options_helpers.h"
 #include "messages.h"
@@ -135,6 +137,63 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         CHECK( render() != allowed_preview );
         fp3d_compositor::set_blueprint( std::nullopt );
         CHECK( render() == baseline );
+        {
+            const auto original_scene = scene;
+            for( auto &tile : scene.cells ) {
+                tile.kind = fp3d_snapshot::terrain_kind::floor;
+                tile.terrain = "t_floor";
+            }
+            const auto empty_room = render();
+            const auto empty_scene = scene;
+            for( const std::string id : { "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window" } ) {
+                CAPTURE( id );
+                construction project{};
+                project.post_terrain = id;
+                ghost.position = tripoint_abs_ms( 0, -3, 0 );
+                ghost.valid = true;
+                ghost.terrain = fp3d_construction::terrain_preview( project, ghost.position );
+                REQUIRE( ghost.terrain );
+                fp3d_compositor::set_blueprint( ghost );
+                scene = original_scene;
+                CHECK( render() == baseline ); // The completed shape must also stay behind walls.
+                scene = empty_scene;
+                auto allowed = render();
+                CHECK( allowed != empty_room );
+                REQUIRE( fp3d_materials::bind() );
+                CHECK( fp3d_materials::lookup( id == "t_window" ? "$window:" + id : id ) );
+                fp3d_materials::unbind();
+                // Compare the aperture area: a glyph-based pack can leave an
+                // individual face pixel transparent even on a closed door.
+                unsigned aperture_changes = 0;
+                for( int py = height / 2 - 16; py < height / 2 + 16; ++py ) {
+                    for( int px = width / 2 - 12; px < width / 2 + 12; ++px ) {
+                        const size_t pixel = py * width + px;
+                        aperture_changes += allowed[pixel] != empty_room[pixel];
+                    }
+                }
+                if( id == "t_door_o" || id == "t_floor" ) {
+                    CHECK( aperture_changes == 0 );
+                } else if( id != "t_window" ) {
+                    CHECK( aperture_changes > 0 );
+                }
+                ghost.valid = false;
+                fp3d_compositor::set_blueprint( ghost );
+                CHECK( render() != allowed );
+                if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                    std::filesystem::create_directories( directory );
+                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                 allowed.data(), width, height,
+                                                 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                    REQUIRE( picture );
+                    const auto output = std::filesystem::path( directory ) / ( pack + "-blueprint-" + id + ".png" );
+                    CHECK( IMG_SavePNG( picture.get(), output.u8string().c_str() ) == 0 );
+                }
+                fp3d_compositor::set_blueprint( std::nullopt );
+                CHECK( render() == empty_room );
+            }
+            scene = original_scene;
+            CHECK( render() == baseline );
+        }
         fp3d_snapshot::sprite zombie;
         zombie.height = 2.16f;
         zombie.id = "mon_zombie";

@@ -4,6 +4,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include "fp3d_camera.h"
+#include "fp3d_snapshot.h"
 #include "coordinates.h"
 #include <optional>
 #include <string>
@@ -18,6 +19,7 @@ struct blueprint {
     float height = 1;
     bool valid = false;
     std::string name;
+    std::optional<fp3d_snapshot::cell> terrain;
 };
 struct draw_statistics {
     unsigned chunks = 0;

@@ -443,3 +443,16 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 交谈操作保持原有ID/位置/可见性/相邻复查与原版ACTION_CHAT请求，在绘制后执行。交易、招募、跟随等仍明确标为原版对话确认，本轮不是完整现代队友命令交付。
 
 功能73用例/2307断言（`modern-people-cpu.log`），图形2462（`modern-people-gl.log`），ON/OFF（`modern-people-on.log` / `modern-people-off.log`）通过。两个贴图包、720p/1080p与100%/150%实际生产页面各30帧，保持时间/AP/RNG；检查 `modern-people-gl/UNDEAD_PEOPLE_BASE-people-1920-100.png` 与 `...-1280-150.png`，确认三栏和窄屏折叠、文字可读无重叠。实体点击/搜索输入法不冒称已验收。独立验证入口更新至 `runtime/modern-controls-people`，主入口仍保留render-exclusive。
+
+
+### 2026-11-01：P5.6 单格地板、墙与门窗的完成地形蓝图
+
+建造预览新增只读完成地形描述，与世界快照共享原有地形分类；常规地板、墙、关闭/打开的门及窗户，直接复用世界地形绘制函数和当前贴图包材质，保留红/绿35%半透明提示。开门蓝图留出门洞，窗户使用窗台/过梁/侧框与单张玻璃；朝向和窗框墙材只读取现有允许的快照邻格。新增材质按需放入既有GPU图集，无逐帧像素读回；取消即清除预览。
+
+该预览不提前更改地图、不执行施工post-effects、不扣材料/AP/时间。确认时仍调用现有原版合法性与活动链。家具、植物、无楼板、楼梯/坡道和多格特殊效果不猜造完成状态，继续使用既有占位体；本阶段不是所有建造模型已完成。
+
+功能74用例/2360断言（`modern-blueprint-cpu.log`），图形2694（`modern-blueprint-gl-occlusion.log`），ON/OFF（`modern-blueprint-on.log` / `modern-blueprint-off.log`）通过。新增覆盖五类完成地形、未知/特殊地形回退、地图/位置/AP/时间/RNG不变；两贴图包逐类验证墙后完全遮挡、前方可见、材质存在、红绿不同、开门洞/地板不遮挡视线中心，以及清除后像素恢复。检查 `modern-blueprint-gl-occlusion/*-blueprint-*.png` 的实际隐藏OpenGL输出。
+
+图形测试曾因在解绑后查询材质、首张截图目录未建、准星覆盖中心点而失败；修正测试生命周期后，Retrodays字形贴图的单点透明仍触发错误预期，现改为门洞区域比较，未关闭或跳过任一贴图包。失败日志 `modern-blueprint-gl.log` / `modern-blueprint-gl-pass.log` 与中间通过记录保留。完整三回合对照 `modern-blueprint-world-turn/20261101-100628-824` 再次得到相同SHA256 FF8F1350AA1D0734B216A0EB1AA1BBAAC25BE7291DF4DD2D2D21BCC3835AA9EE。
+
+独立操作验证入口更新至 `runtime/modern-controls-blueprint`；主入口保留render-exclusive。只提交本轮共享源码的对应行，不混入其他任务的墙面比例、三模式或独占渲染改动。实体选项目—瞄准—确认施工的完整键鼠流程仍待验收。

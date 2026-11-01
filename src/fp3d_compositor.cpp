@@ -613,6 +613,12 @@ void compose()
         prepared_generation = latest_scene->render_generation;
         prepared_material_revision = fp3d_materials::revision();
     }
+    if( latest_scene && construction_preview && construction_preview->terrain ) {
+        fp3d_snapshot::scene_snapshot materials;
+        materials.season = latest_scene->season;
+        materials.cells.push_back( *construction_preview->terrain );
+        fp3d_materials::prepare( materials );
+    }
     if( SDL_RenderFlush( renderer ) != 0 || SDL_GL_GetCurrentContext() != context ) {
         disable( "flush failed or renderer context changed" );
         return;

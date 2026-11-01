@@ -2,6 +2,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <chrono>
 #include <cstdint>
@@ -169,8 +170,16 @@ void window_face( const std::optional<fp3d_materials::uv_rect> &material )
 
 void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const fp3d_snapshot::cell *below, const fp3d_snapshot::cell *above,
-                int ew, int ns, const std::string &wall_surface )
+                int ew, int ns, const std::string &wall_surface,
+                const std::array<float, 4> *tint = nullptr )
 {
+    const auto color = [&]( float r, float g, float b ) {
+        if( tint ) {
+            glColor4fv( tint->data() );
+        } else {
+            glColor3f( r, g, b );
+        }
+    };
     using kind = fp3d_snapshot::terrain_kind;
     const bool memory = tile.known == fp3d_snapshot::knowledge::remembered;
     const bool grass = tile.vegetation.compare( 0, 7, "t_grass" ) == 0;
@@ -178,9 +187,9 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                               tile.kind == kind::window ? "t_floor" :
                               tile.vegetation == tile.terrain && !grass ? "t_dirt" : tile.terrain );
     const float brightness = memory ? .23f : .9f;
-    glColor3f( memory ? .13f : .32f, memory ? .13f : .36f, memory ? .13f : .28f );
+    color( memory ? .13f : .32f, memory ? .13f : .36f, memory ? .13f : .28f );
     if( material ) {
-        glColor3f( brightness, brightness, brightness );
+        color( brightness, brightness, brightness );
     }
     glPushMatrix();
     const bool stair_opening = tile.goes_down && below && below->goes_up;
@@ -230,7 +239,7 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             glDisable( GL_LIGHTING );
             glEnable( GL_ALPHA_TEST );
             glAlphaFunc( GL_GREATER, .5f );
-            glColor3f( brightness, brightness, brightness );
+            color( brightness, brightness, brightness );
             crossed_plant( x, z, tile.vegetation_height,
                            tile.vegetation.compare( 0, 7, "t_grass" ) == 0, *plant );
             glDisable( GL_ALPHA_TEST );
@@ -238,14 +247,14 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         }
     }
     if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
-        glColor3f( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
+        color( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
         if( material ) {
-            glColor3f( brightness, brightness, brightness );
+            color( brightness, brightness, brightness );
         }
         box( x, z, .98f, .98f, 0, tile.kind == kind::wall ? fp3d_camera::floor_height : 1.0f, material );
     } else if( tile.kind == kind::window ) {
         const auto surround = fp3d_materials::lookup( wall_surface );
-        glColor3f( brightness, brightness, brightness );
+        color( brightness, brightness, brightness );
         glPushMatrix();
         glTranslatef( x, 0, z );
         if( ew < ns ) {
@@ -272,9 +281,9 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     } else if( tile.kind == kind::closed_door || tile.kind == kind::open_door ) {
         // Orientation uses only permitted snapshot neighbours, never the map.
         const bool along_x = ew >= ns;
-        glColor3f( memory ? .23f : .62f, memory ? .23f : .36f, memory ? .23f : .15f );
+        color( memory ? .23f : .62f, memory ? .23f : .36f, memory ? .23f : .15f );
         if( material ) {
-            glColor3f( brightness, brightness, brightness );
+            color( brightness, brightness, brightness );
         }
         if( tile.kind == kind::closed_door ) {
             box( x, z, along_x ? .98f : .16f, along_x ? .16f : .98f, 0, fp3d_camera::floor_height, material );
@@ -726,9 +735,34 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         const auto offset = preview->position - scene.origin;
         glDisable( GL_LIGHTING );
         glDisable( GL_ALPHA_TEST );
-        glColor4f( preview->valid ? .15f : .95f, preview->valid ? .9f : .15f, .3f, .35f );
+        const std::array<float, 4> tint{ preview->valid ? .15f : .95f,
+                                       preview->valid ? .9f : .15f, .3f, .35f };
+        glColor4fv( tint.data() );
         const float y = offset.z() * fp3d_camera::floor_height;
-        box( offset.x(), offset.y(), .94f, .94f, y + .03f, y + preview->height, std::nullopt );
+        if( preview->terrain ) {
+            const auto &tile = *preview->terrain;
+            const int ew = known_wall( tile.position + tripoint_rel_ms::east ) +
+                           known_wall( tile.position + tripoint_rel_ms::west );
+            const int ns = known_wall( tile.position + tripoint_rel_ms::north ) +
+                           known_wall( tile.position + tripoint_rel_ms::south );
+            glPushMatrix();
+            glTranslatef( 0, y + .025f, 0 );
+            draw_cell( tile, offset.x(), offset.y(), nullptr, nullptr, ew, ns, window_wall( tile ), &tint );
+            if( tile.kind == fp3d_snapshot::terrain_kind::window &&
+                tile.pane == fp3d_snapshot::window_pane::glazed ) {
+                glDisable( GL_LIGHTING );
+                glPushMatrix();
+                glTranslatef( offset.x(), 0, offset.y() );
+                if( ew < ns ) {
+                    glRotatef( 90, 0, 1, 0 );
+                }
+                window_face( fp3d_materials::lookup( "$window:" + tile.terrain ) );
+                glPopMatrix();
+            }
+            glPopMatrix();
+        } else {
+            box( offset.x(), offset.y(), .94f, .94f, y + .03f, y + preview->height, std::nullopt );
+        }
     }
     glDisable( GL_BLEND );
     glDepthMask( GL_TRUE );

@@ -63,6 +63,41 @@ bool preview_allowed( avatar &you, map &here, const construction &project,
            can_construct( project, here.get_bub( target.position ) ) &&
            player_can_build( you, you.crafting_inventory(), project, true );
 }
+std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
+        const tripoint_abs_ms &position )
+{
+    const ter_str_id terrain( project.post_terrain );
+    if( project.post_is_furniture || terrain.is_null() || !terrain.is_valid() ) {
+        return std::nullopt;
+    }
+    const auto &definition = terrain.obj();
+    // These need multi-cell post-effects or a dedicated plant/furniture model.
+    for( const auto flag : {
+             ter_furn_flag::TFLAG_NO_FLOOR, ter_furn_flag::TFLAG_NO_FLOOR_WATER,
+             ter_furn_flag::TFLAG_GOES_UP, ter_furn_flag::TFLAG_GOES_DOWN,
+             ter_furn_flag::TFLAG_RAMP, ter_furn_flag::TFLAG_RAMP_UP, ter_furn_flag::TFLAG_RAMP_DOWN,
+             ter_furn_flag::TFLAG_TREE, ter_furn_flag::TFLAG_YOUNG, ter_furn_flag::TFLAG_SHRUB,
+             ter_furn_flag::TFLAG_FLOWER
+         } ) {
+        if( definition.has_flag( flag ) ) {
+            return std::nullopt;
+        }
+    }
+    fp3d_snapshot::cell result;
+    result.position = position;
+    result.terrain = terrain.str();
+    result.kind = fp3d_snapshot::terrain_shape( result.terrain );
+    if( result.kind == fp3d_snapshot::terrain_kind::obstacle ) {
+        return std::nullopt;
+    }
+    if( result.kind == fp3d_snapshot::terrain_kind::window ) {
+        result.pane = !definition.has_flag( ter_furn_flag::TFLAG_TRANSPARENT ) ?
+                      fp3d_snapshot::window_pane::covered : definition.movecost > 0 ?
+                      fp3d_snapshot::window_pane::opening : fp3d_snapshot::window_pane::glazed;
+    }
+    return result;
+}
+
 std::optional<tripoint_bub_ms> choose( const std::map<tripoint_bub_ms, const construction *>
                                        &valid )
 {
@@ -98,6 +133,7 @@ std::optional<tripoint_bub_ms> choose( const std::map<tripoint_bub_ms, const con
             if( match != valid.end() ) {
                 const construction &con = *match->second;
                 preview.name = "建造预览：" + con.group->name();
+                preview.terrain = terrain_preview( con, candidate->position );
                 preview.height = con.post_is_furniture ? 1.0f :
                                  ter_str_id( con.post_terrain ).is_valid() &&
                                  ter_str_id( con.post_terrain )->movecost == 0 ? fp3d_camera::floor_height : .12f;
