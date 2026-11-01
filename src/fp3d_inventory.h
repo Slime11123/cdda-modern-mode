@@ -9,6 +9,7 @@
 #include "coordinates.h"
 #include "item_location.h"
 #include "type_id.h"
+#include "npc_orders.h"
 class avatar;
 class map;
 namespace fp3d_inventory
@@ -44,7 +45,7 @@ struct model {
 };
 model capture( avatar &you, map &here );
 bool accessible( const item_location &location, const avatar &you, const map &here );
-enum class operation_kind { pickup, drop, wield, wear, takeoff, use, insert, place, native, completed };
+enum class operation_kind { pickup, drop, wield, wear, takeoff, use, insert, place, native, follower_order, completed };
 struct operation {
     operation_kind kind = operation_kind::pickup;
     drop_locations items;
@@ -53,6 +54,7 @@ struct operation {
     recipe_id crafting_recipe;
     std::optional<int> tracking_mission;
     std::optional<int> talking_npc_id;
+    std::optional<npc_orders::kind> follower_command;
     std::optional<construction_group_str_id> construction_group;
     int hotbar_slot = -1;
     std::optional<tripoint_abs_ms> destination_tile;

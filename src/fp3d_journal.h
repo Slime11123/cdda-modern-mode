@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "coordinates.h"
+#include "npc_orders.h"
 class avatar;
 class map;
 namespace fp3d_journal
@@ -27,6 +28,8 @@ struct person_entry {
     bool ally = false;
     bool following = false;
     int id = -1;
+    bool can_follow = false;
+    bool can_guard = false;
 };
 struct model {
     std::vector<mission_entry> missions;
@@ -34,6 +37,8 @@ struct model {
 };
 model capture( const avatar &you, map &here );
 bool track( avatar &you, int mission_id );
+bool issue_order( avatar &you, const map &here, int npc_id,
+                  const tripoint_abs_ms &expected_position, npc_orders::kind order );
 // Revalidate identity, unchanged position and native perception immediately before dialogue.
 std::optional<tripoint_bub_ms> dialogue_target( const avatar &you, const map &here, int npc_id,
         const tripoint_abs_ms &expected_position );

@@ -1054,7 +1054,21 @@ class panel : public cataimgui::window
                     if( person->distance > 1 ) {
                         ImGui::TextWrapped( "靠近到相邻一格后可交谈。" );
                     }
-                    ImGui::TextWrapped( "交易、招募和跟随等指令暂由原版对话确认。" );
+                    for( const auto order : {
+                             npc_orders::kind::guard, npc_orders::kind::follow
+                         } ) {
+                        ImGui::BeginDisabled( order == npc_orders::kind::guard ? !person->can_guard : !person->can_follow );
+                        if( ImGui::Button( order == npc_orders::kind::guard ? "原地守卫" : "继续跟随" ) ) {
+                            fp3d_inventory::operation request;
+                            request.kind = fp3d_inventory::operation_kind::follower_order;
+                            request.talking_npc_id = person->id;
+                            request.destination_tile = person->position;
+                            request.follower_command = order;
+                            result = std::move( request );
+                        }
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::TextWrapped( "守卫/跟随沿用原版听力、喊话与行动消耗。交易和招募仍由原版对话确认。" );
                 };
                 ImGui::SameLine();
                 ImGui::BeginChild( "人物详情", ImVec2( compact ? 0 : width * .43f, height ), true );
@@ -1765,10 +1779,14 @@ class panel : public cataimgui::window
                                 result->kind == fp3d_inventory::operation_kind::pickup ||
                                 result->kind == fp3d_inventory::operation_kind::wield ||
                                 result->kind == fp3d_inventory::operation_kind::wear ||
-                                result->kind == fp3d_inventory::operation_kind::takeoff ) ) {
+                                result->kind == fp3d_inventory::operation_kind::takeoff ||
+                                result->kind == fp3d_inventory::operation_kind::follower_order ) ) {
                     std::string error;
                     if( fp3d_inventory::execute( *result, you, here, &error ) ) {
                         direct_action_completed = true;
+                        if( result->kind == fp3d_inventory::operation_kind::follower_order ) {
+                            journal_loaded = false;
+                        }
                         action_message.clear();
                         selected.clear();
                         activity_pending = static_cast<bool>( you.activity ) || you.get_moves() <= 0;
@@ -1778,6 +1796,9 @@ class panel : public cataimgui::window
                         refresh_items();
                     } else {
                         action_message = std::move( error );
+                        if( result->kind == fp3d_inventory::operation_kind::follower_order ) {
+                            journal_loaded = false;
+                        }
                     }
                     result.reset();
                     if( activity_pending ) { break; }

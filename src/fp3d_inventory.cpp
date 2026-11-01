@@ -7,6 +7,7 @@
 #include <utility>
 #include "activity_actor_definitions.h"
 #include "avatar.h"
+#include "fp3d_journal.h"
 #include "avatar_action.h"
 #include "vehicle.h"
 #include "veh_type.h"
@@ -284,6 +285,14 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
     if( action.kind == operation_kind::completed ) {
         return true;
     }
+    if( action.kind == operation_kind::follower_order ) {
+        if( !action.talking_npc_id || !action.destination_tile || !action.follower_command ||
+            !fp3d_journal::issue_order( you, here, *action.talking_npc_id, *action.destination_tile,
+                                        *action.follower_command ) ) {
+            return fail( "此人物已变化、不可见或无法听从该命令，请刷新队友页。" );
+        }
+        return true;
+    }
     std::string insert_error;
     if( action.kind == operation_kind::insert && !can_insert( action, you, here, insert_error ) ) {
         return fail( insert_error );
@@ -434,6 +443,7 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
             return true;
         }
         case operation_kind::native:
+        case operation_kind::follower_order:
             return false;
     }
     return false;

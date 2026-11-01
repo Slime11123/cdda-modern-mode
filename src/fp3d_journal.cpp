@@ -12,6 +12,21 @@
 #include "output.h"
 namespace fp3d_journal
 {
+namespace
+{
+npc *visible_person( const avatar &you, const map &here, int npc_id,
+                     const tripoint_abs_ms &expected_position )
+{
+    const auto position = here.get_bub( expected_position );
+    if( npc_id <= 0 || you.is_dead_state() || you.is_blind() || !here.inbounds( position ) ||
+        position.z() != you.posz() ) {
+        return nullptr;
+    }
+    npc *person = get_creature_tracker().creature_at<npc>( position );
+    return person && person->getID().get_value() == npc_id && !person->is_dead_state() &&
+           you.sees( here, *person ) ? person : nullptr;
+}
+}
 model capture( const avatar &you, map &here )
 {
     model result;
@@ -51,7 +66,9 @@ model capture( const avatar &you, map &here )
         result.people.push_back( { person->pos_abs(), person->get_name(),
                                    Creature::get_attitude_ui_data( person->attitude_to( you ) ).first.translated(),
                                    square_dist( person->pos_bub( here ), you.pos_bub( here ) ),
-                                   person->is_player_ally(), person->is_following(), person->getID().get_value() } );
+                                   person->is_player_ally(), person->is_following(), person->getID().get_value(),
+                                   npc_orders::can_issue( you, *person, npc_orders::kind::follow ),
+                                   npc_orders::can_issue( you, *person, npc_orders::kind::guard ) } );
     }
     std::sort( result.people.begin(), result.people.end(), []( const auto & a, const auto & b ) {
         return a.distance < b.distance || ( a.distance == b.distance && a.name < b.name );
@@ -62,16 +79,17 @@ std::optional<tripoint_bub_ms> dialogue_target( const avatar &you, const map &he
         const tripoint_abs_ms &expected_position )
 {
     const auto position = here.get_bub( expected_position );
-    if( npc_id <= 0 || you.is_dead_state() || you.is_blind() || !here.inbounds( position ) ||
-        position.z() != you.posz() || square_dist( position, you.pos_bub( here ) ) > 1 ) {
-        return std::nullopt;
-    }
-    const npc *person = get_creature_tracker().creature_at<npc>( position );
-    if( !person || person->getID().get_value() != npc_id || person->is_dead_state() ||
-        !you.sees( here, *person ) ) {
+    if( !visible_person( you, here, npc_id, expected_position ) ||
+        square_dist( position, you.pos_bub( here ) ) > 1 ) {
         return std::nullopt;
     }
     return position;
+}
+bool issue_order( avatar &you, const map &here, int npc_id,
+                  const tripoint_abs_ms &expected_position, npc_orders::kind order )
+{
+    npc *person = visible_person( you, here, npc_id, expected_position );
+    return person && npc_orders::issue( you, *person, order );
 }
 bool track( avatar &you, int mission_id )
 {

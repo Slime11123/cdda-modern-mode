@@ -98,6 +98,7 @@
 #include "mtype.h"
 #include "mutation.h"
 #include "npc.h"
+#include "npc_orders.h"
 #include "npc_class.h"
 #include "npc_opinion.h"
 #include "npctalk.h"
@@ -1025,6 +1026,64 @@ static void tell_magic_veh_stop_following()
     }
 }
 
+static bool follower_order_candidate( const npc &person, const Character &you, int volume,
+                                      npc_orders::kind order )
+{
+    switch( order ) {
+        case npc_orders::kind::guard:
+            return person.is_player_ally() && person.is_following() && person.can_hear( you.pos_bub(), volume );
+        case npc_orders::kind::follow:
+            return person.mission == NPC_MISSION_GUARD_ALLY &&
+                   person.companion_mission_role_id != "FACTION_CAMP" && person.can_hear( you.pos_bub(), volume );
+    }
+    return false;
+}
+
+static bool chat_voice_allowed( const Character &you )
+{
+    return !you.has_trait( trait_PROF_FOODP ) || you.is_wearing( itype_foodperson_mask ) ||
+           you.is_wearing( itype_foodperson_mask_on );
+}
+
+static void finish_chat( avatar &you, const std::string &yell_msg, std::string message,
+                         const std::string &emote_msg, bool is_order )
+{
+    if( !yell_msg.empty() ) {
+        message = string_format( _( "\"%s\"" ), yell_msg );
+    }
+    if( !message.empty() ) {
+        add_msg( _( "You yell %s" ), message );
+        you.shout( string_format( _( "%s yelling %s" ), you.disp_name(), message ), is_order );
+    }
+    if( !emote_msg.empty() ) {
+        add_msg( emote_msg );
+    }
+    you.mod_moves( -you.get_speed() );
+}
+
+bool npc_orders::can_issue( const avatar &you, const npc &person, kind order )
+{
+    return !you.is_dead_state() && !person.is_dead_state() && chat_voice_allowed( you ) &&
+           follower_order_candidate( person, you, you.get_shout_volume(), order );
+}
+
+bool npc_orders::issue( avatar &you, npc &person, kind order )
+{
+    if( !can_issue( you, person, order ) ) {
+        return false;
+    }
+    std::string yell;
+    if( order == kind::guard ) {
+        talk_function::assign_guard( person );
+        yell = string_format( _( "Guard here, %s!" ), person.get_name() );
+    } else {
+        talk_function::stop_guard( person );
+        yell = string_format( _( "Follow me, %s!" ), person.get_name() );
+    }
+    finish_chat( you, yell, {}, {}, true );
+    return true;
+}
+
 void game::chat()
 {
     map &here = get_map();
@@ -1042,13 +1101,11 @@ void game::chat()
     } );
     const int available_count = available.size();
     const std::vector<npc *> followers = get_npcs_if( [&]( const npc & guy ) {
-        return guy.is_player_ally() && guy.is_following() && guy.can_hear( u.pos_bub(), volume );
+        return follower_order_candidate( guy, u, volume, npc_orders::kind::guard );
     } );
     const int follower_count = followers.size();
     const std::vector<npc *> guards = get_npcs_if( [&]( const npc & guy ) {
-        return guy.mission == NPC_MISSION_GUARD_ALLY &&
-               guy.companion_mission_role_id != "FACTION_CAMP" &&
-               guy.can_hear( u.pos_bub(), volume );
+        return follower_order_candidate( guy, u, volume, npc_orders::kind::follow );
     } );
     const int guard_count = guards.size();
 
@@ -1058,9 +1115,7 @@ void game::chat()
     } );
     const int available_for_activities_count = available_for_activities.size();
 
-    if( player_character.has_trait( trait_PROF_FOODP ) &&
-        !( player_character.is_wearing( itype_foodperson_mask ) ||
-           player_character.is_wearing( itype_foodperson_mask_on ) ) ) {
+    if( !chat_voice_allowed( player_character ) ) {
         add_msg( m_warning, _( "You can't speak without your face!" ) );
         return;
     }
@@ -1475,18 +1530,7 @@ void game::chat()
             return;
     }
 
-    if( !yell_msg.empty() ) {
-        message = string_format( _( "\"%s\"" ), yell_msg );
-    }
-    if( !message.empty() ) {
-        add_msg( _( "You yell %s" ), message );
-        u.shout( string_format( _( "%s yelling %s" ), u.disp_name(), message ), is_order );
-    }
-    if( !emote_msg.empty() ) {
-        add_msg( emote_msg );
-    }
-
-    u.mod_moves( -u.get_speed() );
+    finish_chat( u, yell_msg, std::move( message ), emote_msg, is_order );
 }
 
 void npc::handle_sound( const sounds::sound_t spriority, const std::string &description,

@@ -495,3 +495,14 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 新增测试通过原版偏好加载器保存MOUSE_BACK/MOUSE_FORWARD（松开型名称）后，复现3D物理按钮不识别：修复前182断言中1失败（`modern-mouse-alias-before.log`）。3D现把同一物理按钮的按下/松开名称都接入既有手势分类；真实按下开始计时、松开结束，保留短/长交互、持续攻击、按住状态面板及单次菜单动作。配置名称不再决定3D是否能识别按钮。存在两种名称的冲突配置时，按下型绑定优先，单次物理点击不会执行两项；改绑同一按钮前需移除旧绑定。原版2D事件和配置文件格式保持。
 
 覆盖两种名称的八类现代动作、两侧键独立、长按后不补发短按、松开停止攻击/展开状态、取消清队列及冲突单次提交；时间/AP/位置/RNG不变。功能75用例/2832断言（`modern-mouse-alias-cpu.log`），图形2720（`modern-mouse-alias-gl.log`），ON/OFF（`modern-mouse-alias-on.log` / `modern-mouse-alias-off.log`）通过。使用原版配置加载不等于实体F6编辑器操作已验收，该部分继续保留待测标记。验证入口更新至 `runtime/modern-controls-mouse-alias`，主入口仍保持原设置。
+
+
+### 2026-11-01：P5.6 / UI-S4 队友原地守卫与继续跟随
+
+队友页新增两项直接命令，分别调用原版assign_guard/stop_guard；与原版chat共用候选人物、Foodperson面具限制、喊话和行动点结算，未建立新的NPC状态或AI。显示时只读查询原版可用性，绘制后提交；提交前重新核对人物ID、绝对位置、同层、可见性、存活及当前听力/跟随/营地条件。合法可听见的可见队友不受交谈的一格距离限制；交谈仍要求相邻。成功和失败均刷新人物列表，命令后保留同一面板，由原版处理回合再恢复。
+
+功能回归77用例/3042断言（modern-orders-cpu.log），包含相邻与五格外守卫/跟随、失明、人物移动/替换、死亡、非队友、不能听见、营地守卫、墙后/跨层、缺失和非法请求，以及只读查询AP/时间/RNG保持。初次focused测试140断言中5失败，是测试仅加低强度deaf仍能听见；按原版is_deaf规则改为强度3并增加前提断言，未修改原版听力公式。初次证据modern-orders-focused.log保留。
+
+原版单人指令case中的动作原语/喊话/耗时，与现代面板请求路径各在独立新进程运行；原版两次各12断言、现代14断言通过，两条命令导出状态与完整RNG一致，SHA256 519A1DEC473545EE78E1A2EAB0C025BD9F73880E3D85F5F097907D5E0E191555。证据modern-orders-native-comparison/20261101-105859-683。对照覆盖任务/态度/阵营/对话主题/守卫坐标/目的地、位置、AP、耐力与时间；这不是原版交谈菜单实体操作或后续NPC完整世界行动的验收。
+
+图形2720断言（modern-orders-gl.log）、产品ON/OFF（modern-orders-on.log / modern-orders-off.log）通过；查看Undead 1280×720/150%与1920×1080/100%人物页，操作与说明均在栏内。验证入口更新到runtime/modern-controls-orders；主入口render-exclusive及并行改动保留。交易、招募、其他队友命令和实体鼠标/输入法流程仍待推进。
