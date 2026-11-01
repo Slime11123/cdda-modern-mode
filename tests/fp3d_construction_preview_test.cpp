@@ -92,6 +92,29 @@ TEST_CASE( "fp3d_construction_preview_rechecks_native_requirements_without_side_
         stable = stable && current == expected;
     }
     CHECK( stable );
+    bool native_stage_allowed;
+    {
+        scoped_rng_restore preserve;
+        native_stage_allowed = player_can_build( you, you.crafting_inventory(), *project, true );
+    }
+    int stage = 0;
+    for( const auto &entry : projects ) {
+        if( entry.group == project->group && entry.on_display ) {
+            ++stage;
+            if( entry.id == project->id ) {
+                break;
+            }
+        }
+    }
+    REQUIRE( stage > 0 );
+    const std::string expected_status = native_stage_allowed ?
+                                        "材料、工具与知识：已满足该阶段需求。" :
+                                        "材料、工具与知识：尚未满足该阶段需求。";
+    const auto description = fp3d_construction::details( project->group, &you );
+    CHECK( description.find( "阶段 " + std::to_string( stage ) + "\n" + expected_status ) !=
+           std::string::npos );
+    CHECK( description.find( "位置与光照在选择施工位置时检查。" ) !=
+           std::string::npos );
     if( items == 0 ) {
         CHECK_FALSE( fp3d_construction::begin( project->group ) );
     }

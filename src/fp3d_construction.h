@@ -24,7 +24,8 @@ struct project {
     std::string category;
 };
 std::vector<project> catalogue();
-std::string details( const construction_group_str_id &group );
+// Optional crafter adds native material/tool/knowledge checks, before choosing a site.
+std::string details( const construction_group_str_id &group, avatar *crafter = nullptr );
 // Implemented beside the native menu so its private legality checks are reused.
 bool begin( const construction_group_str_id &group );
 // Read-only legality check shared by the preview and its final position confirmation.

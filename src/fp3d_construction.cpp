@@ -16,6 +16,7 @@
 #include "fp3d_interaction.h"
 #include "game.h"
 #include "input_context.h"
+#include "inventory.h"
 #include "map.h"
 #include "mapdata.h"
 #include "ui_manager.h"
@@ -35,9 +36,10 @@ std::vector<project> catalogue()
     } );
     return result;
 }
-std::string details( const construction_group_str_id &group )
+std::string details( const construction_group_str_id &group, avatar *crafter )
 {
     scoped_rng_restore restore_rng;
+    const inventory *available = crafter ? &crafter->crafting_inventory() : nullptr;
     std::string result;
     int stage = 0;
     for( const auto &entry : get_constructions() ) {
@@ -45,6 +47,11 @@ std::string details( const construction_group_str_id &group )
             continue;
         }
         result += "阶段 " + std::to_string( ++stage ) + "\n";
+        if( crafter ) {
+            result += player_can_build( *crafter, *available, entry, true ) ?
+                      "材料、工具与知识：已满足该阶段需求。\n" :
+                      "材料、工具与知识：尚未满足该阶段需求。\n";
+        }
         for( const auto &line : entry.get_folded_time_string( 60 ) ) {
             result += line + "\n";
         }
@@ -52,6 +59,9 @@ std::string details( const construction_group_str_id &group )
             result += skill.first->name() + " " + std::to_string( skill.second ) + "\n";
         }
         result += entry.pre_note.translated() + "\n" + entry.requirements->list_all() + "\n";
+    }
+    if( crafter && !result.empty() ) {
+        result += "位置与光照在选择施工位置时检查。\n";
     }
     return remove_color_tags( result );
 }

@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：94 用例 / 9061 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-build-categories-cpu-final.log`）；图形回归：3002 断言（`modern-build-categories-gl-final.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：94 用例 / 9085 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-build-conditions-cpu.log`）；图形回归：3002 断言（`modern-build-conditions-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-build-categories`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-build-conditions`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -616,3 +616,12 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 94用例9061断言（modern-build-categories-cpu-final.log，含rng）、图形3002（modern-build-categories-gl-final.log）、ON/OFF（modern-build-categories-on-final.log / modern-build-categories-off-final.log）通过。新增逐原版施工组详情保持RNG/正态样本，位置预览八种材料/知识/地形/距离情形保留正常样本，以及材料移除后现代开工拒绝。图形增建造三栏位置/边界/窄屏检查，已看Undead 1080p/100%与720p/150%截图。首次图形检查误用了任务页编号，导致查找建造子窗失败1条；已按现有页面映射修正测试并重跑通过，初始失败日志保留。
 
 验证入口runtime/modern-controls-build-categories，阶段报告更新；下一步按施工阶段显示当前材料/工具与知识资格。实际建造活动完整原版对照和实体鼠标/IME/正式性能仍待后续验收。
+
+
+### 2026-11-01：P5.4/P5.6 施工阶段条件与物品变化后刷新
+
+建造说明按每个原版施工阶段显示当前材料、工具与知识是否满足，直接调用原版player_can_build且跳过位置检查；明确位置/光照在选点时检查，不把材料足够当作可在任意格施工。耗时、技能、阶段要求仍用原版描述。物品转移/使用或活动返回时重建原版材料缓存，并使制作/建造目录失效；建造刷新按construction group ID保留选中项，避免高亮与详情或材料条件过时。
+
+94用例9085断言（modern-build-conditions-cpu.log，含rng）、图形3002（modern-build-conditions-gl.log）、ON/OFF（modern-build-conditions-on.log / modern-build-conditions-off.log）通过。在原有八种施工情形中分别对照原版逐阶段条件文本，保持无扣物品/地形/活动/时间/AP/RNG及正常样本变化；选点越界时不会错误改变“材料/知识”本身的结论。已检查Undead 720p/150%阶段提示可见。实际同一面板连续搬运后的前端刷新/选择保留、正式建造活动完整原版对照仍待后续实体/完整链验收。
+
+验证入口runtime/modern-controls-build-conditions。继续人物状态、可见人物与地图在原版活动返回后的刷新核对。

@@ -911,10 +911,15 @@ class panel : public cataimgui::window
         }
         void construction() {
             if( !projects_loaded ) {
+                const auto previous = selected_project < projects.size() ? projects[selected_project].id :
+                                      construction_group_str_id();
                 projects = fp3d_construction::catalogue();
-                if( !projects.empty() ) {
-                    project_details = fp3d_construction::details( projects.front().id );
-                }
+                const auto found = std::find_if( projects.begin(), projects.end(), [&]( const auto &entry ) {
+                    return entry.id == previous;
+                } );
+                selected_project = found != projects.end() ? static_cast<size_t>( found - projects.begin() ) : 0;
+                project_details = projects.empty() ? std::string() :
+                                  fp3d_construction::details( projects[selected_project].id, &you );
                 projects_loaded = true;
             }
             const float height = std::max( 100.0f, ImGui::GetContentRegionAvail().y - 85 * scale );
@@ -977,7 +982,7 @@ class panel : public cataimgui::window
                 ImGui::PushID( static_cast<int>( i ) );
                 if( ImGui::Selectable( entry.name.c_str(), selected_project == i ) ) {
                     selected_project = i;
-                    project_details = fp3d_construction::details( entry.id );
+                    project_details = fp3d_construction::details( entry.id, &you );
                 }
                 selected_visible = selected_visible || selected_project == i;
                 if( ImGui::IsItemHovered() ) {
@@ -987,7 +992,7 @@ class panel : public cataimgui::window
             }
             if( !selected_visible && first ) {
                 selected_project = *first;
-                project_details = fp3d_construction::details( projects[*first].id );
+                project_details = fp3d_construction::details( projects[*first].id, &you );
             }
             if( !first ) {
                 ImGui::TextUnformatted( "没有匹配的建造项目。" );
@@ -1749,6 +1754,9 @@ class panel : public cataimgui::window
             ImGui::PopStyleColor( 18 );
         }
         void refresh_items() {
+            you.invalidate_crafting_inventory();
+            recipes_loaded = false;
+            projects_loaded = false;
             view = fp3d_inventory::capture( you, here );
             for( const auto &entry : view.entries ) {
                 if( !entry.location ) {
