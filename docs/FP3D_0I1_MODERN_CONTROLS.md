@@ -728,3 +728,9 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 150用例/12928断言和ON/OFF/测试构建通过（`modern-action-profile-{cpu,on,off,tests-build}.log`）；三组原版/现代完整世界战斗仍为SHA256 `05DDC8ECA5E566EB540A482B762A9CA49C68C10988E805FBDECAEFF441E60390`，证据`modern-action-profile-world-combat/20261101-224533-786`。本轮未改显示路径，SDL/OpenGL图形证据沿用上一计时里程碑4434断言。QA包`runtime/modern-controls-action-profile`，用户启动器保持native-info-font。
 
 下一步检查game::draw在常规准备本层视野后，又由3D prepare_view准备同一本层的重复调用；需先验证光照/可见性等价再调整。
+
+## 2026-11-01 优先级调整：结束性能试验，返回P5.6功能实施
+
+用户指出性能工作持续过久，后续优先推进家具/楼梯蓝图及原版施工流程。未交付的视野重复准备试验仅保留在QA：候选一分钟41.1169FPS，白天/夜晚/失明的冷缓存可见性和光照比较28断言通过，功能151用例/12956断言、图形4439及原版世界战斗对照通过；但实际客户端记忆格计数与控制样本不同，不能把这些检查当作完整记忆语义已等价。试验改动已从工作源码撤回，新测试移至QA归档，未更新用户启动器。
+
+证据`modern-city-view-prepare`、`modern-view-prepare-{focused,cpu,gl,world-combat}.log`，实验补丁和测试为`qa/0i1/modern-view-prepare-experimental.patch`及`modern-view-prepare-experimental-test.cpp`。当前工作源码回到已验证的b44b8b86功能基础，用户启动器继续为native-info-font。之后不再扩展帧率归因，继续P5.6。
