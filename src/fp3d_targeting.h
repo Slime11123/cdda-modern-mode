@@ -12,7 +12,7 @@ struct scene_snapshot;
 }
 namespace fp3d_targeting
 {
-enum class kind { terrain, creature, item };
+enum class kind { terrain, creature, item, furniture };
 struct target {
     tripoint_abs_ms origin;
     tripoint_abs_ms position;

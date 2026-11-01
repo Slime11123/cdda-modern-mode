@@ -1,0 +1,148 @@
+#include "fp3d_furniture.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include <algorithm>
+#include "avatar.h"
+#include "calendar.h"
+#include "cata_catch.h"
+#include "construction.h"
+#include "fp3d_construction.h"
+#include "fp3d_interaction.h"
+#include "fp3d_snapshot.h"
+#include "game.h"
+#include "item.h"
+#include "map.h"
+#include "map_helpers.h"
+#include "player_helpers.h"
+#include "rng.h"
+
+TEST_CASE( "fp3d_furniture_blueprints_use_native_projects_without_changing_the_world",
+           "[fp3d][furniture][blueprint]" )
+{
+    const auto &you = get_avatar();
+    const auto &here = get_map();
+    const auto origin = you.pos_abs();
+    const auto before = here.furn( you.pos_bub( here ) );
+    const auto engine = rng_get_engine();
+    const auto clock = calendar::turn;
+    const auto moves = you.get_moves();
+    for( const std::string id : {
+             "f_table", "f_chair", "f_bed"
+         } ) {
+        CAPTURE( id );
+        const auto project = std::find_if( get_constructions().begin(), get_constructions().end(),
+        [&]( const construction & entry ) {
+            return entry.post_is_furniture && entry.post_terrain == id;
+        } );
+        REQUIRE( project != get_constructions().end() );
+        const auto ghost = fp3d_construction::terrain_preview( *project, origin );
+        REQUIRE( ghost );
+        REQUIRE( ghost->furniture );
+        CHECK( ghost->furniture->id == id );
+        CHECK( ghost->position == origin );
+        CHECK_FALSE( ghost->floor_present );
+        CHECK_FALSE( ghost->goes_up );
+        CHECK_FALSE( ghost->ceiling_present );
+    }
+    const auto variant = fp3d_furniture::describe( "f_table_fancy" );
+    REQUIRE( variant );
+    CHECK( variant->shape == fp3d_furniture::kind::table );
+    CHECK( variant->id == "f_table_fancy" );
+    CHECK_FALSE( fp3d_furniture::describe( "f_crate_c" ) );
+    CHECK_FALSE( fp3d_furniture::describe( "f_bed_frame" ) );
+    CHECK_FALSE( fp3d_furniture::describe( "not_a_furniture" ) );
+    CHECK( here.furn( you.pos_bub( here ) ) == before );
+    CHECK( you.pos_abs() == origin );
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == clock );
+    CHECK( rng_get_engine() == engine );
+}
+
+TEST_CASE( "fp3d_furniture_capture_items_and_revalidation_follow_native_visibility",
+           "[fp3d][furniture][vision][interaction]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    for( const std::string id : {
+             "f_table", "f_chair", "f_bed"
+         } ) {
+        CAPTURE( id );
+        here.furn_set( p, furn_str_id( id ) );
+        here.i_clear( p );
+        fp3d_snapshot::prepare_view( you, here );
+        const auto engine = rng_get_engine();
+        const auto clock = calendar::turn;
+        const auto moves = you.get_moves();
+        const auto scene = fp3d_snapshot::capture( you, here );
+        const auto tile = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto & entry ) {
+            return entry.position == here.get_abs( p );
+        } );
+        REQUIRE( tile != scene.cells.end() );
+        REQUIRE( tile->furniture );
+        CHECK( tile->furniture->id == id );
+        const auto target = fp3d_targeting::ray( scene, 0, 40 );
+        REQUIRE( target );
+        CHECK( target->type == fp3d_targeting::kind::furniture );
+        CHECK( target->id == id );
+        CHECK( fp3d_interaction::valid( *target, you, here ) );
+        CHECK( rng_get_engine() == engine );
+        CHECK( calendar::turn == clock );
+        CHECK( you.get_moves() == moves );
+        here.add_item_or_charges( p, item( itype_id( "rock" ) ) );
+        fp3d_snapshot::prepare_view( you, here );
+        const auto with_item = fp3d_snapshot::capture( you, here );
+        const auto image = std::find_if( with_item.sprites.begin(), with_item.sprites.end(),
+        [&]( const auto &entry ) {
+            return entry.position == here.get_abs( p ) && entry.kind == fp3d_snapshot::sprite_kind::item;
+        } );
+        REQUIRE( image != with_item.sprites.end() );
+        CHECK( image->elevation ==
+               Approx( fp3d_furniture::item_surface( tile->furniture->shape ) ) );
+        const auto object = fp3d_targeting::ray( with_item, 0, 30 );
+        REQUIRE( object );
+        CHECK( object->type == fp3d_targeting::kind::item );
+        CHECK( object->id == "rock" );
+        here.furn_set( p, furn_str_id( "f_null" ) );
+        CHECK_FALSE( fp3d_interaction::valid( *target, you, here ) );
+        you.memorize_terrain( here.get_abs( p ), "t_floor", 0, 0 );
+        here.invalidate_visibility_cache();
+        const auto hidden = fp3d_snapshot::capture( you, here );
+        CHECK( hidden.sprites.empty() );
+        CHECK( std::none_of( hidden.cells.begin(), hidden.cells.end(), []( const auto & entry ) {
+            return entry.furniture.has_value();
+        } ) );
+    }
+}
+
+TEST_CASE( "fp3d_furniture_ray_uses_model_parts_and_respects_wall_occlusion",
+           "[fp3d][furniture][ray]" )
+{
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms::zero;
+    fp3d_snapshot::cell table;
+    table.position = tripoint_abs_ms( 0, -2, 0 );
+    table.terrain = "t_floor";
+    table.floor_present = false;
+    table.furniture = fp3d_furniture::describe( "f_table" );
+    scene.cells.push_back( table );
+    fp3d_snapshot::cell wall;
+    wall.position = tripoint_abs_ms( 0, -3, 0 );
+    wall.terrain = "t_wall";
+    wall.kind = fp3d_snapshot::terrain_kind::wall;
+    scene.cells.push_back( wall );
+    const auto top = fp3d_targeting::ray( scene, 0, 22 );
+    REQUIRE( top );
+    CHECK( top->type == fp3d_targeting::kind::furniture );
+    const auto gap = fp3d_targeting::ray( scene, 0, 31 );
+    REQUIRE( gap );
+    CHECK( gap->position == wall.position ); // Open space between the legs is not a solid cube.
+    scene.cells.back().position = tripoint_abs_ms( 0, -1, 0 );
+    const auto occluded = fp3d_targeting::ray( scene, 0, 22 );
+    REQUIRE( occluded );
+    CHECK( occluded->position == scene.cells.back().position );
+}
+#endif

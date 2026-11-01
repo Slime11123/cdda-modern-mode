@@ -100,6 +100,20 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             { x + dx - width / 2, y + dy - depth / 2, z + bottom },
             { x + dx + width / 2, y + dy + depth / 2, z + top } ) );
         };
+        if( tile->furniture ) {
+            for( const auto &part : fp3d_furniture::parts( tile->furniture->shape ) ) {
+                const auto hit = intersect( eye, direction,
+                { x + part.x - part.width / 2, y + part.z - part.depth / 2, z + part.bottom },
+                { x + part.x + part.width / 2, y + part.z + part.depth / 2, z + part.top } );
+                if( hit && *hit >= fp3d_camera::near_clip && *hit <= reach && *hit < nearest ) {
+                    nearest = *hit;
+                    result.reset();
+                    if( tile->known == fp3d_snapshot::knowledge::visible && !tile->exterior_only ) {
+                        result = target{ scene.origin, tile->position, kind::furniture, tile->furniture->id };
+                    }
+                }
+            }
+        }
         if( tile->vegetation_height > 0 ) {
             const float height = tile->vegetation_height;
             const float width = std::max( .9f, height <= 1.2f ? height : height * .7f );
@@ -193,7 +207,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         const float distance = forward / cp;
         const float side = cy * ( eye[0] + distance * direction[0] - p.x() ) +
                            sy * ( eye[1] + distance * direction[1] - p.y() );
-        const float height = eye[2] + distance * direction[2] - p.z() * fp3d_camera::floor_height;
+        const float height = eye[2] + distance * direction[2] -
+                             p.z() * fp3d_camera::floor_height - image.elevation;
         if( distance >= fp3d_camera::near_clip && distance <= reach && distance < nearest &&
             std::abs( side ) <= image.height / 2 && height >= .04f && height <= image.height ) {
             nearest = distance;

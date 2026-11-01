@@ -101,6 +101,9 @@ bool valid( const fp3d_targeting::target &target, const avatar &you, const map &
         const auto tile = here.maptile_at( p );
         return tile.get_item_count() > 0 && tile.get_uppermost_item().typeId().str() == target.id;
     }
+    if( target.type == fp3d_targeting::kind::furniture ) {
+        return here.furn( p ).id().str() == target.id;
+    }
     return here.ter( p ).id().str() == target.id;
 }
 

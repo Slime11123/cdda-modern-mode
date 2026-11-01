@@ -13,6 +13,7 @@
 #include "map_scale_constants.h"
 #include "fp3d_sky.h"
 #include "fp3d_hud.h"
+#include "fp3d_furniture.h"
 
 class avatar;
 class map;
@@ -41,6 +42,7 @@ struct cell {
     terrain_kind kind = terrain_kind::floor;
     knowledge known = knowledge::visible;
     std::string vegetation;
+    std::optional<fp3d_furniture::model> furniture;
     float vegetation_height = 0;
     window_pane pane = window_pane::glazed;
     bool exterior_only = false;
@@ -66,6 +68,7 @@ struct sprite {
     bool mirrored = false;
     bool multiple_items = false;
     float height = 1.8f;
+    float elevation = 0;
 };
 
 struct landscape_patch {

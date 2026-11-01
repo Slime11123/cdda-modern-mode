@@ -287,6 +287,9 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
         sprite image = describe_item( tile.get_uppermost_item(), here.get_abs( p ) );
         image.multiple_items = tile.get_item_count() > 1;
         image.height = .7f;
+        if( const auto furniture = fp3d_furniture::describe( here.furn( p ).id().str() ) ) {
+            image.elevation = fp3d_furniture::item_surface( furniture->shape );
+        }
         scene.sprites.push_back( std::move( image ) );
     }
 }
@@ -531,6 +534,9 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 if( const float height = plant_height( furniture ); height > 0 ) {
                     tile.vegetation = furniture;
                     tile.vegetation_height = height;
+                }
+                if( visible && !tile.exterior_only ) {
+                    tile.furniture = fp3d_furniture::describe( furniture );
                 }
                 if( tile.known == knowledge::visible ) {
                     ++result.visible;

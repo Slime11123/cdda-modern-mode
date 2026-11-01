@@ -354,11 +354,15 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             }
             const auto empty_room = render();
             const auto empty_scene = scene;
-            for( const std::string id : { "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window",
-                                         "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half" } ) {
+            for( const std::string id : {
+                     "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window",
+                     "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half",
+                     "f_table", "f_chair", "f_bed"
+                 } ) {
                 CAPTURE( id );
                 construction project{};
                 project.post_terrain = id;
+                project.post_is_furniture = id.compare( 0, 2, "f_" ) == 0;
                 ghost.position = tripoint_abs_ms( 0, -3, 0 );
                 ghost.valid = true;
                 ghost.terrain = fp3d_construction::terrain_preview( project, ghost.position );
@@ -370,7 +374,8 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 auto allowed = render();
                 CHECK( allowed != empty_room );
                 REQUIRE( fp3d_materials::bind() );
-                CHECK( fp3d_materials::lookup( id == "t_window" ? "$window:" + id : id ) );
+                CHECK( fp3d_materials::lookup( project.post_is_furniture ? "$furniture:" + id :
+                                               id == "t_window" ? "$window:" + id : id ) );
                 fp3d_materials::unbind();
                 // Compare the aperture area: a glyph-based pack can leave an
                 // individual face pixel transparent even on a closed door.
@@ -381,7 +386,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         aperture_changes += allowed[pixel] != empty_room[pixel];
                     }
                 }
-                if( id == "t_door_o" || id == "t_floor" ) {
+                if( project.post_is_furniture || id == "t_door_o" || id == "t_floor" ) {
                     CHECK( aperture_changes == 0 );
                 } else if( id != "t_window" ) {
                     CHECK( aperture_changes > 0 );
@@ -400,6 +405,35 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 fp3d_compositor::set_blueprint( std::nullopt );
                 CHECK( render() == empty_room );
+                if( project.post_is_furniture ) {
+                    const auto cell = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto & tile ) {
+                        return tile.position == ghost.position;
+                    } );
+                    REQUIRE( cell != scene.cells.end() );
+                    cell->furniture = ghost.terrain->furniture;
+                    const auto built = render();
+                    CHECK( built != empty_room );
+                    fp3d_snapshot::sprite object;
+                    object.kind = fp3d_snapshot::sprite_kind::item;
+                    object.position = ghost.position;
+                    object.id = "rock";
+                    object.height = .7f;
+                    object.elevation = fp3d_furniture::item_surface( cell->furniture->shape );
+                    scene.sprites.push_back( object );
+                    CHECK( render() != built );
+                    scene.sprites.clear();
+                    CHECK( render() == built );
+                    if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                        SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                     const_cast<std::uint32_t *>( built.data() ), width, height,
+                                                     32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                        REQUIRE( picture );
+                        CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                             ( pack + "-built-" + id + ".png" ) ).u8string().c_str() ) == 0 );
+                    }
+                    cell->furniture.reset();
+                    CHECK( render() == empty_room ); // Removing furniture must invalidate its cached mesh.
+                }
             }
             scene = original_scene;
             CHECK( render() == baseline );

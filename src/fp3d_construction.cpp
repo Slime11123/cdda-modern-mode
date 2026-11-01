@@ -76,12 +76,24 @@ bool preview_allowed( avatar &you, map &here, const construction &project,
 std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
         const tripoint_abs_ms &position )
 {
+    if( project.post_is_furniture ) {
+        const auto furniture = fp3d_furniture::describe( project.post_terrain );
+        if( !furniture ) {
+            return std::nullopt;
+        }
+        fp3d_snapshot::cell result;
+        result.position = position;
+        result.terrain = "t_floor";
+        result.floor_present = false;
+        result.furniture = furniture;
+        return result;
+    }
     const ter_str_id terrain( project.post_terrain );
-    if( project.post_is_furniture || terrain.is_null() || !terrain.is_valid() ) {
+    if( terrain.is_null() || !terrain.is_valid() ) {
         return std::nullopt;
     }
     const auto &definition = terrain.obj();
-    // These need multi-cell post-effects or a dedicated plant/furniture model.
+    // These need multi-cell post-effects or a dedicated plant model.
     for( const auto flag : {
              ter_furn_flag::TFLAG_NO_FLOOR, ter_furn_flag::TFLAG_NO_FLOOR_WATER,
              ter_furn_flag::TFLAG_GOES_DOWN,

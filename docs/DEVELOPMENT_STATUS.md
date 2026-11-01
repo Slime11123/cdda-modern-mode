@@ -21,9 +21,11 @@ This is a concise public-facing summary of the current local code and dated tech
 
 ## Recent milestones / 近期进展
 
+- Returned to P5.6 feature work; no further FPS-analysis expansion. Basic table/chair/bed models, raised item display and part-based targeting passed 153 functional cases (13060 assertions), 4813 graphics assertions and ON/OFF builds. Both local 3D launchers use `modern-controls-furniture`. See the dated modern-controls report for boundaries.
+
 - Three-mode F5 switching with separate keybindings and classical 2D preserved.
 - Context-sensitive interaction wheels and reticle hints; underlying range, visibility, identity and safety checks remain native.
-- Native-rule crafting batch quantities, favorites/categories, material availability and construction-stage previews.
+- Native-rule crafting batch quantities, favorites/categories, material availability and construction-stage previews. Wooden upstairs/frame and basic table/chair/bed previews now share their built-world models; other furniture and the full construction lifecycle remain incomplete.
 - Responsive mission/people panels, activity-return refresh and configurable interaction hold duration for the current session.
 - Targeted E pickup: native automatic pocket selection for one item, a backpack/source panel for multiple items, and native tileset pile markers.
 - Native-style NPC dialogue and two-column trading UI, followed by focused scrolling/render-performance improvements.

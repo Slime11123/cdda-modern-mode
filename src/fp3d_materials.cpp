@@ -375,6 +375,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
         const fp3d_snapshot::sprite *image = nullptr;
         bool plant = false;
         bool window = false;
+        bool furniture = false;
     };
     std::vector<request> pending;
     const auto add = [&]( const std::string & key, const fp3d_snapshot::sprite * image ) {
@@ -389,6 +390,13 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
         add( sprite_key( *scene.held_item ), &*scene.held_item );
     }
     for( const auto &tile : scene.cells ) {
+        if( tile.furniture ) {
+            const auto before = pending.size();
+            add( "$furniture:" + tile.furniture->id, nullptr );
+            if( pending.size() > before ) {
+                pending.back().furniture = true;
+            }
+        }
         if( tile.kind == fp3d_snapshot::terrain_kind::window ) {
             add( "t_floor", nullptr );
             add( "t_wall", nullptr );
@@ -469,7 +477,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         SDL_RenderFillRect( renderer, &slot );
-        const tile_type *tile = entry.image ? nullptr : entry.window ?
+        const tile_type *tile = entry.image ? nullptr : entry.furniture ?
+                                resolve_vegetation( *selected, id.substr( 11 ), season ) : entry.window ?
                                 resolve_terrain( *selected, id.substr( 8 ), season ) : entry.plant ?
                                 resolve_vegetation( *selected, id.substr( 7 ), season ) :
                                 resolve_terrain( *selected, id, season );

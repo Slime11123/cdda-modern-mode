@@ -253,6 +253,19 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             glEnable( GL_LIGHTING );
         }
     }
+    if( tile.furniture ) {
+        const auto surface = fp3d_materials::lookup( "$furniture:" + tile.furniture->id );
+        color( brightness, brightness, brightness );
+        for( const auto &part : fp3d_furniture::parts( tile.furniture->shape ) ) {
+            box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top, surface );
+            glPushMatrix();
+            glTranslatef( x + part.x, part.bottom, z + part.z );
+            glScalef( part.width, 1, part.depth );
+            glRotatef( 180, 1, 0, 0 );
+            floor( 0, 0, 0, surface );
+            glPopMatrix();
+        }
+    }
     if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
         color( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
         if( material ) {
@@ -584,6 +597,10 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 hash_value( signature, std::hash<tripoint_abs_ms> {}( tile->position ) );
                 hash_value( signature, std::hash<std::string> {}( tile->terrain ) );
                 hash_value( signature, std::hash<std::string> {}( tile->vegetation ) );
+                hash_value( signature, std::hash<std::string> {}( tile->furniture ? tile->furniture->id : "" ) );
+                if( tile->furniture ) {
+                    hash_value( signature, static_cast<unsigned>( tile->furniture->shape ) );
+                }
                 hash_value( signature, std::hash<float> {}( tile->vegetation_height ) );
                 hash_value( signature, static_cast<unsigned>( tile->kind ) );
                 if( tile->kind == fp3d_snapshot::terrain_kind::window ) {
@@ -656,7 +673,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     for( const auto &image : scene.sprites ) {
         const tripoint_rel_ms position = image.position - scene.origin;
         if( !view.contains( position.x() - camera_offset.x,
-                            position.z() * fp3d_camera::floor_height + image.height / 2 - fp3d_camera::eye_height,
+                            position.z() * fp3d_camera::floor_height + image.elevation +
+                            image.height / 2 - fp3d_camera::eye_height,
                             position.y() - camera_offset.y, image.height * .74f ) ) {
             continue;
         }
@@ -681,7 +699,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         const float x = offset.x();
         const float z = offset.y();
         glPushMatrix();
-        glTranslatef( 0, offset.z() * fp3d_camera::floor_height, 0 );
+        glTranslatef( 0, offset.z() * fp3d_camera::floor_height + image.elevation, 0 );
         glBegin( GL_QUADS );
         glTexCoord2f( uv.left, uv.bottom );
         glVertex3f( x - dx, .04f, z - dz );
