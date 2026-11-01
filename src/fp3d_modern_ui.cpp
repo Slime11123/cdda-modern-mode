@@ -1753,7 +1753,41 @@ class panel : public cataimgui::window
             ImGui::EndDisabled();
             ImGui::PopStyleColor( 18 );
         }
+        void refresh_character() {
+            needs.clear();
+            effects.clear();
+            skills.clear();
+            const auto add_need = [&]( const char *label, const std::pair<std::string, nc_color> &value ) {
+                needs.emplace_back( label, value.first.empty() ? "—" : remove_color_tags( value.first ) );
+            };
+            add_need( "饥饿", display::hunger_text_color( you ) );
+            add_need( "口渴", display::thirst_text_color( you ) );
+            add_need( "困倦", display::sleepiness_text_color( you ) );
+            add_need( "疼痛", display::pain_text_color( you ) );
+            for( const auto &reference : you.get_effects() ) {
+                const effect &status = reference.get();
+                auto name = remove_color_tags( status.disp_name() );
+                if( name.empty() ) {
+                    continue;
+                }
+                effects.emplace_back( std::move( name ), remove_color_tags( status.disp_desc() ) );
+            }
+            const auto levels = you.get_all_skills();
+            for( const Skill &skill : Skill::skills ) {
+                if( skill.is_contextual_skill() ) {
+                    continue;
+                }
+                const auto &level = levels.get_skill_level_object( skill.ident() );
+                skills.push_back( { skill.name(), skill.description(), level.level(), level.knowledgeLevel(), level.exercise() } );
+            }
+            std::sort( skills.begin(), skills.end(), []( const auto & a, const auto & b ) {
+                return a.name < b.name;
+            } );
+        }
         void refresh_items() {
+            refresh_character();
+            journal_loaded = false;
+            map_loaded = false;
             you.invalidate_crafting_inventory();
             recipes_loaded = false;
             projects_loaded = false;
@@ -1789,32 +1823,7 @@ class panel : public cataimgui::window
             if( initial_page >= 0 ) {
                 remembered_page = std::clamp( initial_page, 0, 7 );
             }
-            const auto add_need = [&]( const char *label, const std::pair<std::string, nc_color> &value ) {
-                needs.emplace_back( label, value.first.empty() ? "—" : remove_color_tags( value.first ) );
-            };
-            add_need( "饥饿", display::hunger_text_color( you ) );
-            add_need( "口渴", display::thirst_text_color( you ) );
-            add_need( "困倦", display::sleepiness_text_color( you ) );
-            add_need( "疼痛", display::pain_text_color( you ) );
-            for( const auto &reference : you.get_effects() ) {
-                const effect &status = reference.get();
-                auto name = remove_color_tags( status.disp_name() );
-                if( name.empty() ) {
-                    continue;
-                }
-                effects.emplace_back( std::move( name ), remove_color_tags( status.disp_desc() ) );
-            }
-            const auto levels = you.get_all_skills();
-            for( const Skill &skill : Skill::skills ) {
-                if( skill.is_contextual_skill() ) {
-                    continue;
-                }
-                const auto &level = levels.get_skill_level_object( skill.ident() );
-                skills.push_back( { skill.name(), skill.description(), level.level(), level.knowledgeLevel(), level.exercise() } );
-            }
-            std::sort( skills.begin(), skills.end(), []( const auto & a, const auto & b ) {
-                return a.name < b.name;
-            } );
+            refresh_character();
             if( nearby ) {
                 remembered_page = 0;
                 small_tab = 2;

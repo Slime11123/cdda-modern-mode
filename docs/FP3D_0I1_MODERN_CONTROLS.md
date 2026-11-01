@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：94 用例 / 9085 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-build-conditions-cpu.log`）；图形回归：3002 断言（`modern-build-conditions-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：94 用例 / 9085 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-panel-refresh-cpu.log`）；图形回归：3002 断言（`modern-panel-refresh-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-build-conditions`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-panel-refresh`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -625,3 +625,12 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 94用例9085断言（modern-build-conditions-cpu.log，含rng）、图形3002（modern-build-conditions-gl.log）、ON/OFF（modern-build-conditions-on.log / modern-build-conditions-off.log）通过。在原有八种施工情形中分别对照原版逐阶段条件文本，保持无扣物品/地形/活动/时间/AP/RNG及正常样本变化；选点越界时不会错误改变“材料/知识”本身的结论。已检查Undead 720p/150%阶段提示可见。实际同一面板连续搬运后的前端刷新/选择保留、正式建造活动完整原版对照仍待后续实体/完整链验收。
 
 验证入口runtime/modern-controls-build-conditions。继续人物状态、可见人物与地图在原版活动返回后的刷新核对。
+
+
+### 2026-11-01：P5.4 原版活动返回后各页刷新
+
+人物需求、效果和技能从构造时一次性缓存改为可重复刷新，先清空再读取原版数据；同一面板完成物品操作或从原版活动恢复后刷新，避免服药、进食或制作后仍显示旧值。可见人物/任务及地图缓存同时失效，下次进入对应页读取当前原版可访问数据；选中人物ID、地图中心等交互状态保留。制作/建造已接入的材料与目录刷新保持。没有重建整套面板或在绘制中执行游戏动作。
+
+94用例9085断言（modern-panel-refresh-cpu.log，含rng）、图形3002（modern-panel-refresh-gl.log）、ON/OFF（modern-panel-refresh-on.log / modern-panel-refresh-off.log）通过。此为缓存刷新修复，未增加镜像实现的单测；现有真实面板各页/布局和无回合消耗检查保留，同面板进食/服药后返回健康页、NPC移动后返回队友页的完整实体流程仍待验收。共享文件中其他任务的侧栏、主题及页面范围修改保持在工作树，不纳入本次提交。
+
+操作验证入口runtime/modern-controls-panel-refresh；继续核对其他只读查询和现代操作状态的恢复。

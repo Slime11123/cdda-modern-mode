@@ -534,3 +534,5 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 2026-11-01：建造页三栏/窄屏分类与完整RNG保护接入。94用例9061断言、图形3002、ON/OFF通过；入口runtime/modern-controls-build-categories。继续施工阶段材料/工具/知识显示。
 
 2026-11-01：逐施工阶段原版材料/工具/知识显示与制作/建造物品变化后刷新完成。94用例9085断言、图形3002、ON/OFF通过；入口runtime/modern-controls-build-conditions。继续活动后人物状态/人物及地图刷新。
+
+2026-11-01：同面板物品/活动返回后刷新饥渴、疼痛、效果、技能、可见人物/任务和地图；94用例9085断言、图形3002、ON/OFF通过。入口runtime/modern-controls-panel-refresh。实体连续操作与完整正式流程仍待验收。
