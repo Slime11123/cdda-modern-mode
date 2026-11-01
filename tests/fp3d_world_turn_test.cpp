@@ -152,7 +152,6 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
                 REQUIRE( ++attacks <= 8 );
                 REQUIRE_FALSE( enemy.is_dead() );
                 REQUIRE( enemy.pos_abs() == enemy_start );
-                tripoint_rel_ms delta = tripoint_rel_ms::north;
                 if( modern ) {
                     const auto engine = rng_get_engine();
                     const int moves = you.get_moves();
@@ -163,12 +162,16 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
                     const auto request = fp3d_interaction::resolve( "FP3D_ATTACK", target, you, here );
                     REQUIRE( request );
                     REQUIRE( request->position == enemy.pos_bub( here ) );
-                    delta = tripoint_rel_ms( get_delta_from_movement_action( request->action, iso_rotate::yes ), 0 );
+                    REQUIRE( request->targeted_melee );
                     CHECK( rng_get_engine() == engine );
                     CHECK( you.get_moves() == moves );
                 }
                 const int before = you.get_moves();
-                avatar_action::move( you, here, delta );
+                if( modern ) {
+                    REQUIRE( fp3d_interaction::melee( you, here, enemy.pos_bub( here ) ) );
+                } else {
+                    avatar_action::move( you, here, tripoint_rel_ms::north );
+                }
                 REQUIRE( you.get_moves() < before );
                 you.movecounter = before - you.get_moves();
                 you.action_taken();

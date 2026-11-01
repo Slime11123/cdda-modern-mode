@@ -12,6 +12,8 @@
 #include "npc_orders.h"
 class avatar;
 class map;
+class JsonObject;
+class JsonOut;
 namespace fp3d_inventory
 {
 struct entry {
@@ -43,7 +45,12 @@ struct model {
     std::vector<entry> entries;
     std::vector<group> groups;
 };
-model capture( avatar &you, map &here );
+struct slot_icon {
+    std::string id;
+    std::string variant;
+};
+model capture( avatar &you, map &here,
+               std::optional<tripoint_abs_ms> nearby_target = std::nullopt );
 bool accessible( const item_location &location, const avatar &you, const map &here );
 enum class operation_kind { pickup, drop, wield, wear, takeoff, use, insert, place, native, follower_order, craft, completed };
 struct operation {
@@ -73,10 +80,13 @@ struct use_option {
 };
 std::vector<use_option> use_options( const item_location &location, const avatar &you, const map &here );
 void assign_slot( int index, item_location item );
-std::optional<operation> select_slot( int index );
+std::optional<operation> select_slot( int index, avatar &you );
 int active_slot();
 void clear_slots();
-std::vector<std::string> slot_names();
+void save_slots( const avatar &you, JsonOut &json );
+void load_slots( avatar &you, const JsonObject &data );
+std::vector<std::string> slot_names( avatar &you );
+std::vector<slot_icon> slot_icons( avatar &you );
 bool can_insert( const operation &action, avatar &you, const map &here, std::string &error );
 bool execute( const operation &action, avatar &you, map &here, std::string *error = nullptr );
 void stage( operation action );

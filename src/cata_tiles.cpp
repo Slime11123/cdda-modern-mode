@@ -1360,7 +1360,13 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     }
 #endif
 
-    {
+    map &here = get_map();
+#if defined(ENABLE_FP3D)
+    const bool skip_covered_map = fp3d_compositor::covers_map( here.get_abs( center ) );
+#else
+    constexpr bool skip_covered_map = false;
+#endif
+    if( !skip_covered_map ) {
         //set clipping to prevent drawing over stuff we shouldn't
         SDL_Rect clipRect = {dest.x, dest.y, width, height};
         printErrorIf( SDL_RenderSetClipRect( renderer.get(), &clipRect ) != 0,
@@ -1373,12 +1379,6 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     const point s = get_window_base_tile_counts( point( width, height ) );
 
     init_light();
-    map &here = get_map();
-#if defined(ENABLE_FP3D)
-    const bool skip_covered_map = fp3d_compositor::covers_map( here.get_abs( center ) );
-#else
-    constexpr bool skip_covered_map = false;
-#endif
     const visibility_variables &cache = here.get_visibility_variables_cache();
 
     o = is_isometric() ? center.xy().raw() : center.xy().raw() - point( POSX, POSY );
@@ -1499,14 +1499,14 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     };
     std::map<tripoint_bub_ms, int> npc_attack_rating_map;
     int max_npc_effectiveness = 0;
-    if( g->display_overlay_state( ACTION_DISPLAY_NPC_ATTACK_POTENTIAL ) ) {
+    if( !skip_covered_map && g->display_overlay_state( ACTION_DISPLAY_NPC_ATTACK_POTENTIAL ) ) {
         npc_attack_rating_map = display_npc_attack_potential();
         for( const std::pair<const tripoint_bub_ms, int> &pair : npc_attack_rating_map ) {
             max_npc_effectiveness = std::max( pair.second, max_npc_effectiveness );
         }
     }
 
-    if( here.draw_points_cache_dirty ) {
+    if( !skip_covered_map && here.draw_points_cache_dirty ) {
         here.draw_points_cache_dirty = false;
         // overlay_strings and color_blocks are generated with draw_points and thus are cleared together
         here.draw_points_cache.clear();
@@ -1754,8 +1754,13 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
             }
         }
     }
-    overlay_strings = here.overlay_strings_cache;
-    color_blocks = here.color_blocks_cache;
+    if( !skip_covered_map ) {
+        overlay_strings = here.overlay_strings_cache;
+        color_blocks = here.color_blocks_cache;
+    } else {
+        overlay_strings.clear();
+        color_blocks.second.clear();
+    }
 
     // List all layers for a single z-level
     const std::array<decltype( &cata_tiles::draw_furniture ), 11> drawing_layers = {{
@@ -1769,7 +1774,7 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
 
     // Skip drawing shadow of critters above if there is no shadow sprite
     bool do_draw_shadow = false;
-    if( find_tile_looks_like( "shadow", TILE_CATEGORY::NONE, "" ) ) {
+    if( !skip_covered_map && find_tile_looks_like( "shadow", TILE_CATEGORY::NONE, "" ) ) {
         do_draw_shadow = true;
     }
 
@@ -1905,6 +1910,20 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
                 here.memory_cache_dec_set_dirty( p, false );
             }
         }
+    }
+
+    if( skip_covered_map ) {
+        // Consume transient native overlays without submitting hidden 2D draws.
+        // Keep persistent animations owned by their original callers.
+        void_hit();
+        void_line();
+        void_weather();
+        void_sct();
+        void_zones();
+        void_cursor();
+        void_highlight();
+        in_animation = false;
+        return;
     }
 
     in_animation = do_draw_explosion || do_draw_custom_explosion ||

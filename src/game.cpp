@@ -4,6 +4,7 @@
 #include "fp3d_compositor.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_input.h"
+#include "fp3d_entry.h"
 #endif
 
 #include <algorithm>
@@ -1184,6 +1185,9 @@ bool game::start_game()
         debug_menu::do_debug_quick_setup();
         add_msg( m_good, _( "Debug character detected.  Quick setup applied, good luck on the testing!" ) );
     }
+#if defined(ENABLE_FP3D)
+    fp3d_entry::begin( u );
+#endif
     return true;
 }
 
@@ -3402,6 +3406,9 @@ bool game::load( const save_t &name )
     }
 
     loading_ui::done();
+#if defined(ENABLE_FP3D)
+    fp3d_entry::begin( u );
+#endif
     return true;
 }
 
@@ -3946,8 +3953,14 @@ shared_ptr_fast<ui_adaptor> game::create_or_get_main_ui_adaptor()
         ui->on_screen_resize( [this]( ui_adaptor & ui ) {
             // remove some space for the sidebar, this is the maximal space
             // (using standard font) that the terrain window can have
-            const int sidebar_left = panel_manager::get_manager().get_width_left();
-            const int sidebar_right = panel_manager::get_manager().get_width_right();
+            int sidebar_left = panel_manager::get_manager().get_width_left();
+            int sidebar_right = panel_manager::get_manager().get_width_right();
+#if defined(ENABLE_FP3D)
+            if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+                sidebar_left = 0;
+                sidebar_right = 0;
+            }
+#endif
 
             TERRAIN_WINDOW_HEIGHT = TERMY;
             TERRAIN_WINDOW_WIDTH = TERMX - ( sidebar_left + sidebar_right );
@@ -4193,6 +4206,13 @@ void game::draw( ui_adaptor &ui )
 
     werase( w_terrain );
     void_blink_curses();
+#if defined(ENABLE_FP3D)
+    // Publish before any native map drawing so the first 3D frame can skip it.
+    if( fp3d_compositor::active() && ter_view_p.z() == u.posz() ) {
+        fp3d_snapshot::prepare_view( u, here );
+        fp3d_compositor::publish( fp3d_snapshot::capture( u, here ) );
+    }
+#endif
     draw_ter();
     for( auto it = draw_callbacks.begin(); it != draw_callbacks.end(); ) {
         shared_ptr_fast<draw_callback_t> cb = it->lock();
@@ -4208,13 +4228,6 @@ void game::draw( ui_adaptor &ui )
     if( blink_active_phase ) {
         draw_blink_curses();
     }
-#if defined(ENABLE_FP3D)
-    // Prepare the 3D view before Tiles draws or memorizes its 2D viewport.
-    if( fp3d_compositor::requested() && ter_view_p.z() == u.posz() ) {
-        fp3d_snapshot::prepare_view( u, here );
-        fp3d_compositor::publish( fp3d_snapshot::capture( u, here ) );
-    }
-#endif
     wnoutrefresh( w_terrain );
 
     draw_panels( true );
@@ -4228,6 +4241,11 @@ void game::draw( ui_adaptor &ui )
 
 void game::draw_panels( bool force_draw )
 {
+#if defined(ENABLE_FP3D)
+    if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+        return;
+    }
+#endif
     static int previous_turn = -1;
     const int current_turn = to_turns<int>( calendar::turn - calendar::turn_zero );
     const bool draw_this_turn = current_turn > previous_turn || force_draw;
@@ -4372,6 +4390,11 @@ void game::draw_ter( const tripoint_bub_ms &center, const bool looking, const bo
 
     ter_view_p = center;
 
+#if defined(ENABLE_FP3D)
+    if( is_draw_tiles_mode() && fp3d_compositor::covers_map( here.get_abs( center ) ) ) {
+        return;
+    }
+#endif
     here.draw( w_terrain, tripoint_bub_ms( center ) );
 
     if( draw_sounds ) {

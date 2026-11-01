@@ -10,6 +10,9 @@
 #include "fp3d_compositor.h"
 #include "fp3d_regression.h"
 #include "fp3d_input.h"
+#include "fp3d_materials.h"
+#include "fp3d_snapshot.h"
+#include "fp3d_entry.h"
 #endif
 
 #include <algorithm>
@@ -29,6 +32,7 @@
 #include <stack>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 #if defined(_MSC_VER) && defined(USE_VCPKG)
 #   include <SDL2/SDL_image.h>
@@ -589,6 +593,10 @@ void refresh_display()
 #if defined(ENABLE_FP3D)
     fp3d_compositor::compose();
     draw_fp3d_hud();
+    if( font ) {
+        fp3d_entry::draw( renderer, geometry, *font, fp3d_compositor::viewport_pixels(),
+                          fp3d_compositor::captures_game_input() );
+    }
 #endif
     SDL_RenderPresent( renderer.get() );
 #if defined(ENABLE_FP3D)
@@ -787,19 +795,93 @@ static point draw_string( Font &font,
 }
 
 #if defined(ENABLE_FP3D)
+static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &box, int pad )
+{
+    if( hud.body_regions.size() != 6 || box.h <= 2 * pad ) {
+        return;
+    }
+    const float scale = std::min( ( box.h - 2 * pad ) / 200.0f,
+                                  ( box.w - 2 * pad ) / 100.0f );
+    const int figure_x = box.x + pad;
+    const int figure_y = box.y + pad;
+
+    // Filled, outlined anatomical shapes; the scene remains visible through each part.
+    const auto draw_part = [&]( size_t region, const std::vector<point> &outline ) {
+        const auto &health = hud.body_regions[region];
+        const auto &pair = cata_cursesport::colorpairs[health.color.to_color_pair_index()];
+        const int palette = ( pair.FG != 0 ? pair.FG : pair.BG ) +
+                            ( health.color.is_bold() ? 8 : 0 );
+        const SDL_Color color = windowsPalette[palette];
+        std::vector<SDL_Point> points;
+        points.reserve( outline.size() + 1 );
+        for( const point &p : outline ) {
+            points.push_back( { figure_x + static_cast<int>( std::round( p.x * scale ) ),
+                                figure_y + static_cast<int>( std::round( p.y * scale ) ) } );
+        }
+        points.push_back( points.front() );
+        SDL_SetRenderDrawColor( renderer.get(), color.r, color.g, color.b, 85 );
+        std::vector<int> crossings;
+        crossings.reserve( outline.size() );
+        for( int y = figure_y; y < figure_y + 200 * scale; ++y ) {
+            crossings.clear();
+            for( size_t i = 1; i < points.size(); ++i ) {
+                const SDL_Point &a = points[i - 1];
+                const SDL_Point &b = points[i];
+                if( ( a.y <= y && b.y > y ) || ( b.y <= y && a.y > y ) ) {
+                    crossings.push_back( a.x + ( y - a.y ) * ( b.x - a.x ) / ( b.y - a.y ) );
+                }
+            }
+            std::sort( crossings.begin(), crossings.end() );
+            for( size_t i = 1; i < crossings.size(); i += 2 ) {
+                SDL_RenderDrawLine( renderer.get(), crossings[i - 1], y, crossings[i], y );
+            }
+        }
+        // Missing parts retain a subdued outline, matching the native missing-part state.
+        if( health.maximum <= 0 ) {
+            SDL_SetRenderDrawColor( renderer.get(), 105, 110, 115, 160 );
+        } else {
+            SDL_SetRenderDrawColor( renderer.get(), color.r, color.g, color.b, 255 );
+        }
+        SDL_RenderDrawLines( renderer.get(), points.data(), static_cast<int>( points.size() ) );
+    };
+    draw_part( 0, { { 43, 3 }, { 57, 3 }, { 62, 8 }, { 62, 19 }, { 57, 27 },
+        { 43, 27 }, { 38, 19 }, { 38, 8 } } );
+    draw_part( 1, { { 42, 29 }, { 58, 29 }, { 59, 34 }, { 70, 39 }, { 67, 63 },
+        { 61, 80 }, { 65, 99 }, { 60, 110 }, { 40, 110 }, { 35, 99 },
+        { 39, 80 }, { 33, 63 }, { 30, 39 }, { 41, 34 } } );
+    // A front view places the character's left limbs on the viewer's right.
+    draw_part( 2, { { 72, 39 }, { 78, 44 }, { 84, 64 }, { 89, 87 }, { 90, 109 },
+        { 86, 115 }, { 80, 111 }, { 80, 90 }, { 75, 72 }, { 68, 51 } } );
+    draw_part( 3, { { 28, 39 }, { 22, 44 }, { 16, 64 }, { 11, 87 }, { 10, 109 },
+        { 14, 115 }, { 20, 111 }, { 20, 90 }, { 25, 72 }, { 32, 51 } } );
+    draw_part( 4, { { 52, 113 }, { 64, 111 }, { 67, 132 }, { 65, 154 }, { 69, 180 },
+        { 74, 191 }, { 70, 197 }, { 57, 196 }, { 55, 180 }, { 51, 153 }, { 50, 131 } } );
+    draw_part( 5, { { 48, 113 }, { 36, 111 }, { 33, 132 }, { 35, 154 }, { 31, 180 },
+        { 26, 191 }, { 30, 197 }, { 43, 196 }, { 45, 180 }, { 49, 153 }, { 50, 131 } } );
+
+}
+
 static void draw_fp3d_hud()
 {
     if( !font ) { return; }
     const auto lines = fp3d_compositor::hud_lines();
     if( lines.empty() ) { return; }
+    const auto hud = fp3d_compositor::hud_data();
     const auto area = fp3d_compositor::viewport_pixels();
     if( area[2] <= font->width * 4 || area[3] <= font->height * 4 ) { return; }
+    constexpr unsigned char fp3d_ui_yellow = 11; // YELLOW in data/raw/colors.json
+    constexpr unsigned char fp3d_ui_white = 15; // WHITE in data/raw/colors.json
+    static unsigned icon_revision = 0;
+    static std::unordered_map<std::string, SDL_Texture_Ptr> hotbar_icons;
+    if( icon_revision != fp3d_materials::revision() ) {
+        hotbar_icons.clear();
+        icon_revision = fp3d_materials::revision();
+    }
     const SDL_bool was_clipped = SDL_RenderIsClipEnabled( renderer.get() );
     SDL_Rect previous_clip;
     SDL_RenderGetClipRect( renderer.get(), &previous_clip );
     const SDL_Rect clip{ area[0], area[1], area[2], area[3] };
     SDL_RenderSetClipRect( renderer.get(), &clip );
-    const int height = lines.size() * font->height + 12;
     SDL_BlendMode blend;
     SDL_GetRenderDrawBlendMode( renderer.get(), &blend );
     Uint8 r, green, b, a;
@@ -813,16 +895,197 @@ static void draw_fp3d_hud()
         const int text_y = area[1] + area[3] / 2 + font->height;
         SDL_Rect hint{ text_x - 6, text_y - 3, text_width + 12, font->height + 6 };
         SDL_RenderFillRect( renderer.get(), &hint );
-        draw_string( *font, renderer, geometry, prompt, point( text_x, text_y ), static_cast<unsigned char>( 15 ) );
+        draw_string( *font, renderer, geometry, prompt, point( text_x, text_y ), fp3d_ui_white );
     }
-    SDL_Rect backing{ area[0] + 4, area[1] + area[3] - height - 4, area[2] - 8, height };
-    SDL_RenderFillRect( renderer.get(), &backing );
-    int y = backing.y + 6;
-    for( const auto &text : lines ) {
-        draw_string( *font, renderer, geometry, utf8_truncate( text, ( area[2] - 20 ) / font->width ),
-                     point( area[0] + 10, y ), catacurses::white );
+    const auto &scene_lines = lines;
+    const int pad = std::max( 6, font->width / 2 );
+    const int left_width = std::max( 15 * font->width, area[2] / 4 );
+    const int right_width = std::max( 18 * font->width, area[2] / 4 );
+    const int top = area[1] + pad;
+    const int bottom = area[1] + area[3] - pad;
+    const int slot_size = std::clamp( area[2] / 12, 40, 64 );
+    const int slot_gap = std::max( 4, pad / 2 );
+    const int hotbar_width = slot_size * 8 + slot_gap * 7;
+    const int hotbar_x = area[0] + ( area[2] - hotbar_width ) / 2;
+    const int hotbar_y = bottom - slot_size;
+    const int panel_h = font->height * 6 + 2 * pad;
+    const int status_y = hotbar_y - panel_h - pad;
+    const int health_preferred_height = std::max( 180, font->height * 6 + 2 * pad );
+    const int mini = std::min( { 26 * font->width, area[2] / 3, area[3] / 2,
+                                 std::max( 1, status_y - top - health_preferred_height - 2 * pad ) } );
+    const int health_height = std::min( health_preferred_height,
+                                       std::max( 0, status_y - top - mini - 2 * pad ) );
+    SDL_Rect map_box{ area[0] + pad, top, mini, mini };
+    SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 205 );
+    SDL_RenderFillRect( renderer.get(), &map_box );
+    SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
+    SDL_RenderDrawRect( renderer.get(), &map_box );
+    if( tilecontext && g ) {
+        // The minimap may render a smaller clipped texture when scale-to-fit is disabled.
+        // Clear the whole source area first so uncovered pixels do not copy the 3D scene.
+        SDL_SetRenderTarget( renderer.get(), display_buffer.get() );
+        SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 255 );
+        SDL_RenderFillRect( renderer.get(), &map_box );
+        SDL_SetRenderTarget( renderer.get(), nullptr );
+        tilecontext->draw_minimap( point( map_box.x, map_box.y ),
+                                   tripoint_bub_ms( get_avatar().pos_bub( get_map() ).xy(), g->ter_view_p.z() ),
+                                   map_box.w, map_box.h );
+        // The vanilla minimap restores the game display buffer as its render target.
+        // HUD drawing runs after the buffer has already been copied to the window.
+        SDL_SetRenderTarget( renderer.get(), nullptr );
+        SDL_RenderSetClipRect( renderer.get(), &clip );
+        if( display_buffer ) {
+            SDL_RenderCopy( renderer.get(), display_buffer.get(), &map_box, &map_box );
+        }
+        SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
+        SDL_RenderDrawRect( renderer.get(), &map_box );
+    }
+
+    draw_fp3d_body_health( hud, SDL_Rect{ map_box.x, map_box.y + map_box.h + pad,
+                           mini, health_height }, pad );
+
+    const int compass_width = std::min( area[2] - 2 * pad, 34 * font->width );
+    const int compass_x = area[0] + ( area[2] - compass_width ) / 2;
+    SDL_Rect compass_box{ compass_x, top, compass_width, font->height * 3 + 2 * pad };
+    SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 175 );
+    SDL_RenderFillRect( renderer.get(), &compass_box );
+    SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
+    SDL_RenderDrawRect( renderer.get(), &compass_box );
+    const float heading = std::fmod( fp3d_compositor::heading() + 360.0f, 360.0f );
+    const int tick = static_cast<int>( std::round( heading / 45.0f ) ) % 8;
+    const char *directions[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    const std::string compass = std::string( directions[tick] ) + "  " +
+                                std::to_string( static_cast<int>( heading ) ) + " deg";
+    draw_string( *font, renderer, geometry, compass, point( compass_x + pad, top + pad ), fp3d_ui_yellow );
+    for( int bearing = 0; bearing < 360; bearing += 15 ) {
+        const float delta = std::remainder( static_cast<float>( bearing ) - heading, 360.0f );
+        if( std::abs( delta ) > 42.0f ) {
+            continue;
+        }
+        const int x = compass_x + compass_width / 2 + static_cast<int>( delta / 84.0f * compass_width );
+        const int y0 = top + font->height + pad;
+        const int y1 = y0 + ( bearing % 45 == 0 ? pad : std::max( 2, pad / 2 ) );
+        SDL_SetRenderDrawColor( renderer.get(), 255, 235, 120, 235 );
+        SDL_RenderDrawLine( renderer.get(), x, y0, x, y1 );
+        if( bearing % 45 == 0 ) {
+            const std::string direction = directions[( bearing / 45 ) % 8];
+            const int direction_width = utf8_width( direction ) * font->width;
+            const int label_margin = std::max( pad, font->width / 2 );
+            const int direction_x = std::clamp( x - direction_width / 2, compass_x + label_margin,
+                                                compass_x + compass_width - label_margin - direction_width );
+            draw_string( *font, renderer, geometry, direction,
+                         point( direction_x, y1 ), fp3d_ui_white );
+        }
+    }
+    SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 255 );
+    SDL_RenderDrawLine( renderer.get(), compass_x + compass_width / 2, top + font->height + pad,
+                        compass_x + compass_width / 2, top + compass_box.h - 2 );
+
+    for( int i = 0; i < 8; ++i ) {
+        SDL_Rect slot{ hotbar_x + i * ( slot_size + slot_gap ), hotbar_y, slot_size, slot_size };
+        const bool active_slot = i == hud.active_slot;
+        SDL_SetRenderDrawColor( renderer.get(), active_slot ? 92 : 18, active_slot ? 82 : 22,
+                                active_slot ? 12 : 26, 220 );
+        SDL_RenderFillRect( renderer.get(), &slot );
+        SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
+        SDL_RenderDrawRect( renderer.get(), &slot );
+        if( i < static_cast<int>( hud.hotbar_icons.size() ) ) {
+            const auto &item = hud.hotbar_icons[i];
+            if( !item.id.empty() ) {
+                const std::string key = item.id + "\n" + item.variant;
+                auto icon = hotbar_icons.find( key );
+                if( icon == hotbar_icons.end() ) {
+                    fp3d_snapshot::sprite image;
+                    image.kind = fp3d_snapshot::sprite_kind::held_item;
+                    image.id = item.id;
+                    image.variant = item.variant;
+                    icon = hotbar_icons.emplace( key, fp3d_materials::item_icon( image ) ).first;
+                }
+                if( icon->second ) {
+                    const int icon_size = std::min( slot.w - 2 * pad, slot.h - 2 * pad );
+                    const SDL_Rect destination{ slot.x + ( slot.w - icon_size ) / 2,
+                                                slot.y + ( slot.h - icon_size ) / 2, icon_size, icon_size };
+                    SDL_RenderCopy( renderer.get(), icon->second.get(), nullptr, &destination );
+                }
+            }
+            draw_string( *font, renderer, geometry, std::to_string( i + 1 ),
+                         point( slot.x + pad / 2, slot.y + pad / 2 ), fp3d_ui_yellow );
+        }
+    }
+
+    SDL_Rect status_box{ area[0] + pad, status_y, left_width, panel_h };
+    SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
+    SDL_RenderFillRect( renderer.get(), &status_box );
+    SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
+    SDL_RenderDrawRect( renderer.get(), &status_box );
+    draw_string( *font, renderer, geometry, utf8_truncate( hud.status, ( status_box.w - 2 * pad ) / font->width ),
+                 point( status_box.x + pad, status_box.y + pad ), fp3d_ui_white );
+    const int cell_gap = pad;
+    const int cell_width = ( status_box.w - 2 * pad - cell_gap ) / 2;
+    for( size_t i = 0; i < hud.status_entries.size(); ++i ) {
+        const auto &entry = hud.status_entries[i];
+        const int column = static_cast<int>( i % 2 );
+        const int row = static_cast<int>( i / 2 );
+        const int cell_x = status_box.x + pad + column * ( cell_width + cell_gap );
+        const int y = status_box.y + pad + font->height * ( row + 1 );
+        const int label_width = utf8_width( entry.label ) * font->width;
+        const int value_x = cell_x + label_width + font->width / 2;
+        const int value_width = std::max( 0, cell_x + cell_width - value_x );
+        const auto &pair = cata_cursesport::colorpairs[entry.color.to_color_pair_index()];
+        int palette_index = pair.FG;
+        if( entry.color.is_bold() && palette_index < 8 ) {
+            palette_index += 8;
+        }
+        palette_index = std::clamp( palette_index, 1, 15 );
+        draw_string( *font, renderer, geometry, entry.label,
+                     point( cell_x, y ), fp3d_ui_white );
+        draw_string( *font, renderer, geometry,
+                     utf8_truncate( entry.value, value_width / font->width ),
+                     point( value_x, y ), static_cast<unsigned char>( palette_index ) );
+    }
+
+    const int log_h = std::max( font->height * 3, static_cast<int>( hud.messages.size() + 1 ) * font->height );
+    const int log_x = status_box.x + status_box.w + pad;
+    SDL_Rect log_box{ log_x, hotbar_y - log_h - pad, std::max( 0, area[0] + area[2] - pad - log_x ), log_h };
+    SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 150 );
+    SDL_RenderFillRect( renderer.get(), &log_box );
+    SDL_SetRenderDrawColor( renderer.get(), 220, 220, 220, 185 );
+    SDL_RenderDrawRect( renderer.get(), &log_box );
+    int y = log_box.y + pad;
+    for( const auto &message : hud.messages ) {
+        if( y + font->height > log_box.y + log_box.h ) { break; }
+        const auto &pair = cata_cursesport::colorpairs[message.color.to_color_pair_index()];
+        int palette_index = pair.FG != 0 ? pair.FG : pair.BG;
+        if( message.color.is_bold() ) {
+            palette_index += color_loader<SDL_Color>::COLOR_NAMES_COUNT / 2;
+        }
+        draw_string( *font, renderer, geometry,
+                     utf8_truncate( message.text, ( log_box.w - 2 * pad ) / font->width ),
+                     point( log_box.x + pad, y ), static_cast<unsigned char>( palette_index ) );
         y += font->height;
     }
+    SDL_Rect mission_box{ area[0] + area[2] - right_width - pad, top, right_width, font->height * 2 + 2 * pad };
+    SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
+    SDL_RenderFillRect( renderer.get(), &mission_box );
+    SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
+    SDL_RenderDrawRect( renderer.get(), &mission_box );
+    draw_string( *font, renderer, geometry, "任务目标", point( mission_box.x + pad, mission_box.y + pad ), fp3d_ui_yellow );
+    if( !hud.mission.empty() ) {
+        draw_string( *font, renderer, geometry, utf8_truncate( hud.mission, ( mission_box.w - 2 * pad ) / font->width ),
+                     point( mission_box.x + pad, mission_box.y + pad + font->height ), fp3d_ui_white );
+    }
+
+    SDL_Rect time_box{ compass_x, compass_box.y + compass_box.h + pad, compass_width,
+                       font->height * 2 + 2 * pad };
+    SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 185 );
+    SDL_RenderFillRect( renderer.get(), &time_box );
+    SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
+    SDL_RenderDrawRect( renderer.get(), &time_box );
+    draw_string( *font, renderer, geometry, utf8_truncate( hud.day_time, ( time_box.w - 2 * pad ) / font->width ),
+                 point( time_box.x + pad, time_box.y + pad ), fp3d_ui_white );
+    draw_string( *font, renderer, geometry, utf8_truncate( "温度 " + hud.temperature,
+                 ( time_box.w - 2 * pad ) / font->width ),
+                 point( time_box.x + pad, time_box.y + pad + font->height ), fp3d_ui_yellow );
     SDL_RenderSetClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
     SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );
     SDL_SetRenderDrawBlendMode( renderer.get(), blend );
@@ -2756,7 +3019,7 @@ static void CheckMessages()
 {
 #if defined(ENABLE_FP3D)
     if( fp3d_compositor::requested() ) {
-        if( fp3d_compositor::captures_game_input() ||
+        if( fp3d_compositor::captures_game_input() || fp3d_compositor::modern_2d_input() ||
             ( !fp3d_preferred_text_input && !fp3d_compositor::menu_text_input() ) ) {
             StopTextInput();
         } else {

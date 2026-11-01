@@ -8,6 +8,8 @@
 #include <vector>
 #include "fp3d_targeting.h"
 #include "fp3d_scene.h"
+#include "fp3d_input.h"
+#include "fp3d_hud.h"
 
 #include "sdl_wrappers.h"
 #include "coordinates.h"
@@ -20,6 +22,10 @@ struct scene_snapshot;
 namespace fp3d_compositor
 {
 bool requested();
+fp3d_input::mode controls();
+bool modern_2d_input();
+// True only while the 3D view is allowed to render, including its first frame.
+bool active();
 void attach( SDL_Renderer *renderer, SDL_Window *window );
 bool process_event( const SDL_Event &event );
 bool captures_game_input();
@@ -31,6 +37,7 @@ float heading();
 void set_blueprint( std::optional<fp3d_scene::blueprint> preview );
 bool turn_based();
 std::vector<std::string> hud_lines();
+fp3d_hud::data hud_data();
 bool interaction_available();
 std::string interaction_prompt();
 bool draw_menu_background( int x, int y, int width, int height );
@@ -41,6 +48,7 @@ void set_viewport( int x, int y, int width, int height, int display_width, int d
 void set_input_context( const std::string &category );
 void publish( fp3d_snapshot::scene_snapshot scene );
 void begin_action();
+void melee_swing();
 void movement_finished( const tripoint_abs_ms &before, const tripoint_abs_ms &after,
                         const tripoint_rel_ms &expected );
 bool tick();

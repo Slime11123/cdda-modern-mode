@@ -4929,6 +4929,34 @@
   },
   {
     "type": "keybinding",
+    "id": "MODERN_2D_NORTH",
+    "category": "MODERN_2D",
+    "name": "2D modern move north",
+    "bindings": [ { "input_method": "keyboard_code", "key": "w" } ]
+  },
+  {
+    "type": "keybinding",
+    "id": "MODERN_2D_SOUTH",
+    "category": "MODERN_2D",
+    "name": "2D modern move south",
+    "bindings": [ { "input_method": "keyboard_code", "key": "s" } ]
+  },
+  {
+    "type": "keybinding",
+    "id": "MODERN_2D_WEST",
+    "category": "MODERN_2D",
+    "name": "2D modern move west",
+    "bindings": [ { "input_method": "keyboard_code", "key": "a" } ]
+  },
+  {
+    "type": "keybinding",
+    "id": "MODERN_2D_EAST",
+    "category": "MODERN_2D",
+    "name": "2D modern move east",
+    "bindings": [ { "input_method": "keyboard_code", "key": "d" } ]
+  },
+  {
+    "type": "keybinding",
     "id": "FP3D_FORWARD",
     "category": "FP3D",
     "name": "3D move forward",
@@ -4982,6 +5010,6 @@
   { "type": "keybinding", "id": "FP3D_SLOT_6", "category": "FP3D", "name": "3D hotbar 6", "bindings": [ { "input_method": "keyboard_code", "key": "6" } ] },
   { "type": "keybinding", "id": "FP3D_SLOT_7", "category": "FP3D", "name": "3D hotbar 7", "bindings": [ { "input_method": "keyboard_code", "key": "7" } ] },
   { "type": "keybinding", "id": "FP3D_SLOT_8", "category": "FP3D", "name": "3D hotbar 8", "bindings": [ { "input_method": "keyboard_code", "key": "8" } ] },
-  { "type": "keybinding", "id": "FP3D_SLOT_NEXT", "category": "FP3D", "name": "3D hotbar next", "bindings": [ { "input_method": "mouse", "key": "SCROLL_UP" } ] },
-  { "type": "keybinding", "id": "FP3D_SLOT_PREV", "category": "FP3D", "name": "3D hotbar prev", "bindings": [ { "input_method": "mouse", "key": "SCROLL_DOWN" } ] }
+  { "type": "keybinding", "id": "FP3D_SLOT_NEXT", "category": "FP3D", "name": "3D hotbar next", "bindings": [ { "input_method": "mouse", "key": "SCROLL_DOWN" } ] },
+  { "type": "keybinding", "id": "FP3D_SLOT_PREV", "category": "FP3D", "name": "3D hotbar prev", "bindings": [ { "input_method": "mouse", "key": "SCROLL_UP" } ] }
 ]

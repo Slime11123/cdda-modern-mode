@@ -18,7 +18,7 @@ file(GLOB CATACLYSM_DDA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 file(GLOB FP3D_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fp3d_*.cpp)
 if (ENABLE_FP3D)
     # Keep this definition local: unrelated game sources retain their baseline build.
-    set_source_files_properties(sdltiles.cpp input.cpp input_context.cpp construction.cpp do_turn.cpp game.cpp handle_action.cpp cata_tiles.cpp ${FP3D_SOURCES}
+    set_source_files_properties(sdltiles.cpp input.cpp input_context.cpp construction.cpp do_turn.cpp game.cpp handle_action.cpp cata_tiles.cpp main_menu.cpp npctalk.cpp trade_ui.cpp savegame_json.cpp ${FP3D_SOURCES}
         PROPERTIES COMPILE_DEFINITIONS ENABLE_FP3D)
 else()
     list(REMOVE_ITEM CATACLYSM_DDA_SOURCES ${FP3D_SOURCES})

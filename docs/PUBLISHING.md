@@ -85,4 +85,4 @@ Do not package copied UndeadPeople assets or Photon shaders without verifying th
 - Credit [Cataclysm: Dark Days Ahead](https://github.com/CleverRaven/Cataclysm-DDA) and preserve CC BY-SA 3.0 and separately licensed component notices.
 - Project is unofficial and not endorsed by the CDDA developers.
 
-**Current state:** Files prepared locally. No new remote repository created and no Git commit/push performed by this document edit.
+**Updated 2026-11-01:** The independent public repository now exists at https://github.com/Slime11123/cdda-modern-mode and the local `main` tracks `origin/main`. The setup steps above are retained as reference for future clones. Source changes must still be reviewed, committed and pushed deliberately; a GitHub source update is not a Windows installer Release.

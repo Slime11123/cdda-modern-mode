@@ -1,63 +1,67 @@
 # CDDA Modern Mode
 
-[简体中文](README.zh-CN.md) | [Upstream Cataclysm: Dark Days Ahead](https://github.com/CleverRaven/Cataclysm-DDA)
+[简体中文](README.zh-CN.md) · [Upstream CDDA](https://github.com/CleverRaven/Cataclysm-DDA) · [Development status](docs/DEVELOPMENT_STATUS.md)
 
-**CDDA Modern Mode** is an unofficial, experimental modernization project built on **Cataclysm: Dark Days Ahead (CDDA) 0.I-1 / Ito-1**. It explores first-person 3D presentation and more accessible mouse-and-keyboard controls while keeping CDDA's underlying turn-based survival simulation.
+**CDDA Modern Mode** is an unofficial modernization project based on **Cataclysm: Dark Days Ahead 0.I-1 (Ito-1)**. Its goal is to add experimental first-person 3D presentation and modern mouse-and-keyboard interfaces while preserving CDDA's original turn-based survival simulation, action resolution, and save format.
 
-> **Development preview, not a finished game or official CDDA release.** The public repository is intended for source review and development. A verified, standalone Windows download has not yet been published.
+> **Status: development preview (November 1, 2026).** This GitHub repository primarily distributes source and technical documentation, not an official CDDA update or a fully validated standalone Windows release.
 
-## Goals and implemented foundations
+## What the project includes
 
-- Switch between classic 2D and an experimental first-person 3D view. A separate modernized 2D control mode is under active development.
-- Keep original CDDA world rules, turn processing, saves, combat calculations, movement and collision logic rather than rewriting the game as a real-time survival title.
-- Present terrain, buildings, multiple floors, sky, vegetation and visible entities through an experimental SDL2/OpenGL 3D renderer.
-- Reuse the selected CDDA tileset's visuals where supported, with fallbacks for incomplete mappings.
-- Provide modern mouse/keyboard interaction, a multi-panel inventory, equipment/pocket handling, map, status and other UI entry points.
-
-**Current limitations:** The 3D renderer, controls and modern UI are still under active development. Some actions fall back to original CDDA dialogs. Complete end-to-end combat, mouse/IME interaction, complex buildings, vehicle geometry, compatibility and broad performance testing are **not** claimed as finished. See [development reports](docs/FP3D_PROGRESS.md) and [modern controls status](docs/FP3D_0I1_MODERN_CONTROLS.md) for detailed, dated test evidence and remaining work.
-
-## Controls (development builds)
-
-| Action | Current behavior |
+| Area | Current development scope |
 | --- | --- |
-| Change view/control mode | **F5** switches classic 2D and experimental 3D in the committed baseline; a third modern 2D mode is under development |
-| Controls/help configuration | **F6** opens the mode-specific key configuration |
-| 3D movement | **WASD**, relative to the camera, submits original CDDA movement actions |
-| Look around in 3D | Mouse movement |
-| Modern 3D interface | **Tab** opens the integrated interface; **M** opens the map |
-| Other interactions | Context-sensitive keys and mouse actions; see in-game bindings (may change) |
+| **Three modes** | Cycle between classic 2D, modern-control 2D, and first-person 3D with F5. Modern 2D currently focuses on independent bindings and movement. |
+| **First-person world** | Experimental 3D terrain, building façades, multi-floor structures, floors/stairs, doors, windows, vegetation, sky, day/night, and distant scenery, with tileset-based materials and visible entity sprites. |
+| **Modern interaction** | Camera-relative WASD, interaction reticle and hints, hold-E context wheel, Q action wheel, targeted melee and smashing. |
+| **Integrated survival UI** | Tab-accessible inventory, equipment and pockets, character status, crafting, construction, missions, map, and visible characters. |
+| **Item and craft flows** | Native inventory activities and pocket rules, recipe categories/search/favorites, batch crafting, material checks, and construction previews. |
+| **NPC systems** | Mouse-driven dialogue with tileset portraits, two-column trade UI, and selected native guard/follow commands. |
+| **Presentation** | HUD, interactable-target indicator, equipped-item swing, introductory character information overlay, and native information-disclosure rules. |
+| **Compatibility work** | Retains native AP, turn processing, combat, and saves; ongoing ON/OFF builds, rendering checks, and native-behavior comparisons. |
 
-Not every development runtime contains every in-progress feature. Keys may differ with custom bindings.
+These are implemented development features, **not a claim that every end-to-end workflow has passed manual gameplay acceptance**. Some specialized actions still use the original CDDA dialogs.
 
-## Build and run
+## Controls
 
-**Target environment:** Windows, CDDA 0.I-1, SDL2 tiles build and optional experimental OpenGL integration. This repository contains game **source code**, not a self-contained executable installer.
+| Input | Current behavior |
+| --- | --- |
+| **F5** | Classic 2D → modern 2D → first-person 3D |
+| **F6** | Inspect and configure bindings for each mode |
+| **WASD** | Camera-relative 3D movement; independent planar controls in modern 2D |
+| **Mouse** | 3D camera, menu controls, and target selection |
+| **Left click** | Native melee against valid targets, or smashing of aimed surfaces; friendly/neutral attack confirmation remains |
+| **Right click** | Native aim/shoot action, depending on context |
+| **E** | Interact; hold to open a target-specific context wheel |
+| **Q** | Quick-action wheel |
+| **Tab** | Integrated survival panel |
+| **M** | Modern map |
 
-1. Follow the upstream build guidance in [compilation documentation](doc/c++/COMPILING.md) and [CMake documentation](doc/c++/COMPILING-CMAKE.md).
-2. For an experimental Windows graphics build, enable **TILES** and **ENABLE_FP3D** in CMake (the FP3D option requires Windows + Tiles).
-3. Build with the required dependencies, then supply CDDA data files and an appropriate, authorized tileset.
-4. The author's local launcher `tools/run-fp3d.ps1` expects a sibling development `runtime/` directory with a prebuilt executable. That directory is **not part of this source repository**. It is not a standalone installer or a universal quick-start.
+Bindings are customizable and may evolve. Native action-point costs, safe-mode rules, and interaction ranges still apply.
 
-Do not assume that cloning this repository alone produces a ready-to-run game.
+## Development status and limitations
 
-## Project and upstream
+The rendering and UI foundation is in place and has substantial targeted automated coverage. **The project is not release-stable.** Full IME composition, manual end-to-end mouse/keyboard workflows, sophisticated vehicle models, broad gameplay and mod compatibility, larger-scene performance, and release packaging still need additional verification.
 
-- **Project:** CDDA Modern Mode (unofficial, experimental).
-- **Upstream:** [CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA).
-- **Base:** official `0.I-1` tag, commit `7b2efa5cea38e4d4d97dd0e63b28b9148623da59`.
-- **Implementation:** modern mode additions maintained on the `feature/fp3d-0i` development branch.
-- **Documentation:** [development log](docs/FP3D_PROGRESS.md), [third-party tileset provenance](docs/FP3D_UNDEADPEOPLE.md), [publishing checklist](docs/PUBLISHING.md).
+See the [current status and open items](docs/DEVELOPMENT_STATUS.md), [development log](docs/FP3D_PROGRESS.md), and [modern controls report](docs/FP3D_0I1_MODERN_CONTROLS.md). Additional reports cover [NPC dialogue](docs/FP3D_NPC_DIALOGUE.md), [NPC trade](docs/FP3D_NPC_TRADE.md), [targeted melee](docs/FP3D_RETICLE_MELEE.md), [the three modes](docs/FP3D_THREE_CONTROL_MODES.md), and [entry overlay](docs/FP3D_ENTRY_SUMMARY.md).
 
-This project is **not affiliated with or endorsed by the official CDDA maintainers**.
+## Source build and local runtime
 
-## Licenses and third-party assets
+**Development target:** Windows, CDDA 0.I-1, SDL2, CMake, and optional experimental OpenGL 3D integration.
 
-CDDA's main source/content license is **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)**; some included dependencies, fonts and other files have separate licenses. Preserve applicable upstream notices and the original [LICENSE.txt](LICENSE.txt). Read [Attribution and redistribution notes](docs/ATTRIBUTION.md).
+1. Prepare your toolchain and dependencies using upstream [compilation](doc/c++/COMPILING.md) and [CMake](doc/c++/COMPILING-CMAKE.md) instructions.
+2. Enable `TILES` for Windows graphics, and `ENABLE_FP3D=ON` for the experimental 3D path (Windows Tiles builds only).
+3. Provide appropriately licensed game data and tilesets, then test with an isolated game profile.
+4. The local developer launcher `tools/run-fp3d.ps1` expects a prebuilt executable in a sibling `runtime/` directory outside this source repository. **Cloning the source alone is not a one-click installation.**
 
-The project's local development environment uses an external **UndeadPeople** tileset, but those downloaded/generated assets are held outside this Git source tree. Their availability in a local build does **not** establish permission to redistribute them in a GitHub Release. Confirm their separate provenance and licenses before packaging.
+An end-user Windows release will require separate packaging, dependency and asset-license checks, and clean-install validation.
 
-## Contributing and support
+## Attribution and licensing
 
-Please use this project's GitHub issues (once the repository is published) for reports about Modern Mode. For upstream CDDA bugs unrelated to this project, use the [official CDDA issue tracker](https://github.com/CleverRaven/Cataclysm-DDA/issues).
+- Upstream: [CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA)
+- Base: official `0.I-1` tag, commit `7b2efa5cea38e4d4d97dd0e63b28b9148623da59`
+- Repository: standalone GitHub repository (not a GitHub fork), with upstream authors and origins still credited
+- Licensing: CDDA's primary code/content uses **CC BY-SA 3.0**. Some third-party libraries, fonts, and assets have separate license terms. Preserve all applicable notices; see [LICENSE.txt](LICENSE.txt), [attribution notes](docs/ATTRIBUTION.md), and the [upstream README](docs/UPSTREAM_README.md).
 
-The [original upstream README](docs/UPSTREAM_README.md) is retained for reference and attribution.
+This is **not an official CDDA project and is not endorsed by upstream maintainers**. Third-party tileset assets used locally require separate redistribution review; do not publish local development saves or asset bundles without authorization.
+
+For Modern Mode issues and ideas, use this project's [issue tracker](https://github.com/Slime11123/cdda-modern-mode/issues).

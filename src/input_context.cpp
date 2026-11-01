@@ -158,7 +158,7 @@ const std::string &input_context::input_to_action( const input_event &inp ) cons
 #if defined(ENABLE_FP3D)
     // Preserve simple custom character shortcuts while gameplay bypasses IMEs.
     // Explicit key-code bindings above always take precedence.
-    if( category == "DEFAULTMODE" && fp3d_compositor::captures_game_input() &&
+    if( category == "DEFAULTMODE" && ( fp3d_compositor::captures_game_input() || fp3d_compositor::modern_2d_input() ) &&
         inp.type == input_event_t::keyboard_code && inp.sequence.size() == 1 &&
         !inp.modifiers.count( keymod_t::ctrl ) && !inp.modifiers.count( keymod_t::alt ) ) {
         int key = inp.sequence.front();
@@ -489,6 +489,22 @@ const std::string &input_context::handle_input( const int timeout )
         }
 #endif
 #if defined(ENABLE_FP3D)
+        if( category == "DEFAULTMODE" && fp3d_compositor::requested() &&
+            ( next_action.type == input_event_t::keyboard_code || next_action.type == input_event_t::keyboard_char ) &&
+            next_action.get_first_input() == static_cast<int>( keycode::f6 ) ) {
+            next_action.text = action_ident( ACTION_KEYBINDINGS );
+            result = &next_action.text;
+            break;
+        }
+        if( category == "DEFAULTMODE" && fp3d_compositor::modern_2d_input() ) {
+            const auto mapped = fp3d_input::resolve( fp3d_input::mode::modern_2d,
+                                next_action, 0, fp3d_input::vehicle_controls() );
+            if( !mapped.empty() && is_registered_action( mapped ) ) {
+                next_action.text = mapped;
+                result = &next_action.text;
+                break;
+            }
+        }
         if( ( category == "DEFAULTMODE" || category == "FP3D_BUILD" ) && fp3d_compositor::captures_game_input() ) {
             const auto mapped = fp3d_input::resolve( fp3d_input::mode::first_person_3d,
                                 next_action, fp3d_compositor::heading(), fp3d_input::vehicle_controls() );
@@ -516,8 +532,8 @@ const std::string &input_context::handle_input( const int timeout )
         // Special help action
         if( action == "HELP_KEYBINDINGS" ) {
 #if defined(ENABLE_FP3D)
-            // The main game dispatcher opens the two-profile selector in 3D.
-            if( category == "DEFAULTMODE" && fp3d_compositor::captures_game_input() ) {
+            // The main game dispatcher opens the three-profile selector.
+            if( category == "DEFAULTMODE" && fp3d_compositor::controls() != fp3d_input::mode::original_2d ) {
                 result = &action;
                 break;
             }

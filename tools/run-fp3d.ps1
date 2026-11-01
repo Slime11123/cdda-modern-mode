@@ -10,6 +10,9 @@ $projectRoot = Split-Path $sourceRoot -Parent
 $runtime = if ($Mode -eq 'Original') { 'runtime/p0-0i1' } else { 'runtime/0i1' }
 $runtimeRoot = if ($RuntimeDir) { $RuntimeDir } else { Join-Path $projectRoot $runtime }
 $exe = Join-Path $runtimeRoot 'cataclysm-tiles.exe'
+if (-not (Test-Path -LiteralPath $exe)) {
+    $exe = Join-Path $runtimeRoot 'cataclysm-tiles-worldgen.exe'
+}
 if (-not (Test-Path -LiteralPath $exe)) { throw "Build first: $exe" }
 New-Item -ItemType Directory -Path "$UserDir/config", "$UserDir/gfx" -Force | Out-Null
 $userRoot = (Resolve-Path $UserDir).Path

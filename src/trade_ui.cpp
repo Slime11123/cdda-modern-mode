@@ -1,5 +1,10 @@
 
 #include "trade_ui.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_compositor.h"
+#include "fp3d_modern_ui.h"
+#include "fp3d_trade.h"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -171,6 +176,26 @@ void trade_ui::pushevent( event const &ev )
 
 trade_ui::trade_result_t trade_ui::perform_trade()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_compositor::turn_based() ) {
+        _header_ui.on_redraw( []( const ui_adaptor & ) {} );
+        for( auto &pane : _panes ) {
+            pane->get_ui()->on_redraw( []( const ui_adaptor & ) {} );
+        }
+        fp3d_trade::window modern( *this, fp3d_modern_ui::scale_percent() );
+        input_context ctxt( "NPC_TRADE_MOUSE" );
+        ctxt.register_action( "QUIT" );
+        ctxt.register_action( "ANY_INPUT" );
+        while( true ) {
+            ui_manager::redraw();
+            const std::string action = ctxt.handle_input( 20 );
+            modern.handle_action( action );
+            if( const auto result = modern.process_action() ) {
+                return *result;
+            }
+        }
+    }
+#endif
     _exit = false;
     _traded = false;
 
@@ -184,8 +209,13 @@ trade_ui::trade_result_t trade_ui::perform_trade()
         }
     }
 
-    if( _traded ) {
-        return { _traded,
+    return _result( _traded );
+}
+
+trade_ui::trade_result_t trade_ui::_result( bool accepted ) const
+{
+    if( accepted ) {
+        return { true,
                  _balance,
                  _delta_bank,
                  _trade_values[_you],
@@ -214,16 +244,22 @@ void trade_ui::recalc_values_cpane()
 
 void trade_ui::autobalance()
 {
+    autobalance( _panes[_cpane]->get_active_column().get_highlighted() );
+}
+
+void trade_ui::autobalance( inventory_entry &entry )
+{
+    if( !entry.is_selectable() ) { return; }
     int const sign = _cpane == _you ? -1 : 1;
     if( ( sign < 0 && _balance < 0 ) || ( sign > 0 && _balance > 0 ) ) {
-        inventory_entry &entry = _panes[_cpane]->get_active_column().get_highlighted();
         size_t const avail = entry.get_available_count() - entry.chosen_count;
         double const price = npc_trading::trading_price( *_parties[-_cpane + 1], *_parties[_cpane],
                              entry_t{ entry.any_item(), 1 } ) * sign;
+        if( price == 0 ) { return; }
         double const num = _balance / price;
         double const extra = sign < 0 ? std::ceil( num ) : std::floor( num );
-        _panes[_cpane]->toggle_entry( entry, entry.chosen_count +
-                                      std::min( static_cast<size_t>( extra ), avail ) );
+        _panes[_cpane]->set_trade_count( entry.any_item(), entry.chosen_count +
+                                        std::min( static_cast<size_t>( extra ), avail ) );
     }
 }
 
@@ -275,30 +311,87 @@ void trade_ui::_process( event const &ev )
 
 bool trade_ui::_confirm_trade() const
 {
+    const auto confirmation = _trade_confirmation();
+    if( confirmation.first ) {
+        return query_yn( confirmation.second );
+    }
+    popup( confirmation.second );
+    return false;
+}
+
+std::pair<bool, std::string> trade_ui::_trade_confirmation() const
+{
     npc const &np = *_parties[_trader]->as_npc();
 
     if( !npc_trading::npc_will_accept_trade( np, _balance ) ) {
         if( np.max_credit_extended() == 0 ) {
-            popup( _( "You'll need to offer me more than that." ) );
+            return { false, _( "You'll need to offer me more than that." ) };
         } else {
-            popup( _( "Sorry, I'm only willing to extend you %s in credit." ),
-                   format_money( np.max_credit_extended() ) );
+            return { false, string_format( _( "Sorry, I'm only willing to extend you %s in credit." ),
+                                           format_money( np.max_credit_extended() ) ) };
         }
     } else if( !np.is_shopkeeper() &&
                !npc_trading::npc_can_fit_items( np, _panes[_you]->to_trade() ) ) {
-        popup( _( "%s doesn't have the appropriate pockets to accept that." ), np.get_name() );
+        return { false, string_format( _( "%s doesn't have the appropriate pockets to accept that." ), np.get_name() ) };
     } else if( npc_trading::calc_npc_owes_you( np, _balance ) < _balance ) {
         // NPC is happy with the trade, but isn't willing to remember the whole debt.
-        return query_yn(
+        return { true, string_format(
                    _( "I'm never going to be able to pay you back for all that.  The most I'm "
                       "willing to owe you is %s.\n\nContinue with trade?" ),
-                   format_money( np.max_willing_to_owe() ) );
+                   format_money( np.max_willing_to_owe() ) ) };
 
     } else {
-        return query_yn( _( "Looks like a deal!  Accept this trade?" ) );
+        return { true, _( "Looks like a deal!  Accept this trade?" ) };
     }
+}
 
-    return false;
+std::vector<inventory_entry *> trade_selector::trade_entries() const
+{
+    std::vector<inventory_entry *> result;
+    for( const inventory_column *column : get_all_columns() ) {
+        for( inventory_entry *entry : column->get_entries( []( const inventory_entry & row ) {
+        return row.is_item() && !row.is_collation_header();
+        }, true ) ) {
+            entry->cache_denial( preset );
+            result.push_back( entry );
+        }
+    }
+    return result;
+}
+
+bool trade_selector::set_trade_count( const item_location &loc, size_t count )
+{
+    const auto entries = trade_entries();
+    const auto found = std::find_if( entries.begin(), entries.end(), [&]( const inventory_entry * row ) {
+        return std::find( row->locations.begin(), row->locations.end(), loc ) != row->locations.end();
+    } );
+    if( found == entries.end() || ( count > 0 && !( *found )->is_selectable() ) ) {
+        return false;
+    }
+    // A container and its contents must never appear twice in the offer.  Let
+    // the most recent mouse choice replace the conflicting previous choice.
+    const auto contained_by = []( item_location child, const item_location & parent ) {
+        while( child.has_parent() ) {
+            child = child.parent_item();
+            if( child == parent ) { return true; }
+        }
+        return false;
+    };
+    if( count > 0 ) {
+        for( inventory_entry *entry : entries ) {
+            if( entry == *found || entry->chosen_count == 0 ) { continue; }
+            const bool conflicts = std::any_of( entry->locations.begin(), entry->locations.end(),
+            [&]( const item_location & other ) {
+                return std::any_of( ( *found )->locations.begin(), ( *found )->locations.end(),
+                [&]( const item_location & chosen ) {
+                    return contained_by( other, chosen ) || contained_by( chosen, other );
+                } );
+            } );
+            if( conflicts ) { set_chosen_count( *entry, 0 ); }
+        }
+    }
+    toggle_entry( **found, count );
+    return true;
 }
 
 void trade_ui::_draw_header()

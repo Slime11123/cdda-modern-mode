@@ -129,4 +129,24 @@ TEST_CASE( "fp3d_camera_does_not_advance_blocked_avatar_or_game_time", "[fp3d][c
     CHECK( you.pos_abs() == start + tripoint_rel_ms::east );
     CHECK( you.get_moves() < moves );
 }
+TEST_CASE( "fp3d_held_swing_uses_only_presentation_time", "[fp3d][combat][camera]" )
+{
+    fp3d_camera::swing swing;
+    CHECK( swing.amount( 0 ) == 0 );
+    swing.start( 1000 );
+    CHECK( swing.amount( 1000 ) == 0 );
+    CHECK( swing.amount( 1045 ) == Approx( .5f ) );
+    CHECK( swing.amount( 1090 ) == Approx( 1 ) );
+    CHECK( swing.amount( 1195 ) == Approx( .5f ) );
+    CHECK( swing.amount( 1300 ) == 0 );
+    CHECK( swing.amount( 60000 ) == 0 );
+    swing.start( 2000 );
+    CHECK( swing.amount( 2090 ) == Approx( 1 ) );
+    swing.reset();
+    CHECK( swing.amount( 2090 ) == 0 );
+    // Unsigned SDL ticks wrap without extending or breaking a strike.
+    swing.start( 0xffffffd0U );
+    CHECK( swing.amount( 42 ) == Approx( 1 ) );
+    CHECK( swing.amount( 252 ) == 0 );
+}
 #endif

@@ -42,6 +42,8 @@ class dialogue_window
         void add_history_separator();
 
         void set_responses( const std::vector<talk_data> &responses );
+        /** Owned text for alternative dialogue presentations. */
+        std::string history_text() const;
 
         void set_up_scrolling( input_context &ctxt ) const;
 

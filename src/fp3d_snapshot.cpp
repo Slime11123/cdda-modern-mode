@@ -23,6 +23,7 @@
 #include "enums.h"
 #include "field.h"
 #include "field_type.h"
+#include "fp3d_camera.h"
 #include "item.h"
 #include "item_location.h"
 #include "itype.h"
@@ -48,18 +49,18 @@ float city_building_height( const oter_t &terrain )
         return 0;
     }
     if( land == "residential_multi" || land == "residential_high" ) {
-        return 9;
+        return 3 * fp3d_camera::floor_height;
     }
     if( land == "industrial" || land == "urban_public_institutional" ) {
-        return 6;
+        return 2 * fp3d_camera::floor_height;
     }
     if( land == "commercial" ) {
-        return 4.5f;
+        return 1.5f * fp3d_camera::floor_height;
     }
     if( land.compare( 0, 12, "residential_" ) == 0 ||
         terrain.has_flag( oter_flags::has_sidewalk ) || id.find( "house" ) != std::string::npos ||
         id.find( "apartment" ) != std::string::npos ) {
-        return 3;
+        return fp3d_camera::floor_height;
     }
     return 0;
 }
@@ -284,6 +285,7 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
     if( tile.get_item_count() > 0 && tile.get_field().displayed_field_type()->display_items &&
         here.could_see_items( p, you ) ) {
         sprite image = describe_item( tile.get_uppermost_item(), here.get_abs( p ) );
+        image.multiple_items = tile.get_item_count() > 1;
         image.height = .7f;
         scene.sprites.push_back( std::move( image ) );
     }
@@ -318,7 +320,7 @@ void prepare_view( avatar &you, map &here )
         here.get_abs( p + tripoint_rel_ms( radius, radius, 0 ) ) );
 }
 
-scene_snapshot capture( const avatar &you, const map &here, int above, int below )
+scene_snapshot capture( avatar &you, const map &here, int above, int below )
 {
     const auto started = std::chrono::steady_clock::now();
     // Equipment and body state cannot change during this synchronous capture.

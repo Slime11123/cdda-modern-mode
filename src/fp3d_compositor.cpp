@@ -21,12 +21,14 @@
 #include "game.h"
 #include "fp3d_camera.h"
 #include "fp3d_input.h"
+#include "fp3d_entry.h"
 #include "imgui/imgui.h"
 #include "fp3d_inventory.h"
 #include "fp3d_materials.h"
 #include "fp3d_scene.h"
 #include "fp3d_snapshot.h"
 #include "sdltiles.h"
+#include "ui_manager.h"
 #include "input.h"
 #include "output.h"
 
@@ -44,6 +46,8 @@ GLuint color_texture = 0;
 GLuint depth_buffer = 0;
 SDL_Texture_Ptr menu_background;
 bool enabled = false;
+bool modern_2d = false;
+bool world_input = false;
 bool panel_input = false;
 bool available = false;
 bool draw_permitted = true;
@@ -64,6 +68,8 @@ unsigned published_generation = 0;
 unsigned prepared_generation = 0;
 unsigned prepared_material_revision = 0;
 fp3d_camera::follower camera;
+fp3d_camera::swing held_swing;
+bool swing_pending = false;
 std::optional<tripoint_abs_ms> accepted_walk;
 float viewport_x = 0;
 float viewport_y = 0;
@@ -286,11 +292,15 @@ bool process_event( const SDL_Event &event )
         return false;
     }
     if( event.type == SDL_WINDOWEVENT ) {
+        if( event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ) {
+            held_swing.reset();
+            swing_pending = false;
+        }
         sync_mouse();
     }
     // Gameplay uses key codes. Discard delayed composition/text messages so
     // an IME prefix cannot become a second game command after capture starts.
-    if( captures_game_input() ) {
+    if( captures_game_input() || modern_2d_input() ) {
         if( event.type == SDL_TEXTINPUT || event.type == SDL_TEXTEDITING ) {
             return true;
         }
@@ -333,12 +343,18 @@ bool process_event( const SDL_Event &event )
         return true; // Never let a world click become native 2D auto-travel.
     }
     if( event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_F5 ) {
-        if( !event.key.repeat && available ) {
-            enabled = !enabled;
+        if( !event.key.repeat ) {
+            const auto next = fp3d_input::next_mode( controls() );
+            enabled = next == fp3d_input::mode::first_person_3d && available;
+            modern_2d = next == fp3d_input::mode::modern_2d;
+            fp3d_input::world_gestures().cancel();
+            ui_manager::invalidate_all_ui_adaptors();
             if( g ) {
-                g->invalidate_main_ui_adaptor();
+                g->mark_main_ui_adaptor_resize();
             }
             camera.reset();
+            held_swing.reset();
+            swing_pending = false;
             if( latest_scene ) {
                 camera.confirm( latest_scene->origin, SDL_GetTicks() );
             }
@@ -362,9 +378,27 @@ bool captures_game_input()
            SDL_GetKeyboardFocus() == window;
 }
 
+fp3d_input::mode controls()
+{
+    return !requested() ? fp3d_input::mode::original_2d :
+           enabled ? fp3d_input::mode::first_person_3d :
+           modern_2d ? fp3d_input::mode::modern_2d : fp3d_input::mode::original_2d;
+}
+
+bool modern_2d_input()
+{
+    return controls() == fp3d_input::mode::modern_2d && world_input && window &&
+           SDL_GetKeyboardFocus() == window;
+}
+
 bool covers_map( const tripoint_abs_ms &center )
 {
-    return available && enabled && draw_permitted && latest_scene && latest_scene->origin == center;
+    return active() && latest_scene && latest_scene->origin == center;
+}
+
+bool active()
+{
+    return available && enabled && draw_permitted;
 }
 
 bool turn_based()
@@ -418,6 +452,11 @@ std::vector<std::string> hud_lines()
     lines.push_back( target && !reachable ? "目标超出触及范围 / 请靠近并保持同层" :
                      "Tab 面板 / Q 行动轮盘 / Alt 状态 / F6 键位" );
     return lines;
+}
+
+fp3d_hud::data hud_data()
+{
+    return latest_scene ? latest_scene->hud : fp3d_hud::data{};
 }
 
 bool interaction_available()
@@ -526,9 +565,10 @@ float heading()
 void set_viewport( int x, int y, int width, int height, int display_width, int display_height )
 {
     if( display_width > 0 && display_height > 0 ) {
+        const int effective_width = enabled ? display_width - x : width;
         viewport_x = static_cast<float>( x ) / display_width;
         viewport_y = static_cast<float>( y ) / display_height;
-        viewport_width = static_cast<float>( width ) / display_width;
+        viewport_width = static_cast<float>( effective_width ) / display_width;
         viewport_height = static_cast<float>( height ) / display_height;
     }
 }
@@ -536,6 +576,7 @@ void set_viewport( int x, int y, int width, int height, int display_width, int d
 void set_input_context( const std::string &category )
 {
     panel_input = category == "FP3D_PANEL";
+    world_input = category == "DEFAULTMODE";
     if( category == "MAIN_MENU" ) { fp3d_modern_ui::clear_resume(); }
     if( !requested() ) {
         return;
@@ -545,12 +586,17 @@ void set_input_context( const std::string &category )
     const bool was_permitted = draw_permitted;
     draw_permitted = !fp3d_modern_ui::transfer_pending() &&
                      ( category == "DEFAULTMODE" || category == "FP3D_BUILD" || category == "MAIN_MENU" );
-    if( was_permitted && !draw_permitted ) { menu_background = copy_view(); }
+    if( was_permitted && !draw_permitted ) {
+        menu_background = copy_view();
+        held_swing.reset();
+        swing_pending = false;
+    }
     if( draw_permitted ) { menu_background.reset(); }
     if( was_permitted != draw_permitted && g ) {
         g->invalidate_main_ui_adaptor();
     }
     if( category == "MAIN_MENU" ) {
+        fp3d_entry::reset();
         fp3d_inventory::clear_slots();
         latest_scene.reset();
         camera.reset();
@@ -591,6 +637,12 @@ void begin_action()
     accepted_walk.reset();
 }
 
+void melee_swing()
+{
+    // Start on the first displayed frame, after native combat/world processing.
+    swing_pending = true;
+}
+
 void movement_finished( const tripoint_abs_ms &before, const tripoint_abs_ms &after,
                         const tripoint_rel_ms &expected )
 {
@@ -610,14 +662,15 @@ bool tick()
 {
     sync_mouse();
     if( requested() && window ) {
-        std::string title = enabled ? "CDDA 0.I-1 - OpenGL 3D probe (F5: 2D)" :
-                            "CDDA 0.I-1 - 2D 原版操作 (F5: 3D)";
+        std::string title = enabled ? "CDDA 0.I-1 - 3D模式 (F5: 2D经典 | F6: 按键设置)" :
+                            modern_2d ? "CDDA 0.I-1 - 2D现代模式 / WASD (F5: 3D | F6: 按键设置)" :
+                            "CDDA 0.I-1 - 2D经典模式 (F5: 2D现代 | F6: 按键设置)";
         if( enabled && latest_scene ) {
             const auto &p = latest_scene->origin;
             title = "CDDA 0.I-1 - 3D map [" + std::to_string( p.x() ) + "," +
                     std::to_string( p.y() ) + "," + std::to_string( p.z() ) + "] V:" +
                     std::to_string( latest_scene->visible ) + " M:" +
-                    std::to_string( latest_scene->remembered ) + " (3D 操作 | F5: 2D | F6: 按键设置)";
+                    std::to_string( latest_scene->remembered ) + " (3D模式 | F5: 2D经典 | F6: 按键设置)";
         }
         static const bool performance_qa = []() {
             const char *value = std::getenv( "CDDA_FP3D_FRAME_SELFTEST" );
@@ -631,7 +684,7 @@ bool tick()
         }
     }
     if( selftest && available && SDL_GetTicks() >= next_toggle ) {
-        if( toggles < 100 ) {
+        if( toggles < 150 ) {
             SDL_Event event{};
             event.type = SDL_KEYDOWN;
             event.key.windowID = SDL_GetWindowID( window );
@@ -641,9 +694,9 @@ bool tick()
             }
             next_toggle = SDL_GetTicks() + 100;
         } else if( test_step == 0 ) {
-            DebugLog( D_INFO, D_MAIN ) << "fp3d: SELFTEST 50 F5 round trips, frames=" << frames
+            DebugLog( D_INFO, D_MAIN ) << "fp3d: SELFTEST 50 three-mode F5 round trips, frames=" << frames
                                        << ", target_allocations=" << allocations;
-            if( enabled || frames == 0 || allocations != 1 ) {
+            if( enabled || modern_2d || frames == 0 || allocations != 1 ) {
                 disable( "selftest toggle/resource invariant failed" );
                 return false;
             }
@@ -682,12 +735,12 @@ bool tick()
                                           "starting continuous cube render";
         }
     }
-    return available && enabled && draw_permitted;
+    return active();
 }
 
 void compose()
 {
-    if( !available || !enabled || !draw_permitted ) {
+    if( !active() ) {
         return;
     }
     if( latest_scene && ( prepared_generation != latest_scene->render_generation ||
@@ -758,9 +811,14 @@ void compose()
         if( latest_scene ) {
             fp3d_materials::bind();
             glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+            if( swing_pending ) {
+                held_swing.start( SDL_GetTicks() );
+                swing_pending = false;
+            }
             fp3d_scene::draw( *latest_scene, yaw, pitch,
                               static_cast<float>( texture_width ) / texture_height,
-                              camera.relative_to( latest_scene->origin, SDL_GetTicks() ), construction_preview, interaction_available() );
+                              camera.relative_to( latest_scene->origin, SDL_GetTicks() ), construction_preview,
+                              interaction_available(), held_swing.amount( SDL_GetTicks() ) );
             fp3d_materials::unbind();
         } else {
             draw_cube();
@@ -819,6 +877,7 @@ void compose()
 
 void release()
 {
+    fp3d_entry::reset();
     fp3d_modern_ui::clear_resume();
     menu_background.reset();
     fp3d_materials::release();
@@ -846,10 +905,13 @@ void release()
     window = nullptr;
     available = enabled = selftest = false;
     panel_input = false;
+    modern_2d = world_input = false;
     draw_permitted = true;
     latest_scene.reset();
     construction_preview.reset();
     camera.reset();
+    held_swing.reset();
+    swing_pending = false;
     accepted_walk.reset();
 }
 } // namespace fp3d_compositor

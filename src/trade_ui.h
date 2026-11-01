@@ -26,6 +26,10 @@
 
 class npc;
 class trade_ui;
+namespace fp3d_trade
+{
+class window;
+}
 
 class trade_selector : public inventory_drop_selector
 {
@@ -40,6 +44,9 @@ class trade_selector : public inventory_drop_selector
         void execute();
         void on_toggle() override;
         select_t to_trade() const;
+        // Includes contents hidden by the text inventory's collapsed containers.
+        std::vector<inventory_entry *> trade_entries() const;
+        bool set_trade_count( const item_location &loc, size_t count );
         void resize( point const &size, point const &origin );
         shared_ptr_fast<ui_adaptor> get_ui() const;
         input_context const *get_ctxt() const;
@@ -71,6 +78,7 @@ class trade_preset : public inventory_selector_preset
 
 class trade_ui
 {
+        friend class fp3d_trade::window;
     public:
         using pane_t = trade_selector;
         using party_t = Character;
@@ -96,6 +104,7 @@ class trade_ui
         trade_result_t perform_trade();
         void recalc_values_cpane();
         void autobalance();
+        void autobalance( inventory_entry &entry );
         void bank_balance();
         void resize();
 
@@ -128,6 +137,8 @@ class trade_ui
 
         void _process( event const &ev );
         bool _confirm_trade() const;
+        std::pair<bool, std::string> _trade_confirmation() const;
+        trade_result_t _result( bool accepted ) const;
         void _draw_header();
 };
 

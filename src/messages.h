@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "color.h"
 #include "coords_fwd.h"
 #include "debug.h"
 #include "enums.h"
@@ -25,7 +26,14 @@ class window;
 namespace Messages
 {
 
+struct recent_message_info {
+    std::string timestamp;
+    std::string text;
+    nc_color color;
+};
+
 std::vector<std::pair<std::string, std::string>> recent_messages( size_t count );
+std::vector<recent_message_info> recent_messages_with_color( size_t count );
 bool has_debug_filter( debugmode::debug_filter type );
 void add_msg( std::string msg );
 void add_msg( const game_message_params &params, std::string msg );

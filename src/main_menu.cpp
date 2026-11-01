@@ -32,6 +32,7 @@
 #include "debug.h"
 #include "enums.h"
 #include "filesystem.h"
+#include "fp3d_compositor.h"
 #include "game.h"
 #include "gamemode.h"
 #include "get_version.h"
@@ -84,6 +85,24 @@ std::string main_menu::queued_save_id_to_load;
 static int getopt( main_menu_opts o )
 {
     return static_cast<int>( o );
+}
+
+static bool vertical_main_menu()
+{
+#if defined(TILES) && defined(ENABLE_FP3D)
+    return fp3d_compositor::controls() == fp3d_input::mode::first_person_3d;
+#else
+    return false;
+#endif
+}
+
+int main_menu::sidebar_width() const
+{
+    int width = 18;
+    for( const std::string &item : vMenuItems ) {
+        width = std::max( width, utf8_width( remove_color_tags( shortcut_text( c_white, item ) ) ) + 6 );
+    }
+    return width;
 }
 
 void main_menu::on_move() const
@@ -242,12 +261,21 @@ void main_menu::display_sub_menu( int sel, const point &bottom_left, int sel_lin
     }
 
     point top_left( bottom_left + point( 0, -( sub_opts.size() + 1 ) ) );
+    if( vertical_main_menu() ) {
+        xlen = std::min( xlen, TERMX - bottom_left.x - 4 );
+        top_left = point( bottom_left.x, std::min( bottom_left.y,
+                          std::max( 0, TERMY - 4 - static_cast<int>( sub_opts.size() ) ) ) );
+    }
 
     // If sel2 somehow outgrew the options vector, clamp it back.
-    sel2 = std::min<int>( sel2, sub_opts.size() );
+    sel2 = clamp( sel2, 0, static_cast<int>( sub_opts.size() ) - 1 );
 
     int height = sub_opts.size();
-    if( top_left.y < 0 ) {
+    if( vertical_main_menu() ) {
+        height = std::min( height, TERMY - 4 - top_left.y );
+        sub_opt_off = clamp( sub_opt_off, std::max( 0, sel2 - height + 1 ), sel2 );
+        sub_opt_off = std::min( sub_opt_off, static_cast<int>( sub_opts.size() ) - height );
+    } else if( top_left.y < 0 ) {
         // Options don't fit screen. Decrease height till they do.
         height += top_left.y;
         top_left.y = 0;
@@ -275,12 +303,12 @@ void main_menu::display_sub_menu( int sel, const point &bottom_left, int sel_lin
         bool is_selection = sel2 == opt_index;
         std::string opt = ( is_selection ? "» " : "  " ) + sub_opts[opt_index];
         int padding = ( xlen + 2 ) - utf8_width( opt, true );
-        opt.append( padding, ' ' );
+        opt.append( std::max( 0, padding ), ' ' );
         nc_color clr = is_selection ? hilite( c_white ) : c_white;
         trim_and_print( w_sub, point( 1, y + 1 ), xlen + 2, clr, opt );
         inclusive_rectangle<point> rec( top_left + point( 1, y  + 1 ),
                                         top_left + point( xlen + 2, y + 1 ) );
-        main_menu_sub_button_map.emplace_back( rec, std::pair<int, int> { sel, y } );
+        main_menu_sub_button_map.emplace_back( rec, std::pair<int, int> { sel, opt_index } );
     }
     if( static_cast<size_t>( height ) != sub_opts.size() ) {
         draw_scrollbar( w_sub, sel2, height, sub_opts.size(), point::south, c_white,
@@ -294,12 +322,24 @@ void main_menu::print_menu( const catacurses::window &w_open, int iSel, const po
 {
     main_menu_button_map.clear();
 
-    // Clear Lines
-    werase( w_open );
-
     // Define window size
     int window_width = getmaxx( w_open );
     int window_height = getmaxy( w_open );
+
+    // Clear Lines
+    werase( w_open );
+
+    if( vertical_main_menu() ) {
+        draw_border( w_open, c_white );
+        const int sidebar = sidebar_width();
+        if( sidebar > 1 && sidebar < window_width - 2 ) {
+            wattron( w_open, c_white );
+            mvwvline( w_open, point( sidebar, 1 ), LINE_XOXO, window_height - 2 );
+            mvwaddch( w_open, point( sidebar, 0 ), LINE_OXXX );
+            mvwaddch( w_open, point( sidebar, window_height - 1 ), LINE_XXOX );
+            wattroff( w_open, c_white );
+        }
+    }
 
     // Draw horizontal line
     mvwhline( w_open, point( 1, window_height - 4 ), c_white, LINE_OXOX, window_width - 2 );
@@ -314,8 +354,12 @@ void main_menu::print_menu( const catacurses::window &w_open, int iSel, const po
     center_print( w_open, window_height - 1, c_light_cyan, string_format( _( "Tip of the day: %s" ),
                   vdaytip ) );
 
-    int iLine = 0;
-    const int iOffsetX = ( window_width - FULL_SCREEN_WIDTH ) / 2;
+    const bool vertical = vertical_main_menu();
+    int iLine = vertical ? std::min( window_height / 8,
+                                    std::max( 0, window_height - static_cast<int>( mmenu_title.size() ) - 5 ) ) : 0;
+    const int content_left = vertical ? sidebar_width() + 2 : 0;
+    const int iOffsetX = content_left + std::max( 0,
+                         ( window_width - content_left - FULL_SCREEN_WIDTH ) / 2 );
 
     if( get_option<bool>( "SEASONAL_TITLE" ) ) {
         switch( current_holiday ) {
@@ -323,7 +367,9 @@ void main_menu::print_menu( const catacurses::window &w_open, int iSel, const po
             case holiday::easter:
                 break;
             case holiday::halloween:
-                fold_and_print_from( w_open, point::zero, 30, 0, c_white, halloween_spider() );
+                if( !vertical ) {
+                    fold_and_print_from( w_open, point::zero, 30, 0, c_white, halloween_spider() );
+                }
                 fold_and_print_from( w_open, point( getmaxx( w_open ) - 25, offset.y - 8 ),
                                      25, 0, c_white, halloween_graves() );
                 break;
@@ -350,6 +396,27 @@ void main_menu::print_menu( const catacurses::window &w_open, int iSel, const po
     center_print( w_open, iLine, c_light_blue,
                   string_format( _( "Version: 0.I-1 (Ito-1) Stable Release" ),
                                  getVersionString() ) );
+
+    if( vertical ) {
+        const int width = sidebar_width();
+        const int step = window_height - 6 >= static_cast<int>( vMenuItems.size() ) * 2 ? 2 : 1;
+        const int top = std::max( 1, ( window_height - 4 -
+                                       static_cast<int>( vMenuItems.size() ) * step ) / 2 );
+        const point origin( getbegx( w_open ), getbegy( w_open ) );
+        for( size_t i = 0; i < vMenuItems.size(); ++i ) {
+            const int y = top + static_cast<int>( i ) * step;
+            const bool selected = static_cast<int>( i ) == iSel;
+            const std::string label = string_format( "[%s]", shortcut_text(
+                                          selected ? hilite( c_yellow ) : c_yellow, vMenuItems[i] ) );
+            trim_and_print( w_open, point( 2, y ), width - 2,
+                            selected ? hilite( c_white ) : c_white, label );
+            main_menu_button_map.emplace_back( inclusive_rectangle<point>(
+                                                   origin + point( 1, y ), origin + point( width - 1, y + step - 1 ) ), i );
+        }
+        wnoutrefresh( w_open );
+        display_sub_menu( iSel, origin + point( width + 2, top + iSel * step ), sel_line );
+        return;
+    }
 
     int menu_length = 0;
     for( size_t i = 0; i < vMenuItems.size(); ++i ) {
@@ -400,7 +467,7 @@ holiday main_menu::get_holiday_from_time()
 
 void main_menu::init_windows()
 {
-    if( LAST_TERM == point( TERMX, TERMY ) ) {
+    if( LAST_TERM == point( TERMX, TERMY ) && last_vertical_menu == vertical_main_menu() ) {
         return;
     }
 
@@ -410,8 +477,8 @@ void main_menu::init_windows()
     int extra_h = ( ( TERMY - FULL_SCREEN_HEIGHT ) / 2 ) - 1;
     extra_w = ( extra_w > 0 ? extra_w : 0 );
     extra_h = ( extra_h > 0 ? extra_h : 0 );
-    const int total_w = FULL_SCREEN_WIDTH + extra_w;
-    const int total_h = FULL_SCREEN_HEIGHT + extra_h;
+    const int total_w = vertical_main_menu() ? TERMX : FULL_SCREEN_WIDTH + extra_w;
+    const int total_h = vertical_main_menu() ? TERMY : FULL_SCREEN_HEIGHT + extra_h;
 
     // position of window within main display
     const point p0( ( TERMX - total_w ) / 2, ( TERMY - total_h ) / 2 );
@@ -423,6 +490,7 @@ void main_menu::init_windows()
     // please update MOTD and credits to indicate how long they can be.
 
     LAST_TERM = point( TERMX, TERMY );
+    last_vertical_menu = vertical_main_menu();
 }
 
 void main_menu::init_strings()
@@ -539,6 +607,21 @@ void main_menu::init_strings()
 
 void main_menu::display_text( const std::string &text, const std::string &title, int &selected )
 {
+    if( vertical_main_menu() ) {
+        const point origin( getbegx( w_open ) + sidebar_width() + 2, getbegy( w_open ) + 1 );
+        const int width = getmaxx( w_open ) - sidebar_width() - 3;
+        const int height = getmaxy( w_open ) - 5;
+        catacurses::window border = catacurses::newwin( height, width, origin );
+        catacurses::window content = catacurses::newwin( height - 2, width - 2,
+                                     origin + point( 1, 1 ) );
+        draw_border( border, BORDER_COLOR, title );
+        fold_and_print_from( content, point::zero, width - 2, selected, c_light_gray, text );
+        draw_scrollbar( border, selected, height - 2, foldstring( text, width - 2 ).size(),
+                        point::south, BORDER_COLOR, true );
+        wnoutrefresh( border );
+        wnoutrefresh( content );
+        return;
+    }
     const int w_open_height = getmaxy( w_open );
     const int b_height = FULL_SCREEN_HEIGHT - clamp( ( FULL_SCREEN_HEIGHT - w_open_height ) + 4, 0, 4 );
     const int vert_off = clamp( ( w_open_height - FULL_SCREEN_HEIGHT ) / 2, getbegy( w_open ), TERMY );
@@ -633,6 +716,7 @@ bool main_menu::opening_screen()
 
     ui_adaptor ui;
     ui.on_redraw( [&]( const ui_adaptor & ) {
+        init_windows();
         print_menu( w_open, sel1, menu_offset, sel_line );
     } );
     ui.on_screen_resize( [this]( ui_adaptor & ui ) {
@@ -716,7 +800,8 @@ bool main_menu::opening_screen()
                         on_move();
                     }
                     if( action == "SELECT" &&
-                        ( sel1 == getopt( main_menu_opts::HELP ) || sel1 == getopt( main_menu_opts::QUIT ) ) ) {
+                        ( sel1 == getopt( main_menu_opts::HELP ) || sel1 == getopt( main_menu_opts::QUIT ) ||
+                          ( vertical_main_menu() && sel1 == getopt( main_menu_opts::TUTORIAL ) ) ) ) {
                         action = "CONFIRM";
                     }
                     ui_manager::redraw();
@@ -771,8 +856,14 @@ bool main_menu::opening_screen()
                         }
                     } else if( action == "DOWN" || action == "PAGE_DOWN" || action == "SCROLL_DOWN" ) {
                         int effective_height = sel_line + FULL_SCREEN_HEIGHT - 2;
-                        if( ( opt == main_menu_opts::CREDITS && effective_height < mmenu_credits_len ) ||
-                            ( opt == main_menu_opts::MOTD && effective_height < mmenu_motd_len ) ) {
+                        if( vertical_main_menu() ) {
+                            effective_height = sel_line + getmaxy( w_open ) - 7;
+                        }
+                        const int text_lines = vertical_main_menu() ? foldstring(
+                                                   opt == main_menu_opts::CREDITS ? mmenu_credits : mmenu_motd,
+                                                   getmaxx( w_open ) - sidebar_width() - 5 ).size() :
+                                               ( opt == main_menu_opts::CREDITS ? mmenu_credits_len : mmenu_motd_len );
+                        if( effective_height < text_lines ) {
                             sel_line++;
                         }
                     }

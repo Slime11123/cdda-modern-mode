@@ -142,6 +142,11 @@ bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot )
         return false;
     }
     add( *base, image.id );
+    if( image.kind == fp3d_snapshot::sprite_kind::item && image.multiple_items ) {
+        if( const tile_type *highlight = selected->find_tile_type( "highlight_item" ) ) {
+            add( *highlight, "highlight_item" );
+        }
+    }
     for( const auto &overlay : image.overlays ) {
         if( const tile_type *tile = resolve_overlay( *selected, image.male, overlay.first,
                                     overlay.second ) ) {
@@ -296,6 +301,9 @@ std::string sprite_key( const fp3d_snapshot::sprite &image )
     };
     append( image.id );
     append( image.variant );
+    if( image.kind == fp3d_snapshot::sprite_kind::item && image.multiple_items ) {
+        append( "highlight_item" );
+    }
     for( const auto &overlay : image.overlays ) {
         append( overlay.first );
         append( overlay.second );

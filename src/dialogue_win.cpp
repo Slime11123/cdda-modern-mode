@@ -209,6 +209,15 @@ void dialogue_window::set_responses( const std::vector<talk_data> &responses )
     responses_list->create_entries( responses );
 }
 
+std::string dialogue_window::history_text() const
+{
+    std::string text;
+    for( const history_message &message : history ) {
+        text += message.text + "\n";
+    }
+    return text;
+}
+
 void dialogue_window::set_responses_debug( const std::vector<std::string> &responses )
 {
     responses_debug = responses;

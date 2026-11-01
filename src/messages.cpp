@@ -376,6 +376,21 @@ class messages_impl
             return result;
         }
 
+        std::vector<Messages::recent_message_info> recent_messages_with_color( size_t count ) const {
+            count = std::min( count, messages.size() );
+
+            std::vector<Messages::recent_message_info> result;
+            result.reserve( count );
+
+            const int offset = static_cast<std::ptrdiff_t>( messages.size() - count );
+            std::transform( begin( messages ) + offset, end( messages ), back_inserter( result ),
+            [this]( const game_message &msg ) {
+                return Messages::recent_message_info{ to_string_time_of_day( msg.timestamp_in_turns ),
+                       msg.get_with_count(), msg.get_color( curmes ) };
+            } );
+            return result;
+        }
+
         /** Refresh the cooldown timers, removing elapsed ones and making new ones if needed.
          * @param message The current message that needs to be checked.
          * @param flags Flags pertaining to the message.
@@ -434,6 +449,11 @@ bool message_exceeds_ttl( const game_message &message )
 std::vector<std::pair<std::string, std::string>> Messages::recent_messages( const size_t count )
 {
     return player_messages.recent_messages( count );
+}
+
+std::vector<Messages::recent_message_info> Messages::recent_messages_with_color( const size_t count )
+{
+    return player_messages.recent_messages_with_color( count );
 }
 
 bool Messages::has_debug_filter( debugmode::debug_filter type )

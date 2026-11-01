@@ -4,10 +4,15 @@
 #include "cata_catch.h"
 #include "calendar.h"
 #include "fp3d_snapshot.h"
+#include "fp3d_input.h"
+#include "cata_scope_helpers.h"
+#include "game.h"
+#include "input.h"
 #include "item.h"
 #include "map.h"
 #include "map_helpers.h"
 #include "monster.h"
+#include "npc.h"
 #include "player_helpers.h"
 #include "rng.h"
 #include "type_id.h"
@@ -271,5 +276,216 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         add( 0, -5, 0, terrain_kind::wall );
         REQUIRE( fp3d_targeting::ray( scene, 0, 0 ) );
     }
+}
+TEST_CASE( "fp3d_reticle_attack_selects_native_melee_or_targeted_smash",
+           "[fp3d][interaction][combat]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( p, ter_str_id( "t_window" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto target = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, 0 );
+    REQUIRE( target );
+    REQUIRE( target->position == here.get_abs( p ) );
+    const auto clock = calendar::turn;
+    const auto engine = rng_get_engine();
+    const int moves = you.get_moves();
+    const auto smash = fp3d_interaction::resolve( "FP3D_ATTACK", target, you, here );
+    REQUIRE( smash );
+    CHECK( smash->action == ACTION_SMASH );
+    CHECK( smash->position == p );
+    CHECK_FALSE( smash->targeted_melee );
+    auto stale = *target;
+    stale.position += tripoint_rel_ms::north;
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_ATTACK", stale, you, here ) );
+    stale = *target;
+    stale.position += tripoint_rel_ms::above;
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_ATTACK", stale, you, here ) );
+    stale = *target;
+    stale.origin += tripoint_rel_ms::east;
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_ATTACK", stale, you, here ) );
+    CHECK( rng_get_engine() == engine );
+    CHECK( calendar::turn == clock );
+    CHECK( you.get_moves() == moves );
+
+    here.ter_set( p, ter_str_id( "t_floor" ) );
+    monster &zed = spawn_test_monster( "mon_zombie", p );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto creature = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, 0 );
+    REQUIRE( creature );
+    REQUIRE( creature->type == fp3d_targeting::kind::creature );
+    const auto attack = fp3d_interaction::resolve( "FP3D_ATTACK", creature, you, here );
+    REQUIRE( attack );
+    CHECK( attack->targeted_melee );
+    CHECK( attack->position == zed.pos_bub( here ) );
+    item gun( itype_id( "glock_19" ) );
+    gun.ammo_set( itype_id( "9mm" ), 10 );
+    you.set_wielded_item( gun );
+    const auto gun_melee = fp3d_interaction::resolve( "FP3D_ATTACK", creature, you, here );
+    REQUIRE( gun_melee );
+    CHECK( gun_melee->targeted_melee );
+    CHECK( gun_melee->action != ACTION_FIRE );
+    CHECK( you.get_wielded_item()->ammo_remaining() == 10 );
+    const auto aim = fp3d_interaction::resolve( "FP3D_AIM", creature, you, here );
+    REQUIRE( aim );
+    CHECK( aim->action == ACTION_FIRE );
+}
+
+TEST_CASE( "fp3d_melee_cancel_protects_neutral_and_friendly_npcs_and_clears_held_attack",
+           "[fp3d][interaction][combat][npc]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    on_out_of_scope cleanup( []() { clear_npcs(); } );
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    npc &person = spawn_npc( point_bub_ms( 65, 64 ), "test_talker" );
+    for( const auto attitude : { NPCATT_NULL, NPCATT_FOLLOW } ) {
+        person.set_attitude( attitude );
+        fp3d_snapshot::prepare_view( you, here );
+        REQUIRE( you.sees( here, person ) );
+        REQUIRE_FALSE( person.is_enemy() );
+        auto &input = fp3d_input::world_gestures();
+        REQUIRE( input.event( input_event( MouseInput::LeftButtonPressed, input_event_t::mouse ), true, 1000 ) );
+        CHECK( input.poll( 1000 ) == "FP3D_ATTACK" );
+        const int hp = person.get_hp();
+        const int moves = you.get_moves();
+        const int stamina = you.get_stamina();
+        const auto origin = you.pos_abs();
+        const auto clock = calendar::turn;
+        const auto engine = rng_get_engine();
+        // Native query_popup cancels in test mode; never auto-accept danger.
+        CHECK_FALSE( fp3d_interaction::melee( you, here, person.pos_bub( here ) ) );
+        CHECK( input.poll( 2000 ).empty() );
+        CHECK( person.get_attitude() == attitude );
+        CHECK( person.get_hp() == hp );
+        CHECK( you.get_moves() == moves );
+        CHECK( you.get_stamina() == stamina );
+        CHECK( you.pos_abs() == origin );
+        CHECK( calendar::turn == clock );
+        CHECK( rng_get_engine() == engine );
+    }
+}
+
+TEST_CASE( "fp3d_melee_attacks_hostile_npc_without_displacement_or_dialogue",
+           "[fp3d][interaction][combat][npc]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    on_out_of_scope cleanup( []() { clear_npcs(); } );
+    set_time_to_day();
+    g->set_safe_mode( SAFE_MODE_OFF );
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    npc &person = spawn_npc( point_bub_ms( 65, 64 ), "test_talker" );
+    person.set_attitude( NPCATT_KILL );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( you.sees( here, person ) );
+    REQUIRE( person.is_enemy() );
+    you.set_moves( 1000 );
+    const auto origin = you.pos_abs();
+    const auto position = person.pos_abs();
+    const auto clock = calendar::turn;
+    REQUIRE( fp3d_interaction::melee( you, here, person.pos_bub( here ) ) );
+    CHECK( you.get_moves() < 1000 );
+    CHECK( you.pos_abs() == origin );
+    CHECK( person.pos_abs() == position );
+    CHECK( calendar::turn == clock );
+    CHECK_FALSE( fp3d_interaction::melee( you, here, you.pos_bub( here ) ) );
+    CHECK_FALSE( fp3d_interaction::melee( you, here, tripoint_bub_ms( 65, 62, 0 ) ) );
+}
+TEST_CASE( "fp3d_smash_reticle_selects_furniture_and_ground_items_without_movement",
+           "[fp3d][interaction][combat]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    const auto origin = you.pos_abs();
+    SECTION( "furniture" ) {
+        here.furn_set( p, furn_str_id( "f_crate_c" ) );
+    }
+    SECTION( "ground item" ) {
+        here.add_item_or_charges( p, item( itype_id( "rock" ) ) );
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    const auto target = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, 55 );
+    REQUIRE( target );
+    REQUIRE( target->position == here.get_abs( p ) );
+    const auto engine = rng_get_engine();
+    const auto attack = fp3d_interaction::resolve( "FP3D_ATTACK", target, you, here );
+    REQUIRE( attack );
+    CHECK( attack->action == ACTION_SMASH );
+    CHECK( attack->position == p );
+    CHECK_FALSE( attack->targeted_melee );
+    CHECK( you.pos_abs() == origin );
+    CHECK( rng_get_engine() == engine );
+}
+
+TEST_CASE( "fp3d_explicit_melee_never_redirects_stunned_input_or_attacks_an_empty_tile",
+           "[fp3d][interaction][combat]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    g->set_safe_mode( SAFE_MODE_OFF );
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    monster &zed = spawn_test_monster( "mon_zombie", you.pos_bub( here ) + tripoint_rel_ms::north );
+    monster &other = spawn_test_monster( "mon_zombie", you.pos_bub( here ) + tripoint_rel_ms::east );
+    fp3d_snapshot::prepare_view( you, here );
+    you.add_effect( efftype_id( "stunned" ), 1_minutes );
+    you.set_moves( 1000 );
+    const auto origin = you.pos_abs();
+    const int other_hp = other.get_hp();
+    REQUIRE( fp3d_interaction::melee( you, here, zed.pos_bub( here ) ) );
+    CHECK( you.get_moves() < 1000 );
+    CHECK( you.pos_abs() == origin );
+    CHECK( other.get_hp() == other_hp );
+    const int moves = you.get_moves();
+    const auto engine = rng_get_engine();
+    CHECK_FALSE( fp3d_interaction::melee( you, here, you.pos_bub( here ) + tripoint_rel_ms::south ) );
+    CHECK( you.get_moves() == moves );
+    CHECK( rng_get_engine() == engine );
+    CHECK( you.pos_abs() == origin );
+}
+
+TEST_CASE( "fp3d_melee_cancel_also_protects_friendly_monsters", "[fp3d][interaction][combat]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    monster &pet = spawn_test_monster( "mon_zombie", you.pos_bub( here ) + tripoint_rel_ms::north );
+    pet.friendly = -1;
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( pet.attitude_to( you ) != Creature::Attitude::HOSTILE );
+    const int hp = pet.get_hp();
+    const int moves = you.get_moves();
+    const auto origin = you.pos_abs();
+    const auto position = pet.pos_abs();
+    const auto engine = rng_get_engine();
+    CHECK_FALSE( fp3d_interaction::melee( you, here, pet.pos_bub( here ) ) );
+    CHECK( pet.get_hp() == hp );
+    CHECK( pet.pos_abs() == position );
+    CHECK( you.pos_abs() == origin );
+    CHECK( you.get_moves() == moves );
+    CHECK( rng_get_engine() == engine );
 }
 #endif

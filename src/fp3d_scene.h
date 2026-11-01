@@ -34,7 +34,8 @@ draw_statistics statistics();
 void release();
 // Draws only owned snapshot data within the compositor's saved GL state/FBO.
 void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
-           float aspect, fp3d_camera::offset offset, const std::optional<blueprint> &preview = std::nullopt, bool interactable = false );
+           float aspect, fp3d_camera::offset offset, const std::optional<blueprint> &preview = std::nullopt,
+           bool interactable = false, float swing = 0 );
 } // namespace fp3d_scene
 #endif
 #endif // CATA_SRC_FP3D_SCENE_H

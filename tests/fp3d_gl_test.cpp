@@ -19,11 +19,15 @@
 #include "avatar.h"
 #include "cata_imgui.h"
 #include "fp3d_modern_ui.h"
+#include "fp3d_dialogue.h"
+#include "fp3d_trade.h"
 #include "fp3d_quick_menu.h"
 #include "fp3d_interaction.h"
 #include "mission.h"
 #include "character_id.h"
 #include "npc.h"
+#include "npc_opinion.h"
+#include "npctrade.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "imgui/imgui_impl_sdl2.h"
@@ -42,6 +46,8 @@
 #include "color.h"
 #include "fp3d_materials.h"
 #include "fp3d_snapshot.h"
+#include "fp3d_entry.h"
+#include "sdl_font.h"
 #include "fp3d_scene.h"
 #include "fp3d_construction.h"
 #include "construction.h"
@@ -128,6 +134,135 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             return pixels;
         };
         const auto baseline = render();
+        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+            // Exercise the actual SDL text/opacity path and renderer state,
+            // including expiry, against a rendered world in a hidden window.
+            clear_map();
+            clear_avatar();
+            avatar &you = get_avatar();
+            you.name = "JOSHUA MCCORKLE";
+            you.custom_profession = "伐木工";
+            REQUIRE( TTF_Init() == 0 );
+            {
+                restore_on_out_of_scope restore_palette( windowsPalette );
+                color_loader<SDL_Color>().load( windowsPalette );
+                const std::string typeface = std::filesystem::exists( "C:/Windows/Fonts/msyh.ttc" ) ?
+                                             "C:/Windows/Fonts/msyh.ttc" : "data/font/unifont.ttf";
+                CachedTTFFont entry_font( 12, 24, windowsPalette, typeface, 20, true );
+                for( const auto &size : { point( 1280, 720 ), point( 1920, 1080 ) } ) {
+                    SDL_SetWindowSize( window.get(), size.x, size.y );
+                    REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+                    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+                    const auto empty = render();
+                    fp3d_entry::begin( you );
+                    const Uint32 started = SDL_GetTicks();
+                    for( const int elapsed : { 0, 450, 1500, 5000, 5750, 6550 } ) {
+                        const Uint32 now = SDL_GetTicks() - started;
+                        if( now < static_cast<Uint32>( elapsed ) ) {
+                            SDL_Delay( elapsed - now );
+                        }
+                        render( false );
+                        const SDL_Rect saved_clip{ 3, 4, width - 10, height - 12 };
+                        REQUIRE( SDL_RenderSetClipRect( renderer.get(), &saved_clip ) == 0 );
+                        REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 17, 31, 47, 101 ) == 0 );
+                        fp3d_entry::draw( renderer, geometry, entry_font, { 0, 0, width, height }, true );
+                        SDL_Rect restored_clip;
+                        SDL_RenderGetClipRect( renderer.get(), &restored_clip );
+                        CHECK( restored_clip.x == saved_clip.x );
+                        CHECK( restored_clip.y == saved_clip.y );
+                        CHECK( restored_clip.w == saved_clip.w );
+                        CHECK( restored_clip.h == saved_clip.h );
+                        float scale_x, scale_y;
+                        SDL_RenderGetScale( renderer.get(), &scale_x, &scale_y );
+                        CHECK( scale_x == 1.0f );
+                        CHECK( scale_y == 1.0f );
+                        Uint8 r, green, b, a;
+                        SDL_GetRenderDrawColor( renderer.get(), &r, &green, &b, &a );
+                        CHECK( r == 17 );
+                        CHECK( green == 31 );
+                        CHECK( b == 47 );
+                        CHECK( a == 101 );
+                        SDL_RenderSetClipRect( renderer.get(), nullptr );
+                        std::vector<Uint32> pixels( width * height );
+                        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                      pixels.data(), width * 4 ) == 0 );
+                        if( elapsed == 6550 ) {
+                            CHECK( pixels == empty );
+                        } else if( elapsed >= 450 ) {
+                            CHECK( pixels != empty );
+                        }
+                        if( elapsed == 1500 ) {
+                            CHECK( std::count_if( pixels.begin(), pixels.end(), []( Uint32 pixel ) {
+                                return ( pixel >> 24 ) > 220 && ( ( pixel >> 16 ) & 255 ) > 220 &&
+                                       ( ( pixel >> 8 ) & 255 ) > 220;
+                            } ) > 100 );
+                        }
+                        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                            SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                       pixels.data(), width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                            REQUIRE( image );
+                            const auto output = std::filesystem::path( directory ) /
+                                                ( "entry-" + std::to_string( height ) + "-" + std::to_string( elapsed ) + ".png" );
+                            CHECK( IMG_SavePNG( image.get(), output.u8string().c_str() ) == 0 );
+                        }
+                    }
+                }
+            }
+            TTF_Quit();
+            fp3d_entry::reset();
+            SDL_SetWindowSize( window.get(), 640, 480 );
+            REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+            fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+        }
+        {
+            const auto saved_scene = scene;
+            scene.cells.clear();
+            scene.sprites.clear();
+            fp3d_snapshot::sprite image;
+            image.kind = fp3d_snapshot::sprite_kind::item;
+            image.id = "rock";
+            image.position = tripoint_abs_ms( 0, -3, 0 );
+            image.height = 1;
+            scene.sprites.push_back( image );
+            const auto single = render();
+            scene.sprites.front().multiple_items = true;
+            REQUIRE( assets->find_tile_type( "highlight_item" ) );
+            auto multiple = render();
+            REQUIRE( fp3d_materials::bind() );
+            CHECK( fp3d_materials::lookup( fp3d_materials::sprite_key( scene.sprites.front() ) ) );
+            fp3d_materials::unbind();
+            size_t changed = 0;
+            size_t sum_x = 0;
+            for( size_t i = 0; i < single.size(); ++i ) {
+                if( single[i] != multiple[i] ) {
+                    ++changed;
+                    sum_x += i % width;
+                }
+            }
+            REQUIRE( changed > 0 );
+            if( pack == "UNDEAD_PEOPLE_BASE" ) {
+                CHECK( static_cast<float>( sum_x ) / changed > width * .5f );
+            }
+            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                            multiple.data(), width, height,
+                                            32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                REQUIRE( picture );
+                CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                    ( pack + "-multiple-items.png" ) ).u8string().c_str() ) == 0 );
+            }
+            scene.sprites.front().multiple_items = false;
+            CHECK( render() == single );
+            fp3d_snapshot::cell wall;
+            wall.position = tripoint_abs_ms( 0, -1, 0 );
+            wall.terrain = "t_wall";
+            wall.kind = fp3d_snapshot::terrain_kind::wall;
+            scene.cells.push_back( wall );
+            const auto hidden_single = render();
+            scene.sprites.front().multiple_items = true;
+            CHECK( render() == hidden_single );
+            scene = saved_scene;
+        }
         {
             const auto saved_scene = scene;
             fp3d_snapshot::cell near_door;
@@ -359,6 +494,42 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         CHECK( actor_aspect > .9f );
         CHECK( actor_aspect < 1.1f );
         scene.sprites.clear();
+        scene.cells.clear();
+        // Missing-material checker squares expose vertical wall stretching
+        // independently of the selected tileset's artwork.
+        fp3d_snapshot::cell ratio_wall;
+        ratio_wall.position = tripoint_abs_ms( 0, -4, 0 );
+        ratio_wall.kind = fp3d_snapshot::terrain_kind::wall;
+        ratio_wall.terrain = "fp3d_missing_wall_ratio_probe";
+        scene.cells.push_back( ratio_wall );
+        auto square_wall = render();
+        const auto longest_complete_run = [&]( int x, int y, int dx, int dy, int count ) {
+            int longest = 0;
+            int start = 0;
+            for( int i = 1; i < count; ++i ) {
+                if( square_wall[( y + i * dy ) * width + x + i * dx] !=
+                    square_wall[( y + ( i - 1 ) * dy ) * width + x + ( i - 1 ) * dx] ) {
+                    if( start > 0 ) {
+                        longest = std::max( longest, i - start );
+                    }
+                    start = i;
+                }
+            }
+            return longest;
+        };
+        const int checker_width = longest_complete_run( width / 2 - 20, height / 2 + 12, 1, 0, 40 );
+        const int checker_height = longest_complete_run( width / 2 + 8, height / 2 - 30, 0, 1, 70 );
+        REQUIRE( checker_width > 4 );
+        CHECK( checker_height > checker_width * .8f );
+        CHECK( checker_height < checker_width * 1.25f );
+        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+            SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom(
+                                       square_wall.data(), width, height,
+                                       32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+            REQUIRE( image );
+            CHECK( IMG_SavePNG( image.get(), ( std::filesystem::path( directory ) /
+                                               ( pack + "-wall-ratio.png" ) ).u8string().c_str() ) == 0 );
+        }
         scene.cells.clear();
         for( int y = -60; y <= 1; ++y ) {
             for( int x = -60; x <= 60; ++x ) {
@@ -629,6 +800,46 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 const auto output = std::filesystem::path( directory ) / ( pack + "-held-" + id + ".png" );
                 CHECK( IMG_SavePNG( image.get(), output.u8string().c_str() ) == 0 );
             }
+            const auto clock = calendar::turn;
+            const auto engine = rng_get_engine();
+            const int moves = get_avatar().get_moves();
+            fp3d_compositor::melee_swing();
+            render( false ); // First frame starts the presentation clock.
+            SDL_Delay( 90 );
+            const auto striking = render( false );
+            unsigned animated_pixels = 0;
+            double rest_x = 0, rest_y = 0, strike_x = 0, strike_y = 0;
+            unsigned rest_count = 0, strike_count = 0;
+            for( int y = 0; y < height; ++y ) {
+                for( int x = 0; x < width; ++x ) {
+                    const auto index = y * width + x;
+                    animated_pixels += striking[index] != equipped[index];
+                    if( equipped[index] != empty_hands[index] ) {
+                        rest_x += x; rest_y += y; ++rest_count;
+                    }
+                    if( striking[index] != empty_hands[index] ) {
+                        strike_x += x; strike_y += y; ++strike_count;
+                    }
+                }
+            }
+            CHECK( animated_pixels > 50 );
+            REQUIRE( rest_count > 0 );
+            REQUIRE( strike_count > 0 );
+            CHECK( strike_x / strike_count < rest_x / rest_count );
+            CHECK( strike_y / strike_count < rest_y / rest_count );
+            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom(
+                                           const_cast<std::uint32_t *>( striking.data() ), width, height, 32, width * 4,
+                                           SDL_PIXELFORMAT_RGBA8888 ) );
+                REQUIRE( image );
+                const auto output = std::filesystem::path( directory ) / ( pack + "-swing-" + id + ".png" );
+                CHECK( IMG_SavePNG( image.get(), output.u8string().c_str() ) == 0 );
+            }
+            SDL_Delay( 310 );
+            CHECK( render( false ) == equipped );
+            CHECK( calendar::turn == clock );
+            CHECK( rng_get_engine() == engine );
+            CHECK( get_avatar().get_moves() == moves );
         }
         scene.held_item.reset();
         CHECK( render() == empty_hands );
@@ -742,23 +953,40 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         ramp_above.is_ramp = true;
         scene.cells.push_back( ramp_above );
         const auto ramp_with_ceiling = render();
-        scene.cells.front().ceiling_present = false;
+        // Toggle the ceiling directly below the ramp, inside the camera view.
+        // The first room cell can fall outside the view with a lower ceiling.
+        auto room_below_ramp = std::find_if( scene.cells.begin(), scene.cells.end(),
+        [&]( const fp3d_snapshot::cell &cell ) {
+            return cell.position == ramp_above.position + tripoint_rel_ms( 0, 0, -1 );
+        } );
+        REQUIRE( room_below_ramp != scene.cells.end() );
+        room_below_ramp->ceiling_present = false;
         const auto ramp_without_ceiling = render();
         CHECK( ramp_with_ceiling != ramp_without_ceiling );
-        scene.cells.front().ceiling_present = true;
+        room_below_ramp->ceiling_present = true;
         scene.cells.pop_back();
         const auto before_toggle = render();
         SDL_Event toggle{};
         toggle.type = SDL_KEYDOWN;
         toggle.key.keysym.sym = SDLK_F5;
         REQUIRE( fp3d_compositor::process_event( toggle ) );
+        CHECK( fp3d_compositor::controls() == fp3d_input::mode::original_2d );
+        CHECK_FALSE( fp3d_compositor::active() );
         const auto original_2d = render();
         CHECK( original_2d != before_toggle );
         REQUIRE( fp3d_compositor::process_event( toggle ) );
+        CHECK( fp3d_compositor::controls() == fp3d_input::mode::modern_2d );
+        CHECK_FALSE( fp3d_compositor::active() );
+        CHECK_FALSE( fp3d_compositor::covers_map( scene.origin ) );
+        CHECK( render() == original_2d );
+        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        CHECK( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d );
+        CHECK( fp3d_compositor::active() );
         CHECK( render() == before_toggle );
         CHECK( fp3d_compositor::covers_map( scene.origin ) );
         CHECK_FALSE( fp3d_compositor::covers_map( scene.origin + tripoint_rel_ms::east ) );
         fp3d_compositor::set_input_context( "INVENTORY" );
+        CHECK_FALSE( fp3d_compositor::active() );
         CHECK_FALSE( fp3d_compositor::covers_map( scene.origin ) );
         CHECK( render() == original_2d );
         fp3d_compositor::set_input_context( "DEFAULTMODE" );
@@ -965,9 +1193,37 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         here.memory_cache_dec_set_dirty( furniture_pos, true );
         fp3d_compositor::set_input_context( "DEFAULTMODE" );
         REQUIRE( fp3d_compositor::covers_map( you.pos_abs() ) );
+        // Covered 2D drawing must leave every pixel untouched, including native
+        // animation/cursor layers, and defer the draw cache until 2D resumes.
+        REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 213, 37, 91, 255 ) == 0 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        std::vector<std::uint32_t> covered_before( width * height );
+        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                      covered_before.data(), width * 4 ) == 0 );
+        here.draw_points_cache_dirty = true;
+        native_tiles.init_draw_cursor( center );
+        native_tiles.init_draw_hit( wall_pos, "t_wall" );
+        native_tiles.init_draw_highlight( furniture_pos );
         native_tiles.draw( point::zero, center, width, height, text, blocks );
+        std::vector<std::uint32_t> covered_after( width * height );
+        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                      covered_after.data(), width * 4 ) == 0 );
+        CHECK( covered_after == covered_before );
+        CHECK( here.draw_points_cache_dirty );
+        CHECK( text.empty() );
+        CHECK( blocks.second.empty() );
         CHECK( you.get_memorized_tile( here.get_abs( wall_pos ) ).get_ter_id() == wall_memory );
         CHECK( you.get_memorized_tile( here.get_abs( furniture_pos ) ).get_dec_id() == furniture_memory );
+        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        CHECK_FALSE( fp3d_compositor::active() );
+        native_tiles.draw( point::zero, center, width, height, text, blocks );
+        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                      covered_after.data(), width * 4 ) == 0 );
+        CHECK( covered_after != covered_before );
+        CHECK_FALSE( here.draw_points_cache_dirty );
+        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        CHECK( fp3d_compositor::active() );
 
         // Draw the same production panel in its native ImGui/SDL backend.
         // This hidden test window owns the entire context, with no desktop input.
@@ -988,6 +1244,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         you.set_part_hp_cur( bodypart_str_id( "arm_l" ).id(), 20 );
         you.set_skill_level( skill_id( "firstaid" ), 3 );
         here.add_item_or_charges( center + tripoint_rel_ms::north, item( itype_id( "rock" ) ) );
+        here.add_item_or_charges( center + tripoint_rel_ms::north, item( itype_id( "bandages" ) ) );
         you.reset_all_missions();
         mission::clear_all();
         mission *task = mission::reserve_new( mission_type_id( "TEST_MISSION_GOAL_CONDITION1" ),
@@ -1135,11 +1392,12 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             const auto before_rng = rng_get_engine();
             const auto before_messages = Messages::size();
             const bool before_unread = Messages::has_undisplayed_messages();
-            for( int page = 0; page < 10; ++page ) {
+            for( int page = 0; page < 11; ++page ) {
                 const auto create_started = std::chrono::steady_clock::now();
                 auto menu = fp3d_modern_ui::create( you, here, layout[2], page == 1,
-                                                    page == 9 ? 0 : page == 8 ? 7 : page == 7 ? 4 : page == 6 ? 3 : page >= 4 ? page + 1 : page >= 2 ? page - 1 : 0,
-                                                    page == 9 ? you.get_wielded_item() : item_location() );
+                                                    page >= 9 ? 0 : page == 8 ? 7 : page == 7 ? 4 : page == 6 ? 3 : page >= 4 ? page + 1 : page >= 2 ? page - 1 : 0,
+                                                    page == 9 ? you.get_wielded_item() : item_location(),
+                                                    page == 10 ? std::make_optional( here.get_abs( center + tripoint_rel_ms::north ) ) : std::nullopt );
                 const double create_ms = std::chrono::duration<double, std::milli>(
                                              std::chrono::steady_clock::now() - create_started ).count();
                 const auto frame_started = std::chrono::steady_clock::now();
@@ -1249,6 +1507,22 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 REQUIRE( ImGui::GetDrawData()->TotalVtxCount > 100 );
                 CHECK( ImGui::GetDrawData()->TotalVtxCount < 20000 );
+                if( page == 10 ) {
+                    ImGuiWindow *mine = nullptr;
+                    ImGuiWindow *source = nullptr;
+                    for( ImGuiWindow *child : GImGui->Windows ) {
+                        if( !child->Active ) { continue; }
+                        const std::string name = child->Name;
+                        if( name.find( "/拾取背包_" ) != std::string::npos ) { mine = child; }
+                        if( name.find( "/拾取目标_" ) != std::string::npos ) { source = child; }
+                        CHECK( name.find( "/装备_" ) == std::string::npos );
+                    }
+                    REQUIRE( mine );
+                    REQUIRE( source );
+                    CHECK( mine->Pos.x + mine->Size.x <= source->Pos.x );
+                    CHECK( source->Pos.x + source->Size.x <= layout[0] );
+                    CHECK( source->Pos.y + source->Size.y <= layout[1] );
+                }
                 if( page == 4 ) {
                     CAPTURE( layout[0], layout[1], layout[2] );
                     ImGuiWindow *list = nullptr;
@@ -1293,11 +1567,11 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                             continue;
                         }
                         const std::string name = child->Name;
-                        if( name.find( "/配方分类_" ) != std::string::npos ) {
+                        if( name.find( category_name ) != std::string::npos ) {
                             categories = child;
-                        } else if( name.find( "/配方_" ) != std::string::npos ) {
+                        } else if( name.find( grid_name ) != std::string::npos ) {
                             grid = child;
-                        } else if( name.find( "/配方详情_" ) != std::string::npos ) {
+                        } else if( name.find( details_name ) != std::string::npos ) {
                             details = child;
                         }
                     }
@@ -1340,12 +1614,390 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     const auto output = std::filesystem::path( directory ) /
                                         ( pack + ( page == 0 ? "-panel-" : page == 1 ? "-near-" : page == 2 ? "-health-" : page == 3 ?
                                                    "-craft-" : page == 4 ? "-missions-" : page == 5 ? "-people-" : page == 6 ? "-building-" : page == 7
-                                                   ? "-map-" : page == 8 ? "-more-" : "-use-" )
+                                                   ? "-map-" : page == 8 ? "-more-" : page == 10 ? "-pickup-" : "-use-" )
                                           +
                                           std::to_string(
                                               layout[0] ) + "-" + std::to_string( layout[2] ) + ".png" );
                     CHECK( IMG_SavePNG( picture.get(), output.u8string().c_str() ) == 0 );
                 }
+            }
+            // Drive the production dialogue controls through real ImGui mouse
+            // events. Reading/clicking only queues native actions, never effects.
+            {
+                restore_on_out_of_scope restore_dialogue_rng( rng_get_engine() );
+                on_out_of_scope restore_dialogue_context( []() {
+                    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+                } );
+                npc speaker;
+                speaker.name = "特里安娜";
+                speaker.male = false;
+                speaker.wear_item( item( itype_id( "jacket_jean" ) ), false );
+                const auto dialogue_rng = rng_get_engine();
+                const auto dialogue_time = calendar::turn;
+                const int dialogue_moves = you.get_moves();
+                dialogue_window history;
+                history.clear_history_highlights();
+                history.add_to_history( "有什么发现吗？找个冥想圣物给我吧，哪种都行。", speaker.name, c_white );
+                history.add_history_separator();
+                history.add_to_history( "还没有。", "你", c_white );
+                history.add_history_separator();
+                history.add_to_history( "好歹我们还有个避难所可以呆。", speaker.name, c_white );
+                std::vector<talk_data> replies = {
+                    { c_white, "a", "关于那个任务……" },
+                    { c_white, "b", "[询问] 我们现在该做什么？" },
+                    { c_dark_gray, "c", "[条件不足] 这个回复不可选择" },
+                    { c_white, "d", "[任务] 我能为你做些什么？" },
+                    { c_white, "e", "[组队] 与我同行吧，如何？" },
+                    { c_white, "f", "[交易] 让我们做笔交易吧。" },
+                    { c_white, "g", "能和我分享一些有用的东西吗？" },
+                    { c_white, "h", "再会！" }
+                };
+                std::vector<bool> enabled( replies.size(), true );
+                enabled[2] = false;
+                int selection = 0;
+                ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+                {
+                    fp3d_dialogue::window dialogue( speaker, history.history_text(), selection, true, layout[2] );
+                    dialogue.set_responses( replies, enabled );
+                    ImGuiWindow *root = nullptr;
+                    const auto frame = [&]( ImVec2 mouse = ImVec2( -100, -100 ), bool pressed = false ) {
+                        ImGui_ImplSDLRenderer2_NewFrame();
+                        ImGui_ImplSDL2_NewFrame();
+                        ImGui::GetIO().AddMousePosEvent( mouse.x, mouse.y );
+                        ImGui::GetIO().AddMouseButtonEvent( 0, pressed );
+                        ImGui::NewFrame();
+                        dialogue.draw();
+                        for( ImGuiWindow *candidate : GImGui->Windows ) {
+                            if( candidate->Active && std::string( candidate->Name ).find( "NPC dialogue##" ) == 0 &&
+                                !( candidate->Flags & ImGuiWindowFlags_ChildWindow ) ) {
+                                root = candidate;
+                            }
+                        }
+                        ImGui::Render();
+                        SDL_SetRenderDrawColor( renderer.get(), 25, 30, 38, 255 );
+                        SDL_RenderClear( renderer.get() );
+                        ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+                    };
+                    const auto click = [&]( ImVec2 position ) {
+                        frame( position );
+                        frame( position, true );
+                        frame( position, false );
+                    };
+                    const auto action = [&]() {
+                        std::string result = "TIMEOUT";
+                        dialogue.handle_action( result );
+                        return result;
+                    };
+                    for( int n = 0; n < 5; ++n ) { frame(); }
+                    REQUIRE( root );
+                    CHECK( root->Pos.x >= 0 );
+                    CHECK( root->Pos.y >= 0 );
+                    CHECK( root->Pos.x + root->Size.x <= layout[0] );
+                    CHECK( root->Pos.y + root->Size.y <= layout[1] );
+                    CHECK_FALSE( ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouse );
+                    const float scale = layout[2] / 100.0f;
+                    ImGuiWindow *choices = nullptr;
+                    for( ImGuiWindow *candidate : root->DC.ChildWindows ) {
+                        if( std::string( candidate->Name ).find( "/回复选项_" ) != std::string::npos ) {
+                            choices = candidate;
+                        }
+                    }
+                    REQUIRE( choices );
+                    const ImVec2 second( choices->DC.CursorStartPos.x + 80 * scale,
+                                         choices->DC.CursorStartPos.y + 46 * scale + 19 * scale );
+                    click( second );
+                    CHECK( action() == "CONFIRM" );
+                    CHECK( selection == 1 );
+                    click( ImVec2( second.x, second.y + 46 * scale ) );
+                    CHECK( action() == "TIMEOUT" );
+                    CHECK( selection == 1 );
+                    if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                        std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
+                        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                       pixels.data(), layout[0] * 4 ) == 0 );
+                        SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), layout[0], layout[1],
+                                                 32, layout[0] * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                        REQUIRE( picture );
+                        const auto output = std::filesystem::path( directory ) / ( pack + "-dialogue-" +
+                                            std::to_string( layout[0] ) + "-" + std::to_string( layout[2] ) + ".png" );
+                        CHECK( IMG_SavePNG( picture.get(), output.u8string().c_str() ) == 0 );
+                    }
+                    const std::array<std::string, 5> actions = { "LOOK_AT", "SIZE_UP_STATS", "ASSESS_PERSONALITY", "YELL", "CHECK_OPINION" };
+                    for( size_t i = 0; i < actions.size(); ++i ) {
+                        frame();
+                        const bool narrow = root->Size.x - 36 * scale < 850 * scale;
+                        const int columns = narrow ? 3 : 5;
+                        const float width = ( root->Size.x - 36 * scale - ( columns - 1 ) * 10 * scale ) / columns;
+                        const float last_y = root->DC.CursorPos.y - 8 * scale - 15 * scale;
+                        click( ImVec2( root->Pos.x + 18 * scale + ( i % columns ) * ( width + 10 * scale ) + width / 2,
+                                       last_y - ( narrow && i < 3 ? 38 * scale : 0 ) ) );
+                        CHECK( action() == actions[i] );
+                        history.add_history_separator();
+                        history.add_to_history( "操作结果：仍可继续选择原来的对话。" );
+                        dialogue.set_history( history.history_text() );
+                        for( int n = 0; n < 4; ++n ) { frame(); }
+                        CHECK( selection == 1 );
+                        CHECK( action() == "TIMEOUT" );
+                        click( second );
+                        CHECK( action() == "CONFIRM" );
+                        CHECK( selection == 1 );
+                    }
+                    ImGuiWindow *transcript = nullptr;
+                    for( ImGuiWindow *candidate : root->DC.ChildWindows ) {
+                        if( std::string( candidate->Name ).find( "/交谈记录_" ) != std::string::npos ) {
+                            transcript = candidate;
+                        }
+                    }
+                    REQUIRE( transcript );
+                    CHECK( transcript->Scroll.y == Approx( transcript->ScrollMax.y ) );
+                    click( ImVec2( root->Pos.x + root->Size.x - 68 * scale, root->Pos.y + 34 * scale ) );
+                    CHECK( action() == "QUIT" );
+
+                    for( bool proceed : { false, true } ) {
+                        dialogue.request_confirmation( "你可能会被攻击！是否继续？" );
+                        for( int n = 0; n < 4; ++n ) { frame(); }
+                        ImGuiWindow *modal = nullptr;
+                        for( ImGuiWindow *candidate : GImGui->Windows ) {
+                            if( candidate->Active && ( candidate->Flags & ImGuiWindowFlags_Modal ) ) { modal = candidate; }
+                        }
+                        REQUIRE( modal );
+                        const float x = modal->Pos.x + modal->WindowPadding.x +
+                                        ( proceed ? 60 : 190 ) * scale;
+                        const float y = modal->DC.CursorPos.y - 8 * scale - 18 * scale;
+                        click( ImVec2( x, y ) );
+                        const auto result = dialogue.take_confirmation();
+                        REQUIRE( result );
+                        CHECK( *result == proceed );
+                        CHECK( action() == "TIMEOUT" );
+                    }
+                    for( int i = 0; i < 35; ++i ) {
+                        replies.push_back( { c_white, "", "这是一条需要自动换行的长回复：如果我们能找到足够的食物、干净的水和一个安全的落脚点，就可以继续探索附近的建筑。" } );
+                        enabled.push_back( true );
+                    }
+                    dialogue.set_responses( replies, enabled );
+                    frame();
+                    const ImVec2 scroll_at( choices->Pos.x + 80 * scale, choices->Pos.y + 40 * scale );
+                    for( int n = 0; n < 12; ++n ) {
+                        ImGui::GetIO().AddMouseWheelEvent( 0, -3 );
+                        frame( scroll_at );
+                    }
+                    CHECK( choices->Scroll.y > 0 );
+                    std::string end = "END";
+                    dialogue.handle_action( end );
+                    for( int n = 0; n < 4; ++n ) { frame(); }
+                    CHECK( selection == static_cast<int>( replies.size() ) - 1 );
+                    CHECK( choices->Scroll.y == Approx( choices->ScrollMax.y ) );
+                }
+                CHECK( ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouse );
+                ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+                CHECK( calendar::turn == dialogue_time );
+                CHECK( you.get_moves() == dialogue_moves );
+                CHECK( rng_get_engine() == dialogue_rng );
+            }
+            // The trade grid and quantity/confirmation buttons are driven by
+            // mouse events against the production native trade model.
+            {
+                restore_on_out_of_scope restore_trade_rng( rng_get_engine() );
+                on_out_of_scope restore_trade_context( []() {
+                    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+                } );
+                npc trader;
+                trader.name = "特里安娜";
+                trader.set_fac( faction_id( "no_faction" ) );
+                trader.setpos( here, you.pos_bub( here ) + tripoint_rel_ms::north );
+                trader.wear_item( item( itype_id( "backpack" ) ), false );
+                item stock( itype_id( "9mm" ), calendar::turn, 12 );
+                stock.set_owner( trader );
+                const auto medicine = trader.i_add( stock );
+                REQUIRE( medicine );
+                const bool large_trade = layout[0] == 1920 && layout[2] == 100;
+                if( large_trade ) {
+                    for( int i = 0; i < 1000; ++i ) {
+                        item extra( itype_id( "bandages" ), calendar::turn );
+                        extra.set_var( "name", "交易性能测试绷带 " + std::to_string( i ) );
+                        extra.set_owner( trader );
+                        trader.i_add( extra );
+                    }
+                }
+                trader.op_of_u.owed = 100000;
+                trade_ui model( you, trader );
+                const auto before_rng = rng_get_engine();
+                const auto before_time = calendar::turn;
+                const auto before_moves = you.get_moves();
+                const auto before_cash = you.cash;
+                const float scale = layout[2] / 100.0f;
+                ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+                {
+                    fp3d_trade::window panel( model, layout[2] );
+                    ImGuiWindow *root = nullptr;
+                    const auto frame = [&]( ImVec2 mouse = ImVec2( -100, -100 ), bool pressed = false ) {
+                        ImGui_ImplSDLRenderer2_NewFrame();
+                        ImGui_ImplSDL2_NewFrame();
+                        ImGui::GetIO().AddMousePosEvent( mouse.x, mouse.y );
+                        ImGui::GetIO().AddMouseButtonEvent( 0, pressed );
+                        ImGui::NewFrame();
+                        panel.draw();
+                        for( ImGuiWindow *candidate : GImGui->Windows ) {
+                            if( candidate->Active && std::string( candidate->Name ).find( "NPC trade##" ) == 0 &&
+                                !( candidate->Flags & ImGuiWindowFlags_ChildWindow ) ) { root = candidate; }
+                        }
+                        ImGui::Render();
+                        SDL_SetRenderDrawColor( renderer.get(), 25, 30, 38, 255 );
+                        SDL_RenderClear( renderer.get() );
+                        ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+                    };
+                    const auto click = [&]( ImVec2 pos ) {
+                        frame( pos ); frame( pos, true ); frame( pos );
+                    };
+                    const auto child = []( ImGuiWindow *parent, const std::string &label ) {
+                        ImGuiWindow *result = nullptr;
+                        for( ImGuiWindow *candidate : parent->DC.ChildWindows ) {
+                            if( std::string( candidate->Name ).find( "/" + label + "_" ) != std::string::npos ) {
+                                result = candidate;
+                            }
+                        }
+                        return result;
+                    };
+                    for( int n = 0; n < 5; ++n ) { frame(); }
+                    REQUIRE( root );
+                    if( large_trade ) {
+                        const auto started = std::chrono::steady_clock::now();
+                        for( int n = 0; n < 30; ++n ) { frame( ImVec2( 600 + n, 300 ) ); }
+                        const double elapsed = std::chrono::duration<double, std::milli>(
+                                                   std::chrono::steady_clock::now() - started ).count() / 30;
+                        // Rendering work must stay proportional to the viewport,
+                        // not the thousand items below it (previously >70k vertices).
+                        CHECK( ImGui::GetDrawData()->TotalVtxCount < 12000 );
+                        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                            std::ofstream report( std::filesystem::path( directory ) / ( pack + "-trade-performance.csv" ) );
+                            report << "npc_extra_items,mean_frame_ms,vertices\n1000," << elapsed << ","
+                                   << ImGui::GetDrawData()->TotalVtxCount << "\n";
+                        }
+                    }
+                    CHECK( root->Pos.x >= 0 );
+                    CHECK( root->Pos.y >= 0 );
+                    CHECK( root->Pos.x + root->Size.x <= layout[0] );
+                    CHECK( root->Pos.y + root->Size.y <= layout[1] );
+                    CHECK_FALSE( ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouse );
+                    REQUIRE( root->DC.ChildWindows.size() == 2 );
+                    ImGuiWindow *left = root->DC.ChildWindows[0];
+                    ImGuiWindow *right = root->DC.ChildWindows[1];
+                    const int player_side = 1;
+                    const int npc_side = 0;
+                    CHECK( left->ChildId == ImHashStr( "交易背包", 0, ImHashData( &player_side, sizeof( player_side ), root->ID ) ) );
+                    CHECK( right->ChildId == ImHashStr( "交易背包", 0, ImHashData( &npc_side, sizeof( npc_side ), root->ID ) ) );
+                    auto *grid = child( right, "物品网格" );
+                    auto *quantity = child( right, "数量操作" );
+                    REQUIRE( grid ); REQUIRE( quantity );
+                    CHECK( grid->CalcFontSize() == Approx( 18 * scale ) );
+                    CHECK( quantity->CalcFontSize() == Approx( 18 * scale ) );
+                    CHECK( left->Pos.x + left->Size.x <= right->Pos.x );
+                    CHECK( quantity->Pos.y + quantity->Size.y <= right->Pos.y + right->Size.y );
+                    if( large_trade ) {
+                        const float full_scroll = grid->ScrollMax.y;
+                        CHECK( full_scroll > 5000 );
+                        const ImVec2 scroll_at( grid->Pos.x + 50 * scale, grid->Pos.y + 40 * scale );
+                        frame( scroll_at );
+                        frame( scroll_at );
+                        ImGui::GetIO().AddMouseWheelEvent( 0, -10000 );
+                        for( int n = 0; n < 4; ++n ) { frame( scroll_at ); }
+                        CHECK( grid->Scroll.y == Approx( full_scroll ) );
+                        CHECK( grid->ScrollMax.y == Approx( full_scroll ) );
+                        CHECK( ImGui::GetDrawData()->TotalVtxCount < 12000 );
+                        ImGui::GetIO().AddMouseWheelEvent( 0, 10000 );
+                        for( int n = 0; n < 4; ++n ) { frame( scroll_at ); }
+                        CHECK( grid->Scroll.y == Approx( 0 ) );
+                    }
+                    // Category dropdown: ammunition leaves one deterministic card.
+                    click( ImVec2( right->DC.CursorStartPos.x + 100 * scale,
+                                   grid->Pos.y - 6 * scale - ( 18 * scale + 6 ) / 2 ) );
+                    ImGuiWindow *combo = nullptr;
+                    for( ImGuiWindow *candidate : GImGui->Windows ) {
+                        if( candidate->Active && std::string( candidate->Name ).find( "##Combo_" ) == 0 ) { combo = candidate; }
+                    }
+                    REQUIRE( combo );
+                    click( ImVec2( combo->DC.CursorStartPos.x + 30 * scale,
+                                   combo->DC.CursorStartPos.y + 2.5f * ( 18 * scale + 6 * scale ) ) );
+                    frame();
+                    const ImVec2 card( grid->DC.CursorStartPos.x + 48 * scale,
+                                       grid->DC.CursorStartPos.y + 85 * scale + 1 );
+                    click( card );
+                    CHECK_FALSE( panel.process_action() );
+                    frame();
+                    const float control_width = ( quantity->WorkRect.GetWidth() - 32 * scale ) / 5;
+                    const auto count_button = [&]( int column ) {
+                        click( ImVec2( quantity->DC.CursorStartPos.x + column * ( control_width + 8 * scale ) + control_width / 2,
+                                       quantity->DC.CursorPos.y - 6 * scale - 15 * scale ) );
+                        CHECK_FALSE( panel.process_action() );
+                        frame();
+                    };
+                    count_button( 2 ); // All 12.
+                    count_button( 0 ); // 11.
+                    count_button( 4 ); // Remove.
+                    count_button( 1 ); // 1.
+                    count_button( 1 ); // 2.
+                    if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                        std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
+                        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                       pixels.data(), layout[0] * 4 ) == 0 );
+                        SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), layout[0], layout[1],
+                                                 32, layout[0] * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                        REQUIRE( picture );
+                        const auto output = std::filesystem::path( directory ) / ( pack + "-trade-" +
+                                            std::to_string( layout[0] ) + "-" + std::to_string( layout[2] ) + ".png" );
+                        CHECK( IMG_SavePNG( picture.get(), output.u8string().c_str() ) == 0 );
+                    }
+                    const auto confirm = [&]() {
+                        click( ImVec2( root->Pos.x + root->Size.x - 86 * scale,
+                                       root->DC.CursorPos.y - 6 * scale - 17 * scale ) );
+                        CHECK_FALSE( panel.process_action() );
+                        for( int n = 0; n < 4; ++n ) { frame(); }
+                        ImGuiWindow *modal = nullptr;
+                        for( ImGuiWindow *candidate : GImGui->Windows ) {
+                            if( candidate->Active && ( candidate->Flags & ImGuiWindowFlags_Modal ) ) { modal = candidate; }
+                        }
+                        return modal;
+                    };
+                    auto *modal = confirm();
+                    REQUIRE( modal );
+                    // Returning to the grid must leave the offer pending.
+                    click( ImVec2( modal->DC.CursorStartPos.x + 203 * scale,
+                                   modal->DC.CursorPos.y - 6 * scale - 18 * scale ) );
+                    CHECK_FALSE( panel.process_action() );
+                    frame();
+                    modal = confirm();
+                    REQUIRE( modal );
+                    click( ImVec2( modal->DC.CursorStartPos.x + 65 * scale,
+                                   modal->DC.CursorPos.y - 6 * scale - 18 * scale ) );
+                    const auto result = panel.process_action();
+                    REQUIRE( result );
+                    CHECK( result->traded );
+                    REQUIRE( result->items_trader.size() == 1 );
+                    CHECK( result->items_trader.front().first == medicine );
+                    CHECK( result->items_trader.front().second == 2 );
+                    CHECK( result->value_trader == npc_trading::trading_price( you, trader, { medicine, 2 } ) );
+                    CHECK( result->balance == 100000 - result->value_trader );
+                    CHECK( result->items_you.empty() );
+                    auto *your_grid = child( left, "物品网格" );
+                    REQUIRE( your_grid );
+                    for( int n = 0; n < 8; ++n ) {
+                        ImGui::GetIO().AddMouseWheelEvent( 0, -3 );
+                        frame( ImVec2( your_grid->Pos.x + 50 * scale, your_grid->Pos.y + 40 * scale ) );
+                    }
+                    CHECK( your_grid->Scroll.y > 0 );
+                    click( ImVec2( root->Pos.x + root->Size.x - 66 * scale, root->Pos.y + 27 * scale ) );
+                    const auto cancelled = panel.process_action();
+                    REQUIRE( cancelled );
+                    CHECK_FALSE( cancelled->traded );
+                    CHECK( cancelled->items_trader.empty() );
+                }
+                CHECK( ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouse );
+                ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+                CHECK( medicine->charges == 12 );
+                CHECK( calendar::turn == before_time );
+                CHECK( you.get_moves() == before_moves );
+                CHECK( you.cash == before_cash );
+                CHECK( rng_get_engine() == before_rng );
             }
             // The radial menu uses the same native ImGui backend and preserves
             // the map viewport instead of stretching the frozen 3D scene.

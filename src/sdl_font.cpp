@@ -1,6 +1,8 @@
 ﻿#if defined( TILES )
 #include "sdl_font.h"
 
+#include <algorithm>
+
 #include "font_loader.h"
 #include "output.h"
 #include "sdl_utils.h"
@@ -315,30 +317,52 @@ SDL_Texture_Ptr CachedTTFFont::create_glyph( const SDL_Renderer_Ptr &renderer,
     }
     const int wf = utf8_width( ch );
     ch_width = width * wf;
-    // Note: bits per pixel must be 8 to be synchronized with the surface
-    // that TTF_RenderGlyph above returns. This is important for SDL_BlitScaled
+    // Normalize both solid (indexed) and blended glyphs before scaling.
+    SDL_Surface_Ptr converted( SDL_ConvertSurfaceFormat( sglyph.get(), SDL_PIXELFORMAT_RGBA32, 0 ) );
+    if( !converted ) {
+        dbg( D_ERROR ) << "Failed to convert glyph for " << ch << ": " << SDL_GetError();
+        return nullptr;
+    }
+    sglyph = std::move( converted );
     SDL_Surface_Ptr surface = create_surface_32( ch_width, height );
     SDL_Rect src_rect = { 0, 0, sglyph->w, sglyph->h };
-    SDL_Rect dst_rect = { 0, 0, ch_width, height };
-    if( src_rect.w < dst_rect.w ) {
-        dst_rect.x = ( dst_rect.w - src_rect.w ) / 2;
-        dst_rect.w = src_rect.w;
-    } else if( src_rect.w > dst_rect.w ) {
-        src_rect.x = ( src_rect.w - dst_rect.w ) / 2;
-        src_rect.w = dst_rect.w;
+    // SDL_ttf includes line spacing above/below the ink. Fitting that spacing
+    // shrinks CJK glyphs inside their unchanged two-column advance.
+    int ink_top = sglyph->h;
+    int ink_bottom = 0;
+    for( int y = 0; y < sglyph->h; ++y ) {
+        const auto *row = reinterpret_cast<const Uint32 *>(
+                             static_cast<const Uint8 *>( sglyph->pixels ) + y * sglyph->pitch );
+        for( int x = 0; x < sglyph->w; ++x ) {
+            if( row[x] & sglyph->format->Amask ) {
+                ink_top = std::min( ink_top, y );
+                ink_bottom = y + 1;
+                break;
+            }
+        }
     }
-    if( src_rect.h < dst_rect.h ) {
-        dst_rect.y = ( dst_rect.h - src_rect.h ) / 2;
-        dst_rect.h = src_rect.h;
-    } else if( src_rect.h > dst_rect.h ) {
-        src_rect.y = ( src_rect.h - dst_rect.h ) / 2;
-        src_rect.h = dst_rect.h;
+    if( ink_top >= ink_bottom ) {
+        ink_top = 0;
+        ink_bottom = sglyph->h;
     }
+    const float scale = std::min( { 1.0f, static_cast<float>( ch_width ) / src_rect.w,
+                                    static_cast<float>( height ) / ( ink_bottom - ink_top ) } );
+    const int fitted_width = std::max( 1, static_cast<int>( src_rect.w * scale ) );
+    const int fitted_height = std::max( 1, static_cast<int>( src_rect.h * scale ) );
+    // Preserve the line baseline where possible, clipping only transparent padding.
+    const int fitted_top = static_cast<int>( ink_top * scale );
+    const int fitted_bottom = static_cast<int>( ink_bottom * scale );
+    const int y_offset = std::clamp( ( height - fitted_height ) / 2,
+                                    -fitted_top, height - fitted_bottom );
+    SDL_Rect dst_rect = { ( ch_width - fitted_width ) / 2, y_offset,
+                          fitted_width, fitted_height };
 
     // Copy without altering the source
     SDL_SetSurfaceBlendMode( sglyph.get(), SDL_BLENDMODE_NONE );
-    if( !printErrorIf( SDL_BlitSurface( sglyph.get(), &src_rect, surface.get(), &dst_rect ) != 0,
-                       "SDL_BlitSurface failed" ) ) {
+    // Fit the complete glyph proportionally. Cropping cuts off strokes on wide
+    // letters such as W, while independent scaling squashes their proportions.
+    if( !printErrorIf( SDL_BlitScaled( sglyph.get(), &src_rect, surface.get(), &dst_rect ) != 0,
+                       "SDL_BlitScaled failed" ) ) {
         sglyph = std::move( surface );
     }
     SDL_SetSurfaceBlendMode( sglyph.get(), SDL_BLENDMODE_BLEND );

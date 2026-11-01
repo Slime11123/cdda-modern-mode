@@ -39,6 +39,9 @@
 #include "assign.h"
 #include "auto_pickup.h"
 #include "avatar.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_inventory.h"
+#endif
 #include "basecamp.h"
 #include "bionics.h"
 #include "bodypart.h"
@@ -1585,6 +1588,9 @@ void avatar::serialize( JsonOut &json ) const
 void avatar::store( JsonOut &json ) const
 {
     Character::store( json );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    fp3d_inventory::save_slots( *this, json );
+#endif
 
     // player-specific specifics
     if( prof != nullptr ) {
@@ -1664,6 +1670,9 @@ void avatar::deserialize( const JsonObject &data )
 void avatar::load( const JsonObject &data )
 {
     Character::load( data );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    fp3d_inventory::load_slots( *this, data );
+#endif
 
     std::string prof_ident = "(null)";
     if( data.read( "profession", prof_ident ) && string_id<profession>( prof_ident ).is_valid() ) {

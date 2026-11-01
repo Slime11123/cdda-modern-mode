@@ -44,7 +44,7 @@ void floor( float x, float z, float y, const std::optional<fp3d_materials::uv_re
 }
 
 void box( float x, float z, float width, float depth, float bottom, float top,
-          const std::optional<fp3d_materials::uv_rect> &material )
+          const std::optional<fp3d_materials::uv_rect> &material, bool tile_sides = false )
 {
     const float l = x - width / 2;
     const float r = x + width / 2;
@@ -66,42 +66,37 @@ void box( float x, float z, float width, float depth, float bottom, float top,
     glVertex3f( r, top, s );
     glTexCoord2f( uv.right, uv.top );
     glVertex3f( r, top, n );
+    const auto side = [&]( float x0, float z0, float x1, float z1 ) {
+        // Atlas slots cannot use GL_REPEAT. Split upright wall faces into
+        // one-metre rows and crop partial rows instead of stretching a square
+        // terrain image over the full storey. Keep window surrounds aligned.
+        const float u1 = tile_sides ? uv.left + ( uv.right - uv.left ) *
+                         std::min( 1.0f, std::hypot( x1 - x0, z1 - z0 ) ) : uv.right;
+        const int first = tile_sides ? static_cast<int>( std::floor( bottom ) ) : 0;
+        const int last = tile_sides ? static_cast<int>( std::ceil( top ) ) : 1;
+        for( int row = first; row < last; ++row ) {
+            const float y0 = tile_sides ? std::max( bottom, static_cast<float>( row ) ) : bottom;
+            const float y1 = tile_sides ? std::min( top, static_cast<float>( row + 1 ) ) : top;
+            const float v0 = tile_sides ? uv.bottom + ( uv.top - uv.bottom ) * ( y0 - row ) : uv.bottom;
+            const float v1 = tile_sides ? uv.bottom + ( uv.top - uv.bottom ) * ( y1 - row ) : uv.top;
+            glTexCoord2f( uv.left, v0 );
+            glVertex3f( x0, y0, z0 );
+            glTexCoord2f( u1, v0 );
+            glVertex3f( x1, y0, z1 );
+            glTexCoord2f( u1, v1 );
+            glVertex3f( x1, y1, z1 );
+            glTexCoord2f( uv.left, v1 );
+            glVertex3f( x0, y1, z0 );
+        }
+    };
     glNormal3f( 0, 0, -1 );
-    glTexCoord2f( uv.left, uv.bottom );
-    glVertex3f( l, bottom, n );
-    glTexCoord2f( uv.right, uv.bottom );
-    glVertex3f( r, bottom, n );
-    glTexCoord2f( uv.right, uv.top );
-    glVertex3f( r, top, n );
-    glTexCoord2f( uv.left, uv.top );
-    glVertex3f( l, top, n );
+    side( l, n, r, n );
     glNormal3f( 0, 0, 1 );
-    glTexCoord2f( uv.left, uv.bottom );
-    glVertex3f( r, bottom, s );
-    glTexCoord2f( uv.right, uv.bottom );
-    glVertex3f( l, bottom, s );
-    glTexCoord2f( uv.right, uv.top );
-    glVertex3f( l, top, s );
-    glTexCoord2f( uv.left, uv.top );
-    glVertex3f( r, top, s );
+    side( r, s, l, s );
     glNormal3f( -1, 0, 0 );
-    glTexCoord2f( uv.left, uv.bottom );
-    glVertex3f( l, bottom, s );
-    glTexCoord2f( uv.right, uv.bottom );
-    glVertex3f( l, bottom, n );
-    glTexCoord2f( uv.right, uv.top );
-    glVertex3f( l, top, n );
-    glTexCoord2f( uv.left, uv.top );
-    glVertex3f( l, top, s );
+    side( l, s, l, n );
     glNormal3f( 1, 0, 0 );
-    glTexCoord2f( uv.left, uv.bottom );
-    glVertex3f( r, bottom, n );
-    glTexCoord2f( uv.right, uv.bottom );
-    glVertex3f( r, bottom, s );
-    glTexCoord2f( uv.right, uv.top );
-    glVertex3f( r, top, s );
-    glTexCoord2f( uv.left, uv.top );
-    glVertex3f( r, top, n );
+    side( r, n, r, s );
     glEnd();
 }
 
@@ -251,7 +246,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         if( material ) {
             color( brightness, brightness, brightness );
         }
-        box( x, z, .98f, .98f, 0, tile.kind == kind::wall ? fp3d_camera::floor_height : 1.0f, material );
+        box( x, z, .98f, .98f, 0, tile.kind == kind::wall ? fp3d_camera::floor_height : 1.0f,
+             material, tile.kind == kind::wall );
     } else if( tile.kind == kind::window ) {
         const auto surround = fp3d_materials::lookup( wall_surface );
         color( brightness, brightness, brightness );
@@ -260,10 +256,10 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         if( ew < ns ) {
             glRotatef( 90, 0, 1, 0 );
         }
-        box( 0, 0, 1, .18f, 0, .9f, surround );
-        box( 0, 0, 1, .18f, 2.1f, fp3d_camera::floor_height, surround );
-        box( -.46f, 0, .08f, .22f, .9f, 2.1f, surround );
-        box( .46f, 0, .08f, .22f, .9f, 2.1f, surround );
+        box( 0, 0, 1, .18f, 0, .9f, surround, true );
+        box( 0, 0, 1, .18f, 2.1f, fp3d_camera::floor_height, surround, true );
+        box( -.46f, 0, .08f, .22f, .9f, 2.1f, surround, true );
+        box( .46f, 0, .08f, .22f, .9f, 2.1f, surround, true );
         // The box primitive has no bottom, so close the lintel underside.
         glPushMatrix();
         glTranslatef( 0, 2.1f, 0 );
@@ -354,7 +350,8 @@ draw_statistics statistics()
 }
 
 void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
-           float aspect, fp3d_camera::offset camera_offset, const std::optional<blueprint> &preview, bool interactable )
+           float aspect, fp3d_camera::offset camera_offset, const std::optional<blueprint> &preview,
+           bool interactable, float swing )
 {
     const auto started = std::chrono::steady_clock::now();
     glMatrixMode( GL_PROJECTION );
@@ -784,8 +781,10 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             glAlphaFunc( GL_GREATER, .5f );
             glColor3f( 1, 1, 1 );
             glPushMatrix();
-            glTranslatef( aspect * .62f, -.72f, 0 );
-            glRotatef( -20, 0, 0, 1 );
+            const float strike = std::clamp( swing, 0.0f, 1.0f );
+            glTranslatef( aspect * ( .62f - .32f * strike ), -.72f + .5f * strike, 0 );
+            glRotatef( -20 - 65 * strike, 0, 0, 1 );
+            glScalef( 1 - .22f * strike, 1 - .22f * strike, 1 );
             // Square atlas coordinates preserve the pack's source proportions.
             glBegin( GL_QUADS );
             glTexCoord2f( material->right, material->bottom );

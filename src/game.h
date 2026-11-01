@@ -1041,7 +1041,8 @@ class game
         // Routine loop functions, approximately in order of execution
         void open_consume_item_menu(); // Custom menu for consuming specific group of items
         bool do_regular_action( action_id &act, avatar &player_character,
-                                const std::optional<tripoint_bub_ms> &mouse_target, bool quick_pickup = false );
+                                const std::optional<tripoint_bub_ms> &mouse_target, bool quick_pickup = false,
+                                bool targeted_pickup = false, bool targeted_melee = false );
         bool handle_action();
         bool try_get_right_click_action( action_id &act, const tripoint_bub_ms &mouse_target );
         bool try_get_left_click_action( action_id &act, const tripoint_bub_ms &mouse_target );

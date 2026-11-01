@@ -10,6 +10,7 @@
 #include "cata_catch.h"
 #include "game.h"
 #include "json.h"
+#include "item.h"
 #include "map.h"
 #include "map_helpers.h"
 #include "player_helpers.h"
@@ -31,14 +32,16 @@ TEST_CASE( "fp3d_export_three_storey_native_performance_world",
     REQUIRE_FALSE( std::filesystem::exists( destination ) );
     const char *requested = std::getenv( "CDDA_FP3D_MULTILEVEL_SCENARIO" );
     const std::string scenario = requested ? requested : "outdoor";
-    REQUIRE( ( scenario == "outdoor" || scenario == "indoor" || scenario == "stairs" ) );
+    REQUIRE( ( scenario == "outdoor" || scenario == "indoor" || scenario == "stairs" ||
+               scenario == "city" ) );
     clear_avatar();
     clear_map( -2, 4 );
     set_time_to_day();
     avatar &you = get_avatar();
     map &here = get_map();
     REQUIRE( here.supports_zlevels() );
-    const tripoint_bub_ms start = scenario == "outdoor" ? tripoint_bub_ms( 65, 65, 0 ) :
+    const tripoint_bub_ms start = scenario == "city" ? tripoint_bub_ms( 75, 65, 0 ) :
+                                  scenario == "outdoor" ? tripoint_bub_ms( 65, 65, 0 ) :
                                   scenario == "indoor" ? tripoint_bub_ms( 65, 49, 1 ) :
                                   tripoint_bub_ms( 60, 52, 0 );
     you.abort_automove();
@@ -52,28 +55,69 @@ TEST_CASE( "fp3d_export_three_storey_native_performance_world",
     }
     REQUIRE( here.inbounds( tripoint_bub_ms( 57, 41, 0 ) ) );
     REQUIRE( here.inbounds( tripoint_bub_ms( 73, 57, 3 ) ) );
-    for( int z = 0; z < 3; ++z ) {
-        for( int y = 41; y <= 57; ++y ) {
-            for( int x = 57; x <= 73; ++x ) {
-                const bool wall = x == 57 || x == 73 || y == 41 || y == 57;
-                here.ter_set( tripoint_bub_ms( x, y, z ), ter_str_id( wall ? "t_wall" : "t_floor" ) );
+    int building_count = 0;
+    int furniture_count = 0;
+    const auto building = [&]( int left, int top ) {
+        REQUIRE( here.inbounds( tripoint_bub_ms( left, top, 0 ) ) );
+        REQUIRE( here.inbounds( tripoint_bub_ms( left + 16, top + 16, 3 ) ) );
+        for( int z = 0; z < 3; ++z ) {
+            for( int y = 0; y <= 16; ++y ) {
+                for( int x = 0; x <= 16; ++x ) {
+                    const bool wall = x == 0 || x == 16 || y == 0 || y == 16;
+                    here.ter_set( tripoint_bub_ms( left + x, top + y, z ),
+                                  ter_str_id( wall ? "t_wall" : "t_floor" ) );
+                }
+            }
+            for( int x : {
+                     2, 5, 8, 11, 14
+                 } ) {
+                here.ter_set( tripoint_bub_ms( left + x, top + 16, z ), ter_str_id( "t_window" ) );
+            }
+            if( scenario == "city" ) {
+                int offset = 0;
+                for( const char *id : {
+                         "f_bed", "f_chair", "f_table", "f_cupboard"
+                     } ) {
+                    const furn_str_id furniture( id );
+                    REQUIRE( furniture.is_valid() );
+                    here.furn_set( tripoint_bub_ms( left + 3 + offset++, top + 5, z ), furniture );
+                    ++furniture_count;
+                }
+                here.add_item_or_charges( tripoint_bub_ms( left + 4, top + 6, z ),
+                                          item( itype_id( "rock" ), calendar::turn ) );
             }
         }
-        for( int x : {
-                 59, 62, 65, 68, 71
+        here.ter_set( tripoint_bub_ms( left + 8, top + 16, 0 ), ter_str_id( "t_door_c" ) );
+        here.ter_set( tripoint_bub_ms( left + 3, top + 11, 0 ), ter_str_id( "t_stairs_up" ) );
+        here.ter_set( tripoint_bub_ms( left + 3, top + 11, 1 ), ter_str_id( "t_stairs_down" ) );
+        here.ter_set( tripoint_bub_ms( left + 5, top + 11, 1 ), ter_str_id( "t_stairs_up" ) );
+        here.ter_set( tripoint_bub_ms( left + 5, top + 11, 2 ), ter_str_id( "t_stairs_down" ) );
+        for( int y = 0; y <= 16; ++y ) {
+            for( int x = 0; x <= 16; ++x ) {
+                here.ter_set( tripoint_bub_ms( left + x, top + y, 3 ), ter_str_id( "t_flat_roof" ) );
+            }
+        }
+        ++building_count;
+    };
+    if( scenario == "city" ) {
+        for( int y = 19; y <= 99; ++y ) {
+            for( int x = 15; x <= 115; ++x ) {
+                here.ter_set( tripoint_bub_ms( x, y, 0 ), ter_str_id( "t_pavement" ) );
+            }
+        }
+        for( int y : {
+                 21, 41, 61, 81
              } ) {
-            here.ter_set( tripoint_bub_ms( x, 57, z ), ter_str_id( "t_window" ) );
+            for( int x : {
+                     17, 37, 57, 77, 97
+                 } ) {
+                building( x, y );
+            }
         }
-    }
-    here.ter_set( tripoint_bub_ms( 65, 57, 0 ), ter_str_id( "t_door_c" ) );
-    here.ter_set( tripoint_bub_ms( 60, 52, 0 ), ter_str_id( "t_stairs_up" ) );
-    here.ter_set( tripoint_bub_ms( 60, 52, 1 ), ter_str_id( "t_stairs_down" ) );
-    here.ter_set( tripoint_bub_ms( 62, 52, 1 ), ter_str_id( "t_stairs_up" ) );
-    here.ter_set( tripoint_bub_ms( 62, 52, 2 ), ter_str_id( "t_stairs_down" ) );
-    for( int y = 41; y <= 57; ++y ) {
-        for( int x = 57; x <= 73; ++x ) {
-            here.ter_set( tripoint_bub_ms( x, y, 3 ), ter_str_id( "t_flat_roof" ) );
-        }
+        REQUIRE( building_count == 20 );
+        REQUIRE( furniture_count == 240 );
+    } else {
+        building( 57, 41 );
     }
     you.setpos( here, start );
     if( start.z() != here.get_abs_sub().z() ) {
@@ -83,7 +127,7 @@ TEST_CASE( "fp3d_export_three_storey_native_performance_world",
     const auto first = start + ( scenario == "stairs" ? tripoint_rel_ms::above :
                                  tripoint_rel_ms::north );
     const auto second = scenario == "stairs" ? start : first + tripoint_rel_ms::east;
-    if( scenario == "outdoor" ) {
+    if( scenario == "outdoor" || scenario == "city" ) {
         here.ter_set( start, ter_str_id( "t_pavement" ) );
         here.ter_set( first, ter_str_id( "t_pavement" ) );
         here.ter_set( second, ter_str_id( "t_pavement" ) );
@@ -141,6 +185,8 @@ TEST_CASE( "fp3d_export_three_storey_native_performance_world",
     JsonOut json( output );
     json.start_object();
     json.member( "scenario", "native_three_storey_building_" + scenario + "_walk" );
+    json.member( "building_count", building_count );
+    json.member( "furniture_count", furniture_count );
     json.member( "covered_origin", covered_origin );
     json.member( "storeys", 3 );
     json.member( "saved_level", here.get_abs_sub().z() );

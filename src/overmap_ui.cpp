@@ -1989,6 +1989,8 @@ static tripoint_abs_omt display()
     ictxt.register_action( "HELP_KEYBINDINGS" );
     ictxt.register_action( "MOUSE_MOVE" );
     ictxt.register_action( "SELECT" );
+    ictxt.register_action( "CLICK_AND_DRAG" );
+    ictxt.register_action( "SEC_SELECT" );
     ictxt.register_action( "CHOOSE_DESTINATION" );
     ictxt.register_action( "CENTER_ON_DESTINATION" );
     ictxt.register_action( "GO_TO_DESTINATION" );
@@ -2028,6 +2030,8 @@ static tripoint_abs_omt display()
     data.show_explored = true;
     int fast_scroll_offset = get_option<int>( "FAST_SCROLL_OFFSET" );
     std::optional<tripoint_rel_omt> mouse_pos;
+    std::optional<tripoint_rel_omt> drag_pos;
+    bool dragged_map = false;
     std::chrono::time_point<std::chrono::steady_clock> last_blink = std::chrono::steady_clock::now();
     std::chrono::time_point<std::chrono::steady_clock> last_advance = std::chrono::steady_clock::now();
     auto display_path_iter = display_path.rbegin();
@@ -2073,6 +2077,26 @@ static tripoint_abs_omt display()
 
             curs += vec->xy().raw() *
                     scroll_d; // TODO: Make += etc. available with corresponding relative coordinates.
+        } else if( action == "CLICK_AND_DRAG" ) {
+            drag_pos = ictxt.get_coordinates_rel_omt( g->w_overmap, point::zero, true );
+            dragged_map = false;
+        } else if( action == "MOUSE_MOVE" && drag_pos ) {
+            mouse_pos = ictxt.get_coordinates_rel_omt( g->w_overmap, point::zero, true );
+            if( mouse_pos ) {
+                const point delta = drag_pos->xy().raw() - mouse_pos->xy().raw();
+                if( delta != point::zero ) {
+                    curs += delta;
+                    dragged_map = true;
+                }
+                drag_pos = mouse_pos;
+            }
+        } else if( action == "SELECT" && drag_pos ) {
+            drag_pos.reset();
+            if( dragged_map ) {
+                dragged_map = false;
+            } else if( ( mouse_pos = ictxt.get_coordinates_rel_omt( g->w_overmap, point::zero, true ) ) ) {
+                curs += mouse_pos->xy().raw();
+            }
         } else if( action == "MOUSE_MOVE" || action == "TIMEOUT" ) {
             tripoint_rel_omt edge_scroll = g->mouse_edge_scrolling_overmap( ictxt );
             if( edge_scroll != tripoint_rel_omt::zero ) {
@@ -2084,6 +2108,44 @@ static tripoint_abs_omt display()
         } else if( action == "SELECT" &&
                    ( mouse_pos = ictxt.get_coordinates_rel_omt( g->w_overmap, point::zero, true ) ) ) {
             curs += mouse_pos->xy().raw();
+        } else if( action == "SEC_SELECT" &&
+                   ( mouse_pos = ictxt.get_coordinates_rel_omt( g->w_overmap, point::zero, true ) ) ) {
+            curs += mouse_pos->xy().raw();
+            uilist context_menu;
+            context_menu.title = _( "Map tile" );
+            context_menu.addentry( 0, true, 'n', overmap_buffer.has_note( curs ) ? _( "Edit note" ) : _( "Add note" ) );
+            context_menu.addentry( 1, true, 'd', _( "Mark as dangerous" ) );
+            if( overmap_buffer.has_note( curs ) ) {
+                context_menu.addentry( 2, true, 'x', _( "Delete note" ) );
+            }
+            context_menu.query();
+            if( context_menu.ret == 0 ) {
+                create_note( curs );
+            } else if( context_menu.ret == 1 ) {
+                const int danger_radius = overmap_buffer.note_danger_radius( curs );
+                if( danger_radius >= 0 ) {
+                    if( query_yn( _( "Remove dangerous mark?" ) ) ) {
+                        overmap_buffer.mark_note_dangerous( curs, 0, false );
+                    }
+                } else {
+                    bool has_note = overmap_buffer.has_note( curs );
+                    if( !has_note ) {
+                        has_note = create_note( curs, _( "Create a danger note." ) );
+                    }
+                    if( has_note ) {
+                        const int max_amount = 20;
+                        int amount = 0;
+                        if( query_int( amount, true, _( "Danger radius in overmap squares? (0-%d)" ),
+                                       max_amount ) && amount >= 0 && amount <= max_amount ) {
+                            overmap_buffer.mark_note_dangerous( curs, amount, true );
+                        }
+                    }
+                }
+            } else if( context_menu.ret == 2 ) {
+                if( overmap_buffer.has_note( curs ) && query_yn( _( "Really delete note?" ) ) ) {
+                    overmap_buffer.delete_note( curs );
+                }
+            }
         } else if( action == "look" ) {
             tripoint_abs_ms pos = project_combine( curs, g->overmap_data.origin_remainder );
             tripoint_bub_ms pos_rel = here.get_bub( pos );

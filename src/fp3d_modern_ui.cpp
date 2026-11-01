@@ -47,6 +47,7 @@ class panel : public cataimgui::window
         avatar &you;
         map &here;
         fp3d_inventory::model view;
+        std::optional<tripoint_abs_ms> pickup_target;
         std::map<std::string, SDL_Texture_Ptr> icons;
         SDL_Texture_Ptr background;
         std::set<size_t> selected;
@@ -441,7 +442,7 @@ class panel : public cataimgui::window
             ImGui::InputText( "搜索", &search );
             ImGui::Combo( "分类", &category,
                           "全部\0武器\0弹药\0食品\0医疗\0衣物\0背包/容器\0工具\0其它\0" );
-            if( nearby ) {
+            if( nearby && !pickup_target ) {
                 ImGui::Checkbox( "显示空来源（可拖入）", &show_empty );
                 const char *source_name = near_source < 0 ? "全部来源" : view.groups[near_source].name.c_str();
                 if( ImGui::BeginCombo( "来源", source_name ) ) {
@@ -464,8 +465,9 @@ class panel : public cataimgui::window
             for( size_t group_index = 0; group_index < view.groups.size(); ++group_index ) {
                 const auto &group = view.groups[group_index];
                 if( group.nearby != nearby || group.pocket_index >= 0 ||
+                    ( nearby && pickup_target && group.tile != pickup_target ) ||
                     ( nearby && near_source >= 0 && near_source != static_cast<int>( group_index ) ) ||
-                    ( nearby && !show_empty && group.entries.empty() ) ) {
+                    ( nearby && !pickup_target && !show_empty && group.entries.empty() ) ) {
                     continue;
                 }
                 ImGui::PushID( static_cast<int>( group_index ) );
@@ -665,7 +667,7 @@ class panel : public cataimgui::window
             ImGui::Separator();
             ImGui::Text( "携带 %.1f / %.1f kg", units::to_gram( you.weight_carried() ) / 1000.0,
                          units::to_gram( you.weight_capacity() ) / 1000.0 );
-            ImGui::Text( "耐力 %d / %d", you.get_stamina(), you.get_stamina_max() );
+            ImGui::Text( "耐力 %s", fp3d_hud::stamina_text( you ).c_str() );
         }
         void map_details() {
             ImGui::TextUnformatted( "选中位置" );
@@ -1412,7 +1414,7 @@ class panel : public cataimgui::window
             ImGui::TextWrapped( "%s", you.get_name().c_str() );
             ImGui::Text( "力量 %d  敏捷 %d", you.get_str(), you.get_dex() );
             ImGui::Text( "智力 %d  感知 %d", you.get_int(), you.get_per() );
-            ImGui::Text( "耐力 %d / %d", you.get_stamina(), you.get_stamina_max() );
+            ImGui::Text( "耐力 %s", fp3d_hud::stamina_text( you ).c_str() );
             for( const auto &need : needs ) {
                 ImGui::TextWrapped( "%s：%s", need.first.c_str(), need.second.c_str() );
             }
@@ -1423,10 +1425,8 @@ class panel : public cataimgui::window
                 if( maximum <= 0 ) {
                     continue;
                 }
-                ImGui::TextWrapped( "%s %d / %d  累赘 %d", body_part_name( part ).c_str(),
-                                    you.get_part_hp_cur( part ), maximum, you.encumb( part ) );
-                ImGui::ProgressBar( you.get_part_hp_cur( part ) / static_cast<float>( maximum ),
-                                    ImVec2( -1, 6 * scale ), "" );
+                ImGui::TextWrapped( "%s %s  累赘 %d", body_part_name( part ).c_str(),
+                                    fp3d_hud::health_text( you, part ).c_str(), you.encumb( part ) );
             }
             ImGui::EndChild();
             ImGui::SameLine();
@@ -1475,8 +1475,8 @@ class panel : public cataimgui::window
             const float width = ImGui::GetContentRegionAvail().x;
             const float height = std::max( 100.0f, ImGui::GetContentRegionAvail().y - 85 * scale );
             ImGui::BeginChild( "更多分类", ImVec2( width * .23f, height ), true );
-            const char *sections[] = { "消息日志", "能力与区域", "车辆与活动", "设置与规则" };
-            for( int i = 0; i < 4; ++i ) {
+            const char *sections[] = { "消息日志", "能力与区域", "车辆与活动", "设置与规则", "侧栏信息" };
+            for( int i = 0; i < 5; ++i ) {
                 if( ImGui::Selectable( sections[i], more_section == i ) ) {
                     more_section = i;
                 }
@@ -1546,6 +1546,24 @@ class panel : public cataimgui::window
                 }
                 ImGui::EndChild();
                 compatible( ACTION_MESSAGES, "完整消息记录（原版兼容）" );
+            } else if( more_section == 4 ) {
+                const auto hud = fp3d_compositor::hud_data();
+                ImGui::TextUnformatted( "原版右侧栏信息" );
+                ImGui::Separator();
+                ImGui::Text( "状态：%s", hud.status.c_str() );
+                ImGui::Text( "时间：%s", hud.day_time.c_str() );
+                ImGui::Text( "温度：%s", hud.temperature.c_str() );
+                ImGui::Text( "任务：%s", hud.mission.c_str() );
+                ImGui::Separator();
+                ImGui::TextUnformatted( "快捷栏" );
+                for( size_t i = 0; i < hud.slots.size(); ++i ) {
+                    ImGui::Text( "%d  %s", static_cast<int>( i + 1 ), hud.slots[i].c_str() );
+                }
+                ImGui::Separator();
+                ImGui::TextUnformatted( "最近消息" );
+                for( const auto &message : hud.messages ) {
+                    ImGui::TextWrapped( "%s", message.text.c_str() );
+                }
             } else {
                 ImGui::TextUnformatted( "本组功能使用原版兼容界面" );
                 ImGui::Separator();
@@ -1589,6 +1607,26 @@ class panel : public cataimgui::window
             }
             ImGui::EndChild();
         }
+        void sidebar_page() {
+            const auto hud = fp3d_compositor::hud_data();
+            ImGui::BeginChild( "侧栏信息内容", ImVec2( 0, 0 ), true );
+            ImGui::TextUnformatted( "原版右侧栏信息" );
+            ImGui::Separator();
+            ImGui::TextWrapped( "%s", hud.status.c_str() );
+            ImGui::Text( "%s  %s", hud.day_time.c_str(), hud.temperature.c_str() );
+            ImGui::Text( "任务目标：%s", hud.mission.c_str() );
+            ImGui::Separator();
+            ImGui::TextUnformatted( "快捷栏" );
+            for( size_t i = 0; i < hud.slots.size(); ++i ) {
+                ImGui::Text( "%d  %s", static_cast<int>( i + 1 ), hud.slots[i].c_str() );
+            }
+            ImGui::Separator();
+            ImGui::TextUnformatted( "最近消息" );
+            for( const auto &message : hud.messages ) {
+                ImGui::TextWrapped( "%s", message.text.c_str() );
+            }
+            ImGui::EndChild();
+        }
         void compatible( action_id action, const char *label ) {
             if( ImGui::Button( label ) ) {
                 if( direct_action_completed ) {
@@ -1612,10 +1650,13 @@ class panel : public cataimgui::window
             scale = 1 + scale_choice * .25f;
             ImGui::SetWindowFontScale( scale );
             if( !action_message.empty() ) {
-                ImGui::TextColored( ImVec4( 1, .55f, .3f, 1 ), "%s", action_message.c_str() );
+                ImGui::TextColored( ImVec4( 1, .86f, .18f, 1 ), "%s", action_message.c_str() );
             }
-            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多" };
-            for( int i = 0; i < 8; ++i ) {
+            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏" };
+            if( pickup_target ) {
+                ImGui::TextUnformatted( "拾取物品" );
+            }
+            for( int i = 0; !pickup_target && i < 9; ++i ) {
                 if( i ) {
                     ImGui::SameLine();
                 }
@@ -1631,13 +1672,26 @@ class panel : public cataimgui::window
             ImGui::Separator();
             ImGui::SetNextItemWidth( 125 * scale );
             ImGui::Combo( "界面缩放", &scale_choice, "100%\0" "125%\0" "150%\0" );
-            if( remembered_page == 0 ) {
+            if( pickup_target || remembered_page == 0 ) {
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth( 125 * scale );
                 ImGui::Combo( "左右排序", &sort_order, "名称\0重量\0体积\0" );
             }
             const bool narrow = size.x < 1250 * scale;
-            if( remembered_page == 0 ) {
+            if( pickup_target ) {
+                const float available_height = ImGui::GetContentRegionAvail().y - 70 * scale;
+                const float gap = ImGui::GetStyle().ItemSpacing.x;
+                ImGui::BeginChild( "拾取背包", ImVec2( ( ImGui::GetContentRegionAvail().x - gap ) * .5f,
+                                                       available_height ), true );
+                ImGui::TextUnformatted( "我的物品 / 背包" );
+                groups( false );
+                ImGui::EndChild();
+                ImGui::SameLine();
+                ImGui::BeginChild( "拾取目标", ImVec2( 0, available_height ), true );
+                ImGui::TextUnformatted( "目标容器 / 地面物品" );
+                groups( true );
+                ImGui::EndChild();
+            } else if( remembered_page == 0 ) {
                 const float available_height = ImGui::GetContentRegionAvail().y - 70 * scale;
                 ImGui::BeginChild( "分类", ImVec2( 58 * scale, available_height ), true );
                 for( int i = 0; i < 4; ++i ) {
@@ -1657,9 +1711,8 @@ class panel : public cataimgui::window
                         if( maximum <= 0 ) {
                             continue;
                         }
-                        ImGui::Text( "%s %d / %d", body_part_name( part ).c_str(), you.get_part_hp_cur( part ), maximum );
-                        ImGui::ProgressBar( you.get_part_hp_cur( part ) / static_cast<float>( maximum ), ImVec2( -1, 5 ),
-                                            "" );
+                        ImGui::Text( "%s %s", body_part_name( part ).c_str(),
+                                     fp3d_hud::health_text( you, part ).c_str() );
                     }
                 } else if( side_page == 3 ) {
                     compatible( ACTION_ADVANCEDINV, "原版高级物品管理" );
@@ -1702,8 +1755,10 @@ class panel : public cataimgui::window
                 crafting();
             } else if( remembered_page == 4 ) {
                 map_page();
-            } else {
+            } else if( remembered_page == 7 ) {
                 more();
+            } else {
+                sidebar_page();
             }
             if( open_use ) {
                 ImGui::OpenPopup( "使用物品" );
@@ -1757,7 +1812,7 @@ class panel : public cataimgui::window
                 ImGui::EndPopup();
             }
             ImGui::PushTextWrapPos( 0 );
-            ImGui::TextDisabled( "%s", remembered_page == 0 ?
+            ImGui::TextDisabled( "%s", pickup_target || remembered_page == 0 ?
                                  "左键选择 / 双击详情 / Shift 多选 / 右键操作 / 拖拽 / Esc 或 Tab 返回；转移按原版耗时处理，完成后刷新。" :
                                  "滚动查看 / Esc 或 Tab 返回；查看不消耗回合，实际操作按原版规则结算。" );
             ImGui::PopTextWrapPos();
@@ -1780,8 +1835,8 @@ class panel : public cataimgui::window
             ImGui::PushStyleColor( ImGuiCol_PopupBg, ImVec4( .045f, .04f, .03f, .97f ) );
             ImGui::PushStyleColor( ImGuiCol_TitleBg, ImVec4( .16f, .13f, .085f, 1 ) );
             ImGui::PushStyleColor( ImGuiCol_TitleBgActive, ImVec4( .30f, .22f, .11f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( .90f, .89f, .86f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_TextDisabled, ImVec4( .65f, .65f, .62f, 1 ) );
+            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
+            ImGui::PushStyleColor( ImGuiCol_TextDisabled, ImVec4( 1, .86f, .18f, 1 ) );
             ImGui::PushStyleColor( ImGuiCol_FrameBg, ImVec4( .12f, .115f, .10f, .65f ) );
             ImGui::PushStyleColor( ImGuiCol_FrameBgHovered, ImVec4( .30f, .25f, .17f, .8f ) );
             ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( .38f, .29f, .16f, .9f ) );
@@ -1830,7 +1885,7 @@ class panel : public cataimgui::window
             you.invalidate_crafting_inventory();
             recipes_loaded = false;
             projects_loaded = false;
-            view = fp3d_inventory::capture( you, here );
+            view = fp3d_inventory::capture( you, here, pickup_target );
             for( const auto &entry : view.entries ) {
                 if( !entry.location ) {
                     continue;
@@ -1848,9 +1903,11 @@ class panel : public cataimgui::window
             }
         }
         panel( avatar &player, map &current_map, bool nearby,
-               int initial_page, item_location initial_use = {} ) : cataimgui::window( "生存面板",
+               int initial_page, item_location initial_use = {},
+               std::optional<tripoint_abs_ms> pickup_position = std::nullopt ) : cataimgui::window( "生存面板",
                            ImGuiWindowFlags_NoTitleBar ),
-            you( player ), here( current_map ), view( fp3d_inventory::capture( player, current_map ) ),
+            you( player ), here( current_map ), view( fp3d_inventory::capture( player, current_map, pickup_position ) ),
+            pickup_target( pickup_position ),
             background( fp3d_compositor::copy_view() ) {
             // Keep ImGui popup windows above their parent panel.
             force_to_back = true;
@@ -1860,7 +1917,7 @@ class panel : public cataimgui::window
                 open_use = true;
             }
             if( initial_page >= 0 ) {
-                remembered_page = std::clamp( initial_page, 0, 7 );
+                remembered_page = std::clamp( initial_page, 0, 8 );
             }
             refresh_character();
             if( nearby ) {
@@ -2014,22 +2071,23 @@ bool take_resume()
     return resume;
 }
 std::unique_ptr<cataimgui::window> create( avatar &you, map &here, int scale_percent, bool nearby,
-        int initial_page, item_location initial_use )
+        int initial_page, item_location initial_use, std::optional<tripoint_abs_ms> pickup_target )
 {
     if( scale_percent > 0 ) {
         scale_choice = std::clamp( ( scale_percent - 100 ) / 25, 0, 2 );
     }
-    return std::make_unique<panel>( you, here, nearby, initial_page, initial_use );
+    return std::make_unique<panel>( you, here, nearby, initial_page, initial_use, pickup_target );
 }
 std::optional<fp3d_inventory::operation> show( avatar &you, map &here, bool nearby,
-        int initial_page )
+        int initial_page, std::optional<tripoint_abs_ms> pickup_target )
 {
     fp3d_input::world_gestures().cancel();
     fp3d_compositor::set_input_context( "FP3D_PANEL" );
     ImGuiIO &imgui_io = ImGui::GetIO();
     const bool no_mouse = imgui_io.ConfigFlags & ImGuiConfigFlags_NoMouse;
     imgui_io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-    auto menu = retained_panel ? std::move( retained_panel ) : std::make_unique<panel>( you, here, nearby, initial_page );
+    auto menu = retained_panel ? std::move( retained_panel ) : std::make_unique<panel>( you, here, nearby, initial_page,
+                item_location(), pickup_target );
     menu->resume();
     auto result = menu->run();
     const bool waiting = menu->waiting();

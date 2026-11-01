@@ -74,13 +74,19 @@ TEST_CASE( "fp3d_native_melee_comparison_export", "[.fp3d_combat_compare]" )
                 const auto request = fp3d_interaction::resolve( "FP3D_ATTACK", target, you, here );
                 REQUIRE( request );
                 REQUIRE( request->position == zed.pos_bub( here ) );
-                delta = tripoint_rel_ms( get_delta_from_movement_action( request->action, iso_rotate::yes ), 0 );
+                REQUIRE( request->targeted_melee );
+                delta = *request->position - you.pos_bub( here );
             }
             CHECK( delta == tripoint_rel_ms::north );
             CHECK( you.get_moves() == 1000 );
             CHECK( rng_get_engine() == rng_before );
             const int target_hp = zed.get_hp();
-            const bool moved = avatar_action::move( you, here, delta );
+            bool moved = false;
+            if( modern ) {
+                REQUIRE( fp3d_interaction::melee( you, here, zed.pos_bub( here ) ) );
+            } else {
+                moved = avatar_action::move( you, here, delta );
+            }
             const int attack_moves = 1000 - you.get_moves();
             CHECK( attack_moves > 0 );
             CHECK( you.pos_bub( here ) == origin );
@@ -135,7 +141,7 @@ TEST_CASE( "fp3d_native_melee_comparison_export", "[.fp3d_combat_compare]" )
         you.set_moves( 1000 );
         const auto engine_before = rng_get_engine();
         if( modern ) {
-            const auto request = fp3d_interaction::resolve( "FP3D_ATTACK", std::nullopt, you, here );
+            const auto request = fp3d_interaction::resolve( "FP3D_AIM", std::nullopt, you, here );
             REQUIRE( request );
             REQUIRE( request->action == ACTION_FIRE );
             CHECK_FALSE( request->position );
@@ -266,9 +272,8 @@ TEST_CASE( "fp3d_gun_intents_defer_shots_to_native_aim_activity", "[fp3d][combat
     REQUIRE( you.get_wielded_item()->ammo_remaining() == 10 );
     you.set_moves( 1000 );
     const auto clock = calendar::turn;
-    for( const std::string command : {
-             "FP3D_ATTACK", "FP3D_AIM"
-         } ) {
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_ATTACK", std::nullopt, you, here ) );
+    for( const std::string command : { "FP3D_AIM" } ) {
         CAPTURE( command );
         const auto engine = rng_get_engine();
         const auto request = fp3d_interaction::resolve( command, std::nullopt, you, here );

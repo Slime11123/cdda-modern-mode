@@ -79,18 +79,141 @@ TEST_CASE( "fp3d_hotbar_wields_through_native_cost_and_preserves_slot_handle", "
     const auto knife = you.i_add( item( itype_id( "knife_combat" ) ) );
     fp3d_inventory::clear_slots();
     fp3d_inventory::assign_slot( 0, knife );
-    const auto action = fp3d_inventory::select_slot( 0 );
+    const auto action = fp3d_inventory::select_slot( 0, you );
     REQUIRE( action );
     const int before_moves = you.get_moves();
     REQUIRE( fp3d_inventory::execute( *action, you, here ) );
     REQUIRE( you.get_wielded_item() );
     CHECK( you.get_wielded_item()->typeId() == itype_id( "knife_combat" ) );
     CHECK( you.get_moves() < before_moves );
-    const auto selected_again = fp3d_inventory::select_slot( 0 );
+    const auto selected_again = fp3d_inventory::select_slot( 0, you );
     REQUIRE( selected_again );
     CHECK( selected_again->items.front().first == you.get_wielded_item() );
     fp3d_inventory::clear_slots();
-    CHECK_FALSE( fp3d_inventory::select_slot( 1 ) );
+    CHECK_FALSE( fp3d_inventory::select_slot( 1, you ) );
+}
+
+TEST_CASE( "fp3d_hotbar_keeps_previous_item_slot_after_storing_wielded_item", "[fp3d][inventory]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    you.wear_item( item( itype_id( "backpack" ) ), false );
+    const auto knife = you.i_add( item( itype_id( "knife_combat" ) ) );
+    const auto hammer = you.i_add( item( itype_id( "hammer" ) ) );
+    fp3d_inventory::clear_slots();
+    fp3d_inventory::assign_slot( 0, knife );
+    fp3d_inventory::assign_slot( 1, hammer );
+
+    const auto first = fp3d_inventory::select_slot( 0, you );
+    REQUIRE( first );
+    REQUIRE( fp3d_inventory::execute( *first, you, here ) );
+    REQUIRE( you.get_wielded_item()->typeId() == itype_id( "knife_combat" ) );
+
+    const item stored_knife = you.remove_weapon();
+    REQUIRE( you.i_add( stored_knife ) );
+    const auto second = fp3d_inventory::select_slot( 1, you );
+    REQUIRE( second );
+    REQUIRE( fp3d_inventory::execute( *second, you, here ) );
+    REQUIRE( you.get_wielded_item()->typeId() == itype_id( "hammer" ) );
+
+    const auto icons = fp3d_inventory::slot_icons( you );
+    REQUIRE( icons.size() == 8 );
+    CHECK( icons[0].id == "knife_combat" );
+    CHECK( icons[1].id == "hammer" );
+    const auto previous = fp3d_inventory::select_slot( 0, you );
+    REQUIRE( previous );
+    CHECK( previous->items.front().first->typeId() == itype_id( "knife_combat" ) );
+    fp3d_inventory::clear_slots();
+}
+
+TEST_CASE( "fp3d_hotbar_survives_avatar_save_reload", "[fp3d][inventory][hotbar_save]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    you.setpos( get_map(), tripoint_bub_ms( 65, 65, 0 ) );
+    you.wear_item( item( itype_id( "backpack" ) ), false );
+    fp3d_inventory::clear_slots();
+    auto knife = you.i_add( item( itype_id( "knife_combat" ) ) );
+    const auto hammer = you.i_add( item( itype_id( "hammer" ) ) );
+    REQUIRE( knife );
+    REQUIRE( hammer );
+    knife->invlet = 'a';
+    fp3d_inventory::assign_slot( 0, knife );
+    fp3d_inventory::assign_slot( 1, hammer );
+    // Another item of the same type must not steal the saved assignment.
+    auto spare = you.i_add( item( itype_id( "knife_combat" ) ) );
+    REQUIRE( spare );
+    spare->invlet = 'b';
+    REQUIRE( fp3d_inventory::select_slot( 1, you ) );
+
+    SECTION( "wielded_item_and_nested_inventory_restore" ) {
+        const auto action = fp3d_inventory::select_slot( 1, you );
+        REQUIRE( action );
+        REQUIRE( fp3d_inventory::execute( *action, you, get_map() ) );
+    }
+    SECTION( "stored_item_restores_after_switching" ) {
+        const auto first = fp3d_inventory::select_slot( 0, you );
+        REQUIRE( first );
+        REQUIRE( fp3d_inventory::execute( *first, you, get_map() ) );
+        const item stored = you.remove_weapon();
+        REQUIRE( you.i_add( stored ) );
+        const auto second = fp3d_inventory::select_slot( 1, you );
+        REQUIRE( second );
+        REQUIRE( fp3d_inventory::execute( *second, you, get_map() ) );
+    }
+    SECTION( "dropped_item_does_not_restore" ) {
+        fp3d_inventory::operation drop;
+        drop.kind = fp3d_inventory::operation_kind::drop;
+        drop.items.emplace_back( knife, 1 );
+        REQUIRE( fp3d_inventory::execute( drop, you, get_map() ) );
+        process_activity( you );
+        CHECK_FALSE( fp3d_inventory::select_slot( 0, you ) );
+        REQUIRE( fp3d_inventory::select_slot( 1, you ) );
+    }
+    const bool first_assigned = fp3d_inventory::slot_icons( you )[0].id == "knife_combat";
+    std::string saved_identity;
+    if( first_assigned ) {
+        const auto assigned = fp3d_inventory::select_slot( 0, you );
+        REQUIRE( assigned );
+        saved_identity = std::string( 1, assigned->items.front().first->invlet );
+        REQUIRE( fp3d_inventory::select_slot( 1, you ) );
+    }
+    std::ostringstream saved;
+    JsonOut json( saved );
+    you.serialize( json );
+    CHECK( saved.str().find( "\"fp3d_hotbar\"" ) != std::string::npos );
+    fp3d_inventory::clear_slots();
+    CHECK( fp3d_inventory::slot_icons( you )[0].id.empty() );
+    const JsonObject saved_data = json_loader::from_string( saved.str() ).get_object();
+    // Reuse the native avatar save while intentionally loading only its hotbar.
+    saved_data.allow_omitted_members();
+    fp3d_inventory::load_slots( you, saved_data );
+    CHECK( fp3d_inventory::active_slot() == 1 );
+    const auto icons = fp3d_inventory::slot_icons( you );
+    REQUIRE( icons.size() == 8 );
+    CHECK( icons[0].id == ( first_assigned ? "knife_combat" : "" ) );
+    CHECK( icons[1].id == "hammer" );
+    for( size_t i = 2; i < icons.size(); ++i ) {
+        CHECK( icons[i].id.empty() );
+    }
+    if( first_assigned ) {
+        const auto restored = fp3d_inventory::select_slot( 0, you );
+        REQUIRE( restored );
+        CHECK( std::string( 1, restored->items.front().first->invlet ) == saved_identity );
+    }
+    // Characters saved before hotbars existed start empty, never using another character's slots.
+    fp3d_inventory::load_slots( you, json_loader::from_string( "{}" ).get_object() );
+    CHECK( fp3d_inventory::active_slot() == 0 );
+    for( const auto &icon : fp3d_inventory::slot_icons( you ) ) {
+        CHECK( icon.id.empty() );
+    }
+    fp3d_inventory::clear_slots();
 }
 
 TEST_CASE( "fp3d_nearby_vehicle_cargo_uses_native_item_locations", "[fp3d][inventory]" )
@@ -261,6 +384,8 @@ TEST_CASE( "fp3d_recipe_catalogue_and_native_preselection_are_read_only", "[fp3d
     clear_map();
     set_time_to_day();
     avatar &you = get_avatar();
+    // The test needs a known recipe, independent of autolearn-cache history.
+    you.learn_recipe( &recipe_id( "cudgel_test_no_tools" ).obj() );
     const auto before_rng = rng_get_engine();
     const auto before_time = calendar::turn;
     const auto before_moves = you.get_moves();

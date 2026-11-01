@@ -8,7 +8,7 @@
 namespace fp3d_camera
 {
 constexpr float horizontal_fov_degrees = 120;
-constexpr float floor_height = 3.0f;
+constexpr float floor_height = 2.2f;
 constexpr float eye_height = 1.6f;
 constexpr float near_clip = .05f;
 constexpr float far_clip = 1536.0f;
@@ -43,6 +43,18 @@ tripoint_rel_ms movement( float yaw, int forward, int right );
 struct offset {
     float x = 0;
     float y = 0;
+};
+
+// Presentation time only; attacks and damage are settled by native gameplay.
+class swing
+{
+    public:
+        void start( unsigned now );
+        float amount( unsigned now ) const;
+        void reset();
+    private:
+        bool active = false;
+        unsigned started = 0;
 };
 
 // Presentation only: accepts confirmed positions, never movement intentions.

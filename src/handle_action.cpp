@@ -6,6 +6,7 @@
 #include "fp3d_interaction.h"
 #include "fp3d_inventory.h"
 #include "fp3d_modern_ui.h"
+#include "input.h"
 #include "talker.h"
 #endif
 
@@ -942,11 +943,11 @@ static void haul_toggle()
     get_avatar().toggle_hauling();
 }
 
-static void smash()
+static void smash( const std::optional<tripoint_bub_ms> &target = std::nullopt )
 {
     const bool allow_floor_bash = debug_mode; // Should later become "true"
-    const std::optional<tripoint_bub_ms> smashp_ = choose_adjacent( _( "Smash where?" ),
-            allow_floor_bash );
+    const std::optional<tripoint_bub_ms> smashp_ = target ? target :
+            choose_adjacent( _( "Smash where?" ), allow_floor_bash );
     if( !smashp_ ) {
         return;
     }
@@ -968,7 +969,12 @@ static void smash()
 
     avatar &player_character = get_avatar();
     avatar::smash_result res = player_character.smash( smashp );
-    if( res.did_smash && !res.success &&
+#if defined(ENABLE_FP3D)
+    if( target && res.did_smash ) {
+        fp3d_compositor::melee_swing();
+    }
+#endif
+    if( !target && res.did_smash && !res.success &&
         res.resistance > 0 && res.skill >= res.resistance &&
         query_yn( _( "Keep smashing until destroyed?" ) ) ) {
         player_character.assign_activity( bash_activity_actor( smashp ) );
@@ -2292,10 +2298,13 @@ static std::map<action_id, std::string> get_actions_disabled_mounted()
 }
 
 bool game::do_regular_action( action_id &act, avatar &player_character,
-                              const std::optional<tripoint_bub_ms> &mouse_target, bool quick_pickup )
+                              const std::optional<tripoint_bub_ms> &mouse_target, bool quick_pickup,
+                              bool targeted_pickup, bool targeted_melee )
 {
 #if !defined(ENABLE_FP3D)
     ( void )quick_pickup;
+    ( void )targeted_pickup;
+    ( void )targeted_melee;
 #endif
     map &here = get_map();
 
@@ -2321,6 +2330,12 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
         return true;
     }
 
+#if defined(ENABLE_FP3D)
+    if( targeted_melee && mouse_target ) {
+        fp3d_interaction::melee( player_character, here, *mouse_target );
+        return true;
+    }
+#endif
     switch( act ) {
         case ACTION_NULL: // dummy entry
         case NUM_ACTIONS: // dummy entry
@@ -2531,7 +2546,7 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
             if( has_vehicle_control( player_character ) ) {
                 handbrake( here );
             } else {
-                smash();
+                smash( mouse_target );
             }
             break;
 
@@ -2553,7 +2568,7 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
         case ACTION_PICKUP_ALL:
 #if defined(ENABLE_FP3D)
             if( quick_pickup && mouse_target ) {
-                fp3d_interaction::quick_pickup( player_character, here, *mouse_target );
+                fp3d_interaction::quick_pickup( player_character, here, *mouse_target, targeted_pickup );
             } else
 #endif
             if( mouse_target ) {
@@ -3193,6 +3208,8 @@ bool game::handle_action()
     // of location clicked.
     std::optional<tripoint_bub_ms> mouse_target;
     bool quick_pickup = false;
+    bool targeted_pickup = false;
+    bool targeted_melee = false;
 #if defined(ENABLE_FP3D)
     if( action.compare( 0, 5, "FP3D_" ) == 0 ) {
         if( !fp3d_compositor::turn_based() ) { return false; }
@@ -3203,6 +3220,8 @@ bool game::handle_action()
         action = action_ident( intent->action );
         mouse_target = intent->position;
         quick_pickup = intent->quick_pickup;
+        targeted_pickup = intent->targeted_pickup;
+        targeted_melee = intent->targeted_melee;
         player_character.clear_destination();
         destination_preview.clear();
     }
@@ -3260,7 +3279,9 @@ bool game::handle_action()
             player_character.clear_destination();
             destination_preview.clear();
 #if defined(ENABLE_FP3D)
-            if( fp3d_compositor::captures_game_input() ) {
+            if( fp3d_compositor::requested() &&
+                ( fp3d_compositor::controls() != fp3d_input::mode::original_2d ||
+                  ctxt.get_raw_input().get_first_input() == static_cast<int>( keycode::f6 ) ) ) {
                 act = fp3d_input::display_bindings( ctxt );
             } else
 #endif
@@ -3363,7 +3384,8 @@ bool game::handle_action()
 
     // actions allowed only while alive
     if( !player_character.is_dead_state() ) {
-        if( !do_regular_action( act, player_character, mouse_target, quick_pickup ) ) {
+        if( !do_regular_action( act, player_character, mouse_target, quick_pickup, targeted_pickup,
+                                targeted_melee ) ) {
             return false;
         }
     }

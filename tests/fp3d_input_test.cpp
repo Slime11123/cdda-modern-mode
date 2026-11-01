@@ -12,6 +12,42 @@
 #include "path_info.h"
 #include "sdl_wrappers.h"
 
+TEST_CASE( "fp3d_three_modes_keep_2d_movement_independent", "[fp3d][input]" )
+{
+    restore_on_out_of_scope restore_manager( inp_mngr );
+    inp_mngr = input_manager();
+    inp_mngr.init();
+    using fp3d_input::mode;
+    CHECK( fp3d_input::next_mode( mode::original_2d ) == mode::modern_2d );
+    CHECK( fp3d_input::next_mode( mode::modern_2d ) == mode::first_person_3d );
+    CHECK( fp3d_input::next_mode( mode::first_person_3d ) == mode::original_2d );
+    auto original = get_default_mode_input_context();
+    const auto original_w = original.input_to_action( input_event( 'w', input_event_t::keyboard_code ) );
+    for( const auto &entry : {
+             std::pair{ 'w', tripoint_rel_ms::north },
+             std::pair{ 's', tripoint_rel_ms::south },
+             std::pair{ 'a', tripoint_rel_ms::west },
+             std::pair{ 'd', tripoint_rel_ms::east }
+         } ) {
+        const input_event key( entry.first, input_event_t::keyboard_code );
+        for( int yaw : { 0, 45, 90, 180, 270 } ) {
+            CHECK( fp3d_input::resolve( mode::modern_2d, key, yaw ) ==
+                   action_ident( get_movement_action_from_delta( entry.second, iso_rotate::yes ) ) );
+            CHECK( fp3d_input::resolve( mode::original_2d, key, yaw ).empty() );
+        }
+    }
+    CHECK( fp3d_input::resolve( mode::modern_2d,
+                                input_event( 'e', input_event_t::keyboard_code ), 0 ).empty() );
+    CHECK( fp3d_input::resolve( mode::modern_2d,
+                                input_event( MouseInput::LeftButtonPressed, input_event_t::mouse ), 0 ).empty() );
+    input_context menu( "PICKUP" );
+    menu.register_action( "CONFIRM" );
+    CHECK( menu.input_to_action( input_event( 'w', input_event_t::keyboard_code ) ) == "ERROR" );
+    CHECK( !fp3d_input::resolve( mode::first_person_3d,
+                                 input_event( 'w', input_event_t::keyboard_code ), 0 ).empty() );
+    CHECK( original.input_to_action( input_event( 'w', input_event_t::keyboard_code ) ) == original_w );
+}
+
 TEST_CASE( "fp3d_control_profiles_are_independent_and_rebindable", "[fp3d][input]" )
 {
     restore_on_out_of_scope restore_manager( inp_mngr );
@@ -65,9 +101,15 @@ TEST_CASE( "fp3d_control_profiles_are_independent_and_rebindable", "[fp3d][input
     } );
     std::filesystem::create_directories( std::filesystem::path( preferences ).parent_path() );
     std::ofstream( preferences ) << R"([{"id":"FP3D_FORWARD","category":"FP3D","version":3,
-        "bindings":[{"input_method":"keyboard_code","key":"r"}]}])";
+        "bindings":[{"input_method":"keyboard_code","key":"r"}]},
+        {"id":"MODERN_2D_NORTH","category":"MODERN_2D","version":3,
+        "bindings":[{"input_method":"keyboard_code","key":"z"}]}])";
     inp_mngr = input_manager();
     inp_mngr.init();
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, w, 0 ).empty() );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d,
+                                input_event( 'z', input_event_t::keyboard_code ), 0 ) ==
+           action_ident( get_movement_action_from_delta( tripoint_rel_ms::north, iso_rotate::yes ) ) );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d, w, 0 ).empty() );
     CHECK( !fp3d_input::resolve( fp3d_input::mode::first_person_3d, r, 0 ).empty() );
     CHECK( original.input_to_action( w ) == original_w );
@@ -96,6 +138,9 @@ TEST_CASE( "fp3d_gestures_classify_once_and_cancel_without_world_ticks", "[fp3d]
     REQUIRE( input.event( attack, true, 2050 ) );
     CHECK( input.poll( 2050 ).empty() );
     CHECK( input.poll( 2250 ) == "FP3D_ATTACK" );
+    CHECK( input.poll( 2251 ).empty() );
+    CHECK( input.poll( 2499 ).empty() );
+    CHECK( input.poll( 2500 ) == "FP3D_ATTACK" );
     input.cancel();
     CHECK( input.poll( 3000 ).empty() );
     CHECK_FALSE( input.event( attack, false, 3000 ) );
@@ -138,7 +183,9 @@ TEST_CASE( "fp3d_hotbar_and_modifier_commands_are_independent", "[fp3d][input]" 
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
                                 input_event( '1', input_event_t::keyboard_code ), 0 ) == "FP3D_SLOT_1" );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
-                                input_event( MouseInput::ScrollWheelUp, input_event_t::mouse ), 0 ) == "FP3D_SLOT_NEXT" );
+                                input_event( MouseInput::ScrollWheelUp, input_event_t::mouse ), 0 ) == "FP3D_SLOT_PREV" );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
+                                input_event( MouseInput::ScrollWheelDown, input_event_t::mouse ), 0 ) == "FP3D_SLOT_NEXT" );
     CHECK( fp3d_input::resolve( fp3d_input::mode::original_2d,
                                 input_event( '1', input_event_t::keyboard_code ), 0 ).empty() );
 }

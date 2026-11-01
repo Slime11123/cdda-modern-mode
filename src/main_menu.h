@@ -77,6 +77,7 @@ class main_menu
         size_t last_world_pos = 0;
         int sub_opt_off = 0;
         point LAST_TERM;
+        bool last_vertical_menu = false;
         catacurses::window w_open;
         point menu_offset;
         std::vector<std::string> templates;
@@ -114,6 +115,7 @@ class main_menu
         void display_sub_menu( int sel, const point &bottom_left, int sel_line );
 
         void init_windows();
+        int sidebar_width() const;
 
         holiday get_holiday_from_time();
 

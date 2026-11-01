@@ -53,6 +53,28 @@ tripoint_rel_ms movement( float yaw, int forward, int right )
     return directions[sector];
 }
 
+void swing::start( unsigned now )
+{
+    active = true;
+    started = now;
+}
+
+float swing::amount( unsigned now ) const
+{
+    const unsigned elapsed = now - started;
+    if( !active || elapsed >= 300 ) {
+        return 0;
+    }
+    // Fast forward strike (90 ms), followed by a slower return to rest.
+    const float phase = elapsed <= 90 ? elapsed / 90.0f : ( 300 - elapsed ) / 210.0f;
+    return .5f - .5f * std::cos( phase * 3.14159265358979323846f );
+}
+
+void swing::reset()
+{
+    active = false;
+}
+
 offset follower::relative_to( const tripoint_abs_ms &origin, unsigned now ) const
 {
     if( !initialized ) {

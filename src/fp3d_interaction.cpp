@@ -2,6 +2,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include "avatar.h"
+#include "character_id.h"
 #include "creature_tracker.h"
 #include "fp3d_input.h"
 #include "fp3d_inventory.h"
@@ -17,10 +18,70 @@
 #include "mapdata.h"
 #include "submap.h"
 #include "messages.h"
+#include "monster.h"
 #include "npc.h"
+#include "popup.h"
 #include "translations.h"
 namespace fp3d_interaction
 {
+bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
+{
+    Creature *critter = get_creature_tracker().creature_at( p );
+    if( you.is_dead_state() || you.is_blind() || fp3d_input::vehicle_controls() ||
+        you.has_active_mutation( trait_id( "SHELL2" ) ) ||
+        you.has_active_mutation( trait_id( "SHELL3" ) ) || you.has_effect( efftype_id( "incorporeal" ) ) ||
+        !here.inbounds( p ) || p.z() != you.posz() ||
+        square_dist( you.pos_bub( here ), p ) != 1 || !critter || critter->is_avatar() ||
+        critter->is_dead_state() || !you.sees( here, *critter ) ) {
+        fp3d_input::world_gestures().cancel();
+        return false;
+    }
+    npc *person = critter->as_npc();
+    const bool hostile = person ? person->is_enemy() :
+                         critter->attitude_to( you ) == Creature::Attitude::HOSTILE;
+    if( !hostile ) {
+        // Disarm the held attack before opening a native, default-No dialog.
+        // Closing it cannot turn the same physical press into another attack.
+        fp3d_input::world_gestures().cancel();
+        const auto origin = you.pos_abs();
+        const auto identity = person ? person->getID() : character_id();
+        const bool confirmed = query_popup().context( "YESNO" )
+                               .message( "%s 并非敌对目标。攻击可能导致其反击或失去友好关系。确定攻击？",
+                                         critter->disp_name() )
+                               .option( "YES" ).option( "NO" ).cursor( 1 ).allow_cancel( true )
+                               .default_color( c_light_red ).query().action == "YES";
+        fp3d_input::world_gestures().cancel();
+        if( !confirmed || you.pos_abs() != origin ||
+            get_creature_tracker().creature_at( p ) != critter ||
+            ( person && person->getID() != identity ) || critter->is_dead_state() ||
+            !you.sees( here, *critter ) ) {
+            return false;
+        }
+    }
+    if( !g->check_safe_mode_allowed() || !you.move_effects( true ) ||
+        !you.try_break_relax_gas( _( "Your willpower asserts itself, and so do you!" ),
+                                 _( "You're too pacified to strike anything…" ) ) ) {
+        return false;
+    }
+    const int moves = you.get_moves();
+    // Native combat directly: a stunned movement command could redirect to
+    // another tile, displace a pet or walk after the selected creature dies.
+    you.melee_attack( *critter, true );
+    if( you.get_moves() >= moves ) {
+        return false;
+    }
+    if( person ) {
+        person->on_attacked( you );
+    } else if( monster *mon = critter->as_monster() ) {
+        if( critter->is_hallucination() ) {
+            critter->die( &here, &you );
+        }
+        g->draw_hit_mon( p, *mon, mon->is_dead_state() );
+    }
+    fp3d_compositor::melee_swing();
+    return true;
+}
+
 bool valid( const fp3d_targeting::target &target, const avatar &you, const map &here )
 {
     const auto p = here.get_bub( target.position );
@@ -65,7 +126,7 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
             { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes, opens || closes },
             { "交谈", "与此人物交谈；交易和招募仍由原版确认。", ACTION_CHAT, nullptr, person != nullptr, person != nullptr },
             { "查看 / 搜索", "查看目标或搜索容器，沿用原版检查。", ACTION_EXAMINE_AND_PICKUP, nullptr, examine, examine },
-            { "拾取物品", "打开目标位置的原版物品选择。", ACTION_PICKUP, nullptr, items, items },
+            { "拾取物品", "单件自动收纳，多件打开背包与目标容器两栏。", ACTION_PICKUP, nullptr, items, items },
             {
                 "原地守卫", "让队友守卫当前位置，按原版喊话和行动消耗结算。", ACTION_NULL, "FP3D_GUARD",
                 person && npc_orders::can_issue( you, *person, npc_orders::kind::guard ), person != nullptr
@@ -78,7 +139,7 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
         }};
 }
 
-bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p )
+bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p, bool targeted )
 {
     if( p.z() != you.posz() || !here.inbounds( p ) || square_dist( p, you.pos_bub( here ) ) > 1 ||
         !you.sees( here, p ) || !here.accessible_items( p ) || !here.could_see_items( p, you ) ) {
@@ -88,12 +149,16 @@ bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p )
     if( objects.empty() ) {
         return false;
     }
+    if( targeted && objects.size() > 1 ) {
+        auto action = fp3d_modern_ui::show( you, here, false, -1, here.get_abs( p ) );
+        return action && fp3d_inventory::execute( *action, you, here );
+    }
     // Native pick_up schedules the standard activity, including capacity,
     // theft, pocket selection, time and interruption rules. No item copying.
     const item *top = &here.maptile_at( p ).get_uppermost_item();
     for( item &object : objects ) {
         if( &object == top ) {
-            you.pick_up( { { item_location( map_cursor( p ), &object ), 1 } } );
+            you.pick_up( { { item_location( map_cursor( p ), &object ), targeted ? object.count() : 1 } } );
             return true;
         }
     }
@@ -120,7 +185,7 @@ std::optional<request> resolve( const std::string &command,
         if( index < 0 || index >= 8 ) {
             return std::nullopt;
         }
-        auto operation = fp3d_inventory::select_slot( index );
+        auto operation = fp3d_inventory::select_slot( index, you );
         if( g ) {
             g->invalidate_main_ui_adaptor();
         }
@@ -165,14 +230,12 @@ std::optional<request> resolve( const std::string &command,
         fp3d_inventory::stage( std::move( *operation ) );
         return request{ ACTION_ITEMACTION, std::nullopt, false };
     }
-    if( command == "FP3D_AIM" || command == "FP3D_ATTACK" ) {
+    if( command == "FP3D_AIM" ) {
         const auto weapon = you.get_wielded_item();
         if( weapon && weapon->is_gun() && !weapon->gun_current_mode().melee() ) {
             return request{ ACTION_FIRE, std::nullopt, false };
         }
-        if( command == "FP3D_AIM" ) {
-            return std::nullopt;
-        }
+        return std::nullopt;
     }
     if( !candidate || !valid( *candidate, you, here ) ) {
         fp3d_input::world_gestures().cancel();
@@ -187,11 +250,17 @@ std::optional<request> resolve( const std::string &command,
             return std::nullopt;
         }
         Creature *critter = get_creature_tracker().creature_at( p );
-        if( !critter || critter->is_avatar() || !you.sees( here, *critter ) || p == you.pos_bub( here ) ) {
+        if( critter && !critter->is_avatar() && !critter->is_dead_state() &&
+            you.sees( here, *critter ) && p != you.pos_bub( here ) ) {
+            return request{ get_movement_action_from_delta( p - you.pos_bub( here ), iso_rotate::yes ),
+                            p, false, false, true };
+        }
+        if( candidate->type == fp3d_targeting::kind::creature ||
+            ( critter && !critter->is_avatar() ) ) {
             fp3d_input::world_gestures().cancel();
             return std::nullopt;
         }
-        return request{ get_movement_action_from_delta( p - you.pos_bub( here ), iso_rotate::yes ), p, false };
+        return request{ ACTION_SMASH, p, false };
     }
     if( command == "FP3D_PICKUP" ) {
         if( !here.could_see_items( p, you ) || here.i_at( p ).empty() ) {
@@ -203,11 +272,13 @@ std::optional<request> resolve( const std::string &command,
     if( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) {
         const bool opens = here.ter( p ).obj().open || here.furn( p ).obj().open;
         const bool closes = here.ter( p ).obj().close || here.furn( p ).obj().close;
+        const bool items = here.accessible_items( p ) && here.could_see_items( p, you ) &&
+                           !here.i_at( p ).empty();
         const auto *npc = get_creature_tracker().creature_at<::npc>( p );
         const bool can_chat = npc && you.sees( here, *npc );
         const int npc_id = can_chat ? npc->getID().get_value() : -1;
         action_id action = can_chat ? ACTION_CHAT :
-                           opens ? ACTION_OPEN : closes ? ACTION_CLOSE : ACTION_EXAMINE_AND_PICKUP;
+                           opens ? ACTION_OPEN : items ? ACTION_PICKUP : closes ? ACTION_CLOSE : ACTION_EXAMINE_AND_PICKUP;
         if( command == "FP3D_INTERACT_LONG" ) {
             const auto choice = fp3d_quick_menu::show( context_entries( *candidate, you, here ),
                                 "目标操作" );
@@ -245,7 +316,7 @@ std::optional<request> resolve( const std::string &command,
             operation.destination_tile = candidate->position;
             fp3d_inventory::stage( std::move( operation ) );
         }
-        return request{ action, p, false };
+        return request{ action, p, action == ACTION_PICKUP, action == ACTION_PICKUP };
     }
     return std::nullopt;
 }

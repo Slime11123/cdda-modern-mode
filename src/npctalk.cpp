@@ -48,6 +48,11 @@
 #include "dialogue_chatbin.h"
 #include "dialogue_helpers.h"
 #include "dialogue_win.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_compositor.h"
+#include "fp3d_dialogue.h"
+#include "fp3d_modern_ui.h"
+#endif
 #include "effect_on_condition.h"
 #include "enum_conversions.h"
 #include "enum_traits.h"
@@ -2951,36 +2956,32 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
     std::string challenge = dynamic_line( topic );
     gen_responses( topic );
 
-    // Put quotes around challenge (unless it's an action)
-    if( challenge[0] != '*' && challenge[0] != '&' ) {
-        challenge = string_format( _( "\"%s\"" ), challenge );
-    }
-
-    // Parse any tags in challenge
-    if( actor( true )->get_npc() ) {
-        parse_tags( challenge, *actor( false )->get_character(), *actor( true )->get_npc(), *this,
-                    topic.item_type );
-    } else {
-        parse_tags( challenge, *actor( false )->get_character(), *actor( false )->get_character(), *this,
-                    topic.item_type );
-    }
-    challenge = uppercase_first_letter( challenge );
-
-    d_win.clear_history_highlights();
-    if( challenge[0] == '&' ) {
-        // No name prepended!
-        challenge = challenge.substr( 1 );
-        d_win.add_to_history( challenge );
-    } else if( challenge[0] == '*' ) {
-        // Prepend name
-        challenge = string_format( pgettext( "npc does something", "%s %s" ), actor( true )->disp_name(),
-                                   challenge.substr( 1 ) );
-        d_win.add_to_history( challenge );
-    } else {
-        npc *npc_actor = actor( true )->get_npc();
-        d_win.add_to_history( challenge, d_win.is_not_conversation ? "" : actor( true )->disp_name(),
-                              npc_actor ? npc_actor->basic_symbol_color() : c_red );
-    }
+    const auto add_challenge = [&]( std::string line, const talk_topic & line_topic ) {
+        // Put quotes around speech, then resolve tags for the topic being shown.
+        if( line[0] != '*' && line[0] != '&' ) {
+            line = string_format( _( "\"%s\"" ), line );
+        }
+        if( actor( true )->get_npc() ) {
+            parse_tags( line, *actor( false )->get_character(), *actor( true )->get_npc(), *this,
+                        line_topic.item_type );
+        } else {
+            parse_tags( line, *actor( false )->get_character(), *actor( false )->get_character(), *this,
+                        line_topic.item_type );
+        }
+        line = uppercase_first_letter( line );
+        d_win.clear_history_highlights();
+        if( line[0] == '&' ) {
+            d_win.add_to_history( line.substr( 1 ) );
+        } else if( line[0] == '*' ) {
+            d_win.add_to_history( string_format( pgettext( "npc does something", "%s %s" ),
+                                                actor( true )->disp_name(), line.substr( 1 ) ) );
+        } else {
+            npc *npc_actor = actor( true )->get_npc();
+            d_win.add_to_history( line, d_win.is_not_conversation ? "" : actor( true )->disp_name(),
+                                  npc_actor ? npc_actor->basic_symbol_color() : c_red );
+        }
+    };
+    add_challenge( challenge, topic );
     if( debug_mode ) {
         std::vector<std::string> dynamic_line_debug = build_debug_info( d_win, topic );
         for( auto &line : dynamic_line_debug ) {
@@ -3007,6 +3008,18 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
     ctxt.register_action( "QUIT" );
     std::vector<talk_data> response_lines;
     std::vector<input_event> response_hotkeys;
+#if defined(TILES) && defined(ENABLE_FP3D)
+    std::unique_ptr<fp3d_dialogue::window> modern;
+    const auto update_modern_responses = [&]() {
+        if( modern ) {
+            std::vector<bool> enabled;
+            for( size_t i = 0; i < responses.size(); ++i ) {
+                enabled.push_back( !response_condition_exists[i] || response_condition_eval[i] );
+            }
+            modern->set_responses( response_lines, enabled );
+        }
+    };
+#endif
     const auto generate_response_lines = [&]() {
 #if defined(__ANDROID__)
         ctxt.get_registered_manual_keys().clear();
@@ -3025,10 +3038,25 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
             evt = ctxt.next_unassigned_hotkey( queue, evt );
         }
         d_win.set_responses( response_lines );
+#if defined(TILES) && defined(ENABLE_FP3D)
+        update_modern_responses();
+#endif
     };
     generate_response_lines();
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_compositor::turn_based() && !debug_mode && !d_win.is_computer &&
+        !d_win.is_not_conversation && actor( true )->get_npc() ) {
+        modern = std::make_unique<fp3d_dialogue::window>( *actor( true )->get_npc(),
+                 d_win.history_text(), d_win.sel_response, get_best_quit_response() <
+                 static_cast<int>( responses.size() ), fp3d_modern_ui::scale_percent() );
+        update_modern_responses();
+    }
+#endif
     ui.on_redraw( [&]( const ui_adaptor & ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( modern ) { return; }
+#endif
         d_win.draw( d_win.is_not_conversation ? "" : actor( true )->disp_name() );
     } );
 
@@ -3043,11 +3071,33 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
             }
             ui_manager::redraw();
             input_event evt;
+#if defined(TILES) && defined(ENABLE_FP3D)
+            action = ctxt.handle_input( modern ? 20 : -1 );
+#else
             action = ctxt.handle_input();
+#endif
             evt = ctxt.get_raw_input();
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( modern ) {
+                modern->handle_action( action );
+            } else
+#endif
             d_win.handle_scrolling( action, ctxt );
             talk_topic st = special_talk( action );
             if( st.id != "TALK_NONE" ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+                if( modern ) {
+                    // These toolbar actions report in-place. Keep the current
+                    // replies/topic instead of opening the single "Okay" reply.
+                    d_win.add_history_separator();
+                    add_challenge( dynamic_line( st ), st );
+                    apply_speaker_effects( st );
+                    modern->set_history( d_win.history_text() );
+                    response_ind = response_hotkeys.size();
+                    action = "NONE";
+                    continue;
+                }
+#endif
                 return st;
             }
             if( action == "HELP_KEYBINDINGS" ) {
@@ -3056,8 +3106,8 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
             } else if( action == "CONFIRM" ) {
                 response_ind = d_win.sel_response;
                 //response condition must be reverified since non-selectable responses can be displayed
-                if( response_condition_exists[response_ind] && ( !response_condition_eval[response_ind] &&
-                        !debug_mode ) ) {
+                if( response_ind < responses.size() && response_condition_exists[response_ind] &&
+                    !response_condition_eval[response_ind] && !debug_mode ) {
                     action = "NONE";
                 }
             } else if( action == "DEBUG_DIALOGUE_DL_CONDITIONAL" ) {
@@ -3080,8 +3130,8 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
                 const auto hotkey_it = std::find( response_hotkeys.begin(),
                                                   response_hotkeys.end(), evt );
                 response_ind = std::distance( response_hotkeys.begin(), hotkey_it );
-                if( response_condition_exists[response_ind] && ( !response_condition_eval[response_ind] &&
-                        !debug_mode ) ) {
+                if( response_ind < responses.size() && response_condition_exists[response_ind] &&
+                    !response_condition_eval[response_ind] && !debug_mode ) {
                     action = "NONE";
                 }
             } else if( action == "QUIT" ) {
@@ -3091,13 +3141,33 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
                  ( action != "ANY_INPUT" && action != "QUIT" && action != "CONFIRM" ) );
         okay = true;
         std::set<dialogue_consequence> consequences = responses[response_ind].get_consequences( *this );
+        std::string warning;
         if( consequences.count( dialogue_consequence::hostile ) > 0 ) {
-            okay = query_yn( _( "You may be attacked!  Proceed?" ) );
+            warning = _( "You may be attacked!  Proceed?" );
         } else if( consequences.count( dialogue_consequence::helpless ) > 0 ) {
-            okay = query_yn( _( "You'll be helpless!  Proceed?" ) );
+            warning = _( "You'll be helpless!  Proceed?" );
+        }
+        if( !warning.empty() ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( modern ) {
+                modern->request_confirmation( warning );
+                std::optional<bool> answer;
+                while( !( answer = modern->take_confirmation() ) ) {
+                    ui_manager::redraw();
+                    ctxt.handle_input( 20 );
+                }
+                okay = *answer;
+            } else
+#endif
+            {
+                okay = query_yn( warning );
+            }
         }
     } while( !okay );
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    modern.reset();
+#endif
     d_win.add_history_separator();
     d_win.add_to_history( response_lines[response_ind].text, _( "You" ), c_light_blue );
 

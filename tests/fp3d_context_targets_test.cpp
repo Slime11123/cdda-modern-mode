@@ -97,6 +97,9 @@ TEST_CASE( "fp3d_hidden_npc_does_not_leak_through_terrain_interaction_hints",
     } );
     here.ter_set( person.pos_bub( here ), ter_str_id( "t_floor" ) );
     here.furn_set( person.pos_bub( here ), furn_str_id( "f_null" ) );
+    // Randomized NPC equipment may spill onto spawn. This case tests an
+    // empty floor; visible ground items should still be interactable.
+    here.i_clear( person.pos_bub( here ) );
     fp3d_snapshot::prepare_view( you, here );
     const fp3d_targeting::target terrain{ you.pos_abs(), person.pos_abs(),
                                           fp3d_targeting::kind::terrain, "t_floor" };

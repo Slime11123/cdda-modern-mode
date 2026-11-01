@@ -94,8 +94,8 @@ class wheel : public cataimgui::window
                 const auto extent = ImGui::CalcTextSize( value );
                 draw->AddText( ImVec2( x - extent.x / 2, y - extent.y / 2 ), color, value );
             };
-            const ImU32 white = IM_COL32( 235, 232, 224, 255 );
-            const ImU32 gold = IM_COL32( 232, 180, 94, 255 );
+            const ImU32 white = IM_COL32( 255, 255, 255, 255 );
+            const ImU32 gold = IM_COL32( 255, 220, 80, 255 );
             const float step = options.empty() ? 0 : 2 * pi / options.size();
             for( int index = 0; index < static_cast<int>( options.size() ); ++index ) {
                 const float angle = -pi / 2 + index * step;
@@ -107,24 +107,24 @@ class wheel : public cataimgui::window
                 };
                 const bool active = index == selected && options[index].enabled;
                 path();
-                draw->PathFillConcave( active ? IM_COL32( 113, 80, 35, 225 ) :
+                draw->PathFillConcave( active ? IM_COL32( 88, 78, 18, 225 ) :
                                        IM_COL32( 22, 21, 19, 205 ) );
                 path();
-                draw->PathStroke( active ? gold : IM_COL32( 133, 120, 96, 160 ),
+                draw->PathStroke( active ? gold : IM_COL32( 220, 220, 220, 160 ),
                                   ImDrawFlags_Closed, active ? 2 : 1 );
                 const float radius = ( inner + outer ) / 2;
                 text( options[index].label, center.x + std::cos( angle ) * radius,
                       center.y + std::sin( angle ) * radius, !options[index].enabled ?
-                      IM_COL32( 138, 136, 130, 255 ) : active ? gold : white );
+                      gold : active ? gold : white );
             }
             draw->AddCircleFilled( center, inner - 3, IM_COL32( 16, 15, 14, 205 ), 48 );
             text( heading.c_str(), center.x, center.y - font * .6f, white );
-            text( "Esc 返回", center.x, center.y + font * .9f, IM_COL32( 190, 188, 180, 255 ) );
+            text( "Esc 返回", center.x, center.y + font * .9f, white );
             if( selected >= 0 ) {
                 text( options[selected].description, center.x, center.y + outer + font, white );
             }
             text( "点击执行 / 方向键选择 / Enter 确认", center.x, center.y + outer + font * 2.3f,
-                  IM_COL32( 200, 198, 190, 255 ) );
+                  white );
             if( ImGui::IsMouseClicked( ImGuiMouseButton_Right ) ) {
                 is_open = false;
             } else if( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) ) {

@@ -12,7 +12,9 @@ class input_context;
 struct input_event;
 namespace fp3d_input
 {
-enum class mode { original_2d, first_person_3d };
+enum class mode { original_2d, modern_2d, first_person_3d };
+mode next_mode( mode controls );
+input_context modern_2d_context();
 input_context context();
 bool modifier_binding_editor();
 void register_world_actions( input_context &world );

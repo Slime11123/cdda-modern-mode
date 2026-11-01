@@ -16,6 +16,7 @@
 #include "vpart_position.h"
 #include "item.h"
 #include "item_pocket.h"
+#include "json.h"
 #include "map.h"
 #include "mapdata.h"
 #include "messages.h"
@@ -29,7 +30,68 @@ namespace
 {
 std::optional<operation> queued;
 std::array<item_location, 8> slots;
+struct slot_identity {
+    itype_id type;
+    std::string variant;
+    char invlet = 0;
+    bool valid = false;
+};
+std::array<slot_identity, 8> slot_identities;
 int chosen_slot = 0;
+
+void remember_slot( int index, const item_location &location )
+{
+    if( index < 0 || index >= 8 ) {
+        return;
+    }
+    slots[index] = location;
+    auto &identity = slot_identities[index];
+    identity = {};
+    if( !location ) {
+        return;
+    }
+    identity.type = location->typeId();
+    identity.variant = location->has_itype_variant() ? location->itype_variant().id : std::string();
+    identity.invlet = location->invlet;
+    identity.valid = true;
+}
+
+void refresh_slots( avatar &you )
+{
+    for( int index = 0; index < 8; ++index ) {
+        auto &slot = slots[index];
+        const auto &identity = slot_identities[index];
+        if( slot && you.has_item( *slot ) && slot->typeId() == identity.type &&
+            ( slot->has_itype_variant() ? slot->itype_variant().id : std::string() ) == identity.variant &&
+            ( identity.invlet == 0 || slot->invlet == identity.invlet ) ) {
+            continue;
+        }
+        slot = item_location();
+        if( !identity.valid ) {
+            continue;
+        }
+        item_location fallback;
+        int matches = 0;
+        for( const item_location &candidate : you.all_items_loc() ) {
+            if( !candidate || candidate->typeId() != identity.type ||
+                ( candidate->has_itype_variant() ? candidate->itype_variant().id : std::string() ) != identity.variant ) {
+                continue;
+            }
+            if( identity.invlet == 0 || candidate->invlet == identity.invlet ) {
+                slot = candidate;
+                break;
+            }
+            fallback = candidate;
+            ++matches;
+        }
+        if( !slot && matches == 1 ) {
+            slot = std::move( fallback );
+        }
+        if( !slot ) {
+            slot_identities[index] = {};
+        }
+    }
+}
 }
 
 bool accessible( const item_location &location, const avatar &you, const map &here )
@@ -84,7 +146,7 @@ std::vector<use_option> use_options( const item_location &location, const avatar
     return result;
 }
 
-model capture( avatar &you, map &here )
+model capture( avatar &you, map &here, std::optional<tripoint_abs_ms> nearby_target )
 {
     model result;
     std::function<void( item_location, size_t, bool )> append;
@@ -138,7 +200,8 @@ model capture( avatar &you, map &here )
     }
     if( !you.is_blind() ) {
         for( const auto &p : here.points_in_radius( you.pos_bub( here ), 1 ) ) {
-            if( p.z() != you.posz() || !you.sees( here, p ) || !here.accessible_items( p ) ||
+            if( ( nearby_target && here.get_abs( p ) != *nearby_target ) ||
+                p.z() != you.posz() || !you.sees( here, p ) || !here.accessible_items( p ) ||
                 !here.could_see_items( p, you ) ) {
                 continue;
             }
@@ -171,7 +234,7 @@ model capture( avatar &you, map &here )
 void assign_slot( int index, item_location item )
 {
     if( index >= 0 && index < 8 ) {
-        slots[index] = std::move( item );
+        remember_slot( index, item );
     }
 }
 int active_slot()
@@ -181,18 +244,98 @@ int active_slot()
 void clear_slots()
 {
     slots = {};
+    slot_identities = {};
     chosen_slot = 0;
 }
-std::vector<std::string> slot_names()
+void save_slots( const avatar &you, JsonOut &json )
 {
+    json.member( "fp3d_hotbar" );
+    json.start_object();
+    json.member( "active", chosen_slot );
+    json.member( "slots" );
+    json.start_array();
+    for( size_t i = 0; i < slots.size(); ++i ) {
+        json.start_object();
+        const auto &slot = slots[i];
+        const auto &identity = slot_identities[i];
+        if( identity.valid ) {
+            json.member( "type", identity.type );
+            json.member( "variant", identity.variant );
+            json.member( "invlet", static_cast<int>( identity.invlet ) );
+            if( slot && you.has_item( *slot ) ) {
+                // Native item locations preserve the exact item, including nested pockets.
+                json.member( "item", slot );
+            }
+        }
+        json.end_object();
+    }
+    json.end_array();
+    json.end_object();
+}
+void load_slots( avatar &you, const JsonObject &data )
+{
+    clear_slots();
+    if( !data.has_object( "fp3d_hotbar" ) ) {
+        return;
+    }
+    const JsonObject hotbar = data.get_object( "fp3d_hotbar" );
+    chosen_slot = std::clamp( hotbar.get_int( "active", 0 ), 0, 7 );
+    int index = 0;
+    for( const JsonObject saved : hotbar.get_array( "slots" ) ) {
+        if( index >= 8 ) {
+            break;
+        }
+        auto &identity = slot_identities[index];
+        if( saved.read( "type", identity.type ) && identity.type.is_valid() ) {
+            identity.variant = saved.get_string( "variant", "" );
+            identity.invlet = static_cast<char>( saved.get_int( "invlet", 0 ) );
+            identity.valid = true;
+            saved.read( "item", slots[index] );
+        }
+        ++index;
+    }
+    // Inventory and worn containers have already been loaded by Character::load.
+    refresh_slots( you );
+}
+std::vector<std::string> slot_names( avatar &you )
+{
+    refresh_slots( you );
     std::vector<std::string> names;
     for( const auto &slot : slots ) {
         names.push_back( slot ? remove_color_tags( slot->tname() ) : "空" );
     }
     return names;
 }
-std::optional<operation> select_slot( int index )
+std::vector<slot_icon> slot_icons( avatar &you )
 {
+    refresh_slots( you );
+    std::vector<slot_icon> icons;
+    icons.reserve( slots.size() );
+    for( auto &slot : slots ) {
+        if( slot ) {
+            icons.push_back( { slot->typeId().str(), slot->has_itype_variant() ? slot->itype_variant().id : std::string() } );
+        } else {
+            icons.emplace_back();
+        }
+    }
+    return icons;
+}
+
+static void clear_slots_for( const drop_locations &items )
+{
+    for( size_t index = 0; index < slots.size(); ++index ) {
+        auto &slot = slots[index];
+        if( slot && std::any_of( items.begin(), items.end(), [&]( const drop_location &part ) {
+        return slot == part.first;
+        } ) ) {
+            slot = item_location();
+            slot_identities[index] = {};
+        }
+    }
+}
+std::optional<operation> select_slot( int index, avatar &you )
+{
+    refresh_slots( you );
     chosen_slot = ( index + 8 ) % 8;
     if( !slots[chosen_slot] ) {
         return std::nullopt;
@@ -348,6 +491,7 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
                 }
             }
             you.drop( action.items, you.pos_bub( here ) );
+            clear_slots_for( action.items );
             return true;
         case operation_kind::insert:
             for( const auto &part : action.items ) {
@@ -398,6 +542,7 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
             if( own ) {
                 // Native drop handles worn layers, capacity, spill prompts and cost.
                 you.drop( action.items, target );
+                clear_slots_for( action.items );
             } else {
                 std::vector<item_location> items;
                 std::vector<int> quantities;
@@ -429,7 +574,10 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
             }
             const bool success = you.wield( loc );
             if( success && action.hotbar_slot >= 0 && action.hotbar_slot < 8 ) {
-                slots[action.hotbar_slot] = you.get_wielded_item();
+                remember_slot( action.hotbar_slot, you.get_wielded_item() );
+            }
+            if( success ) {
+                refresh_slots( you );
             }
             return success;
         }

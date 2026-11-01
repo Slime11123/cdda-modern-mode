@@ -2,6 +2,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include "fp3d_camera.h"
+#include "fp3d_compositor.h"
 #include "cata_scope_helpers.h"
 #include "avatar.h"
 #include "game.h"
@@ -23,6 +24,26 @@ bool modifier_binding_editor()
 {
     return editing_modifiers;
 }
+mode next_mode( mode controls )
+{
+    switch( controls ) {
+        case mode::original_2d: return mode::modern_2d;
+        case mode::modern_2d: return mode::first_person_3d;
+        case mode::first_person_3d: return mode::original_2d;
+    }
+    return mode::original_2d;
+}
+
+input_context modern_2d_context()
+{
+    input_context result( "MODERN_2D", keyboard_mode::keycode );
+    result.register_action( "MODERN_2D_NORTH", to_translation( "2D现代 向北移动" ) );
+    result.register_action( "MODERN_2D_SOUTH", to_translation( "2D现代 向南移动" ) );
+    result.register_action( "MODERN_2D_WEST", to_translation( "2D现代 向西移动" ) );
+    result.register_action( "MODERN_2D_EAST", to_translation( "2D现代 向东移动" ) );
+    return result;
+}
+
 input_context context()
 {
     input_context result( "FP3D", keyboard_mode::keycode );
@@ -34,7 +55,7 @@ input_context context()
     for( const auto &entry : {
              std::pair{ "FP3D_INTERACT", "3D 交互 / 长按情境操作" },
              std::pair{ "FP3D_PICKUP", "3D 拾取 / 长按附近物品" },
-             std::pair{ "FP3D_ATTACK", "3D 近战攻击（可按住）" },
+             std::pair{ "FP3D_ATTACK", "3D 准星近战 / 砸击（可按住）" },
              std::pair{ "FP3D_AIM", "3D 原版瞄准 / 射击" },
              std::pair{ "FP3D_PANEL", "3D 综合生存面板" },
              std::pair{ "FP3D_RELOAD", "3D 装填手持武器" },
@@ -58,6 +79,21 @@ input_context context()
 
 std::string resolve( mode controls, const input_event &event, float yaw, bool driving )
 {
+    if( controls == mode::modern_2d ) {
+        const auto command = modern_2d_context().input_to_action( event );
+        for( const auto &entry : {
+                 std::pair{ "MODERN_2D_NORTH", tripoint_rel_ms::north },
+                 std::pair{ "MODERN_2D_SOUTH", tripoint_rel_ms::south },
+                 std::pair{ "MODERN_2D_WEST", tripoint_rel_ms::west },
+                 std::pair{ "MODERN_2D_EAST", tripoint_rel_ms::east }
+             } ) {
+            if( command == entry.first ) {
+                return action_ident( get_movement_action_from_delta( entry.second,
+                                     driving ? iso_rotate::no : iso_rotate::yes ) );
+            }
+        }
+        return {};
+    }
     if( controls != mode::first_person_3d ) {
         return {};
     }
@@ -229,6 +265,7 @@ std::string gestures::poll( unsigned now )
             continue;
         }
         if( button.command == "FP3D_ATTACK" ) {
+            button.started = now;
             return button.command; // At most once per native action request.
         }
         if( !button.fired && ( button.command == "FP3D_INTERACT" || button.command == "FP3D_PICKUP" ) ) {
@@ -258,21 +295,22 @@ void gestures::set_hold_delay( int milliseconds )
 action_id display_bindings( input_context &original )
 {
     uilist menu;
-    menu.title = "操作方式（F5 切换 2D / 3D）";
+    menu.title = "操作方式（F5：2D经典 → 2D现代 → 3D）";
     menu.text =
-        "2D 使用原版操作；3D 使用独立键鼠配置。背包等菜单使用各自操作。\n"
-        "修改 3D 键位时，请使用当前界面的局部绑定（+），两套配置互不覆盖。";
-    menu.addentry( 0, true, '1', "1. 2D 原版操作与按键" );
-    menu.addentry( 1, true, '2', "2. 3D 第一人称操作与按键" );
-    menu.selected = 1;
+        "2D经典：原版界面与键位。2D现代：框架阶段，WASD 移动，其余暂沿用原版。\n"
+        "3D：现有第一人称操作。修改现代键位请使用局部绑定（+），三套配置互不覆盖。";
+    menu.addentry( 0, true, '1', "1. 2D经典模式：原版按键" );
+    menu.addentry( 1, true, '2', "2. 2D现代模式：独立移动按键（框架）" );
+    menu.addentry( 2, true, '3', "3. 3D模式：第一人称按键" );
+    menu.selected = static_cast<int>( fp3d_compositor::controls() );
     menu.query();
     if( menu.ret == 0 ) {
         return original.display_menu( true );
     }
-    if( menu.ret == 1 ) {
+    if( menu.ret == 1 || menu.ret == 2 ) {
         restore_on_out_of_scope restore_editor( editing_modifiers );
         editing_modifiers = true;
-        auto profile = context();
+        auto profile = menu.ret == 1 ? modern_2d_context() : context();
         profile.display_menu();
     }
     return ACTION_NULL;

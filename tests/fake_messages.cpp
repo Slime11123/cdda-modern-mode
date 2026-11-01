@@ -32,6 +32,15 @@ std::vector<std::pair<std::string, std::string>> Messages::recent_messages( size
 {
     return messages;
 }
+std::vector<Messages::recent_message_info> Messages::recent_messages_with_color( size_t count )
+{
+    std::vector<Messages::recent_message_info> result;
+    const size_t start = messages.size() > count ? messages.size() - count : 0;
+    for( size_t i = start; i < messages.size(); ++i ) {
+        result.push_back( { messages[i].first, messages[i].second, c_white } );
+    }
+    return result;
+}
 bool Messages::has_debug_filter( debugmode::debug_filter )
 {
     return true;

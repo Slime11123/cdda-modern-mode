@@ -64,6 +64,7 @@ struct sprite {
     std::vector<std::pair<std::string, std::string>> overlays;
     bool male = true;
     bool mirrored = false;
+    bool multiple_items = false;
     float height = 1.8f;
 };
 
@@ -101,7 +102,7 @@ void prepare_view( avatar &you, map &here );
 // The game thread captures owned data after preparing the native view caches.
 // A dirty or uninitialized visibility cache permits memory only.
 // Optional ranges narrow the prepared budget; they cannot extend it.
-scene_snapshot capture( const avatar &you, const map &here,
+scene_snapshot capture( avatar &you, const map &here,
                         int above = render_above, int below = render_below );
 } // namespace fp3d_snapshot
 #endif
