@@ -27,7 +27,11 @@ class gestures
         std::map<std::pair<input_event_t, int>, held> buttons;
         std::deque<std::string> pending;
         bool expanded = false;
+        unsigned hold_delay_ms = 250;
     public:
+        unsigned hold_delay() const { return hold_delay_ms; }
+        // Session setting for interact/pickup only. Changing it cancels held input.
+        void set_hold_delay( int milliseconds );
         bool event( const input_event &input, bool down, unsigned now );
         bool mouse_button( unsigned button, bool down, unsigned now );
         std::string poll( unsigned now );

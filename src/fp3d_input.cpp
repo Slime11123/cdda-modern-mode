@@ -1,5 +1,6 @@
 #include "fp3d_input.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <algorithm>
 #include "fp3d_camera.h"
 #include "cata_scope_helpers.h"
 #include "avatar.h"
@@ -223,7 +224,8 @@ std::string gestures::poll( unsigned now )
     }
     for( auto &entry : buttons ) {
         auto &button = entry.second;
-        if( now - button.started < 250 ) {
+        const unsigned delay = button.command == "FP3D_ATTACK" ? 250 : hold_delay_ms;
+        if( now - button.started < delay ) {
             continue;
         }
         if( button.command == "FP3D_ATTACK" ) {
@@ -242,6 +244,15 @@ void gestures::cancel()
     buttons.clear();
     pending.clear();
     expanded = false;
+}
+
+void gestures::set_hold_delay( int milliseconds )
+{
+    const unsigned next = std::clamp( milliseconds, 100, 1000 );
+    if( hold_delay_ms != next ) {
+        cancel();
+        hold_delay_ms = next;
+    }
 }
 
 action_id display_bindings( input_context &original )

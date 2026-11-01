@@ -1539,6 +1539,19 @@ class panel : public cataimgui::window
                     compatible( ACTION_ACTIONMENU, "完整行动列表" );
                 } else {
                     compatible( ACTION_KEYBINDINGS, "2D / 3D 按键设置" );
+                    ImGui::Separator();
+                    ImGui::TextUnformatted( "3D互动 / 拾取长按时间" );
+                    auto &gestures = fp3d_input::world_gestures();
+                    int hold_delay = static_cast<int>( gestures.hold_delay() );
+                    ImGui::SetNextItemWidth( -1 );
+                    if( ImGui::SliderInt( "##3D长按时间", &hold_delay, 100, 1000, "%d 毫秒" ) ) {
+                        gestures.set_hold_delay( hold_delay );
+                    }
+                    if( ImGui::Button( "恢复250毫秒" ) ) {
+                        gestures.set_hold_delay( 250 );
+                    }
+                    ImGui::TextWrapped( "本次启动期间有效；只调整互动和拾取的长按识别。" );
+                    ImGui::Separator();
                     compatible( ACTION_OPTIONS, "游戏设置" );
                     compatible( ACTION_AUTOPICKUP, "自动拾取规则" );
                     compatible( ACTION_AUTONOTES, "自动标记规则" );

@@ -1171,6 +1171,20 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         ImGui::GetIO().AddMousePosEvent( near_window->Pos.x + near_window->Size.x - 30, target_y );
                         ImGui::GetIO().AddMouseButtonEvent( 0, false );
                     }
+                    if( page == 8 && ( frame == 6 || frame == 7 ) ) {
+                        ImGuiWindow *categories = nullptr;
+                        for( ImGuiWindow *candidate : GImGui->Windows ) {
+                            if( candidate->WasActive && std::string( candidate->Name ).find( "/更多分类_" ) != std::string::npos ) {
+                                categories = candidate;
+                            }
+                        }
+                        REQUIRE( categories );
+                        const float font = categories->CalcFontSize();
+                        const float line = font + ImGui::GetStyle().ItemSpacing.y;
+                        ImGui::GetIO().AddMousePosEvent( categories->DC.CursorStartPos.x + 30,
+                                                       categories->DC.CursorStartPos.y + 3 * line + font / 2 );
+                        ImGui::GetIO().AddMouseButtonEvent( 0, frame == 6 );
+                    }
                     ImGui::NewFrame();
                     if( source_drop && frame == 10 && ImGui::BeginDragDropSource( ImGuiDragDropFlags_SourceExtern ) ) {
                         const size_t item_index = 0; // The native, wielded atomic lamp.

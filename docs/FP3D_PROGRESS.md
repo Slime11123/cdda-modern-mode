@@ -540,3 +540,7 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 2026-11-01：用途列表完整随机保护，95用例9133断言、图形3002、ON/OFF通过。原版/现代施工续作两场景SHA2059F612CB77BE3D4B8414CB3331E592BC848E9CA215DC5AA3598859519916ED一致（预置partial_con，不含初次扣材选点）。入口runtime/modern-controls-use-preview。
 
 2026-11-01：现代菜单七类搜索接入原版大小写/UTF-8/拼音设置匹配；95用例9133断言、原版搜索23断言、图形3002、ON/OFF通过。入口runtime/modern-controls-search。继续P5.1长按阈值设置。
+
+### 2026-11-01 P5.1 长按时间设置
+
+互动/拾取长按时间在Tab→更多→设置与规则按100–1000毫秒调整，默认250毫秒，本次启动有效。原版2D与按住攻击节奏不变。时间边界、同值设置、输入取消及计时回绕回归通过；96用例/9168断言，图形3018断言，ON/OFF构建通过。详见现代操作阶段报告及`qa/0i1/modern-hold-delay-*`日志。验证入口更新至`runtime/modern-controls-hold-delay`，实体IME/高DPI及完整正式流程仍待验收。
