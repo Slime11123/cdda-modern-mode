@@ -18,6 +18,7 @@
 #include "cata_imgui.h"
 #include "fp3d_modern_ui.h"
 #include "fp3d_quick_menu.h"
+#include "fp3d_interaction.h"
 #include "mission.h"
 #include "character_id.h"
 #include "npc.h"
@@ -1242,6 +1243,60 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         }
                     }
                 }
+                const fp3d_targeting::target context_target{ you.pos_abs(),
+                    here.get_abs( you.pos_bub( here ) + tripoint_rel_ms::west ),
+                    fp3d_targeting::kind::creature, {} };
+                const auto context_choices = fp3d_interaction::context_entries( context_target, you, here );
+                REQUIRE( context_choices[2].enabled );
+                REQUIRE_FALSE( context_choices[5].enabled );
+                auto contextual = fp3d_quick_menu::create( context_choices, "目标操作", layout[2] );
+                for( int frame = 0; frame < 9; ++frame ) {
+                    ImGui_ImplSDLRenderer2_NewFrame();
+                    ImGui_ImplSDL2_NewFrame();
+                    ImGui::GetIO().AddMousePosEvent( frame < 7 ? center.x - 113 : center.x + 160,
+                                                   frame < 7 ? center.y + 113 : center.y );
+                    ImGui::GetIO().AddMouseButtonEvent( 0, frame == 4 || frame == 7 );
+                    ImGui::NewFrame();
+                    contextual->draw();
+                    if( frame == 4 ) {
+                        CHECK( contextual->get_is_open() );
+                        CHECK_FALSE( contextual->has_button_action() );
+                    }
+                    if( frame == 7 ) {
+                        CHECK_FALSE( contextual->get_is_open() );
+                        CHECK( contextual->get_button_action() == action_ident( ACTION_CHAT ) );
+                    }
+                    ImGui::Render();
+                    SDL_SetRenderDrawColor( renderer.get(), 12, 16, 20, 255 );
+                    SDL_RenderClear( renderer.get() );
+                    ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+                    if( frame == 2 ) {
+                        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                            std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
+                            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                          pixels.data(), layout[0] * 4 ) == 0 );
+                            SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), layout[0],
+                                                   layout[1], 32, layout[0] * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                            REQUIRE( image );
+                            const auto filename = std::filesystem::path( directory ) /
+                                                  ( pack + "-context-" + std::to_string( layout[0] ) + "-" +
+                                                    std::to_string( layout[2] ) + ".png" );
+                            CHECK( IMG_SavePNG( image.get(), filename.u8string().c_str() ) == 0 );
+                        }
+                    }
+                }
+                auto context_cancel = fp3d_quick_menu::create( context_choices, "目标操作", layout[2] );
+                for( int frame = 0; frame < 3; ++frame ) {
+                    ImGui_ImplSDLRenderer2_NewFrame();
+                    ImGui_ImplSDL2_NewFrame();
+                    ImGui::GetIO().AddMousePosEvent( center.x - 113, center.y - 113 );
+                    ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
+                    ImGui::NewFrame();
+                    context_cancel->draw();
+                    ImGui::Render();
+                }
+                CHECK_FALSE( context_cancel->get_is_open() );
+                CHECK_FALSE( context_cancel->has_button_action() );
                 auto cancelled = fp3d_quick_menu::create( layout[2] );
                 for( int frame = 0; frame < 3; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();

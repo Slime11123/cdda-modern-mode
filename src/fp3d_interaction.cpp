@@ -18,7 +18,6 @@
 #include "messages.h"
 #include "npc.h"
 #include "translations.h"
-#include "uilist.h"
 namespace fp3d_interaction
 {
 bool valid( const fp3d_targeting::target &target, const avatar &you, const map &here )
@@ -41,6 +40,35 @@ bool valid( const fp3d_targeting::target &target, const avatar &you, const map &
         return tile.get_item_count() > 0 && tile.get_uppermost_item().typeId().str() == target.id;
     }
     return here.ter( p ).id().str() == target.id;
+}
+
+std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::target &target,
+        const avatar &you, const map &here )
+{
+    const bool reachable = valid( target, you, here );
+    const auto p = here.get_bub( target.position );
+    const auto *person = reachable ? get_creature_tracker().creature_at<npc>( p ) : nullptr;
+    const bool opens = reachable && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
+    const bool closes = reachable && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
+    return {{
+            { "打开", "打开目标门窗或容器，沿用原版规则。", ACTION_OPEN, nullptr, opens },
+            { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes },
+            { "交谈", "与此人物交谈；交易和招募仍由原版确认。", ACTION_CHAT, nullptr, person != nullptr },
+            { "查看 / 搜索", "查看目标或搜索容器，沿用原版检查。", ACTION_EXAMINE_AND_PICKUP, nullptr, reachable },
+            {
+                "拾取物品", "打开目标位置的原版物品选择。", ACTION_PICKUP, nullptr,
+                reachable && here.could_see_items( p, you ) && here.maptile_at( p ).get_item_count() > 0
+            },
+            {
+                "原地守卫", "让队友守卫当前位置，按原版喊话和行动消耗结算。", ACTION_NULL, "FP3D_GUARD",
+                person && npc_orders::can_issue( you, *person, npc_orders::kind::guard )
+            },
+            {
+                "继续跟随", "让可听见的守卫队友继续跟随，保留原版营地限制。", ACTION_NULL, "FP3D_FOLLOW",
+                person && npc_orders::can_issue( you, *person, npc_orders::kind::follow )
+            },
+            { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true }
+        }};
 }
 
 bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p )
@@ -168,22 +196,45 @@ std::optional<request> resolve( const std::string &command,
         const bool closes = here.ter( p ).obj().close || here.furn( p ).obj().close;
         const auto *npc = get_creature_tracker().creature_at<::npc>( p );
         const bool can_chat = npc && you.sees( here, *npc );
+        const int npc_id = can_chat ? npc->getID().get_value() : -1;
         action_id action = can_chat ? ACTION_CHAT :
                            opens ? ACTION_OPEN : closes ? ACTION_CLOSE : ACTION_EXAMINE_AND_PICKUP;
         if( command == "FP3D_INTERACT_LONG" ) {
-            uilist menu;
-            menu.title = "准星目标操作";
-            menu.addentry( ACTION_OPEN, opens, 'o', "打开" );
-            menu.addentry( ACTION_CLOSE, closes, 'c', "关闭" );
-            menu.addentry( ACTION_CHAT, can_chat, 't', "交谈" );
-            menu.addentry( ACTION_EXAMINE_AND_PICKUP, true, 'e', "查看 / 搜索容器" );
-            menu.addentry( ACTION_PICKUP, here.could_see_items( p, you ) &&
-                           !here.i_at( p ).empty(), 'f', "拾取物品" );
-            menu.query();
-            if( menu.ret < 0 || !valid( *candidate, you, here ) ) {
+            const auto choice = fp3d_quick_menu::show( context_entries( *candidate, you, here ),
+                                "目标操作" );
+            if( !choice || !choice->enabled || !valid( *candidate, you, here ) ||
+                !fp3d_compositor::turn_based() ) {
                 return std::nullopt;
             }
-            action = static_cast<action_id>( menu.ret );
+            if( choice->command ) {
+                const std::string order_command = choice->command;
+                if( order_command != "FP3D_GUARD" && order_command != "FP3D_FOLLOW" ) {
+                    return std::nullopt;
+                }
+                fp3d_inventory::operation operation;
+                operation.kind = fp3d_inventory::operation_kind::follower_order;
+                operation.talking_npc_id = npc_id;
+                operation.destination_tile = candidate->position;
+                operation.follower_command = order_command == "FP3D_GUARD" ?
+                                             npc_orders::kind::guard : npc_orders::kind::follow;
+                fp3d_inventory::stage( std::move( operation ) );
+                return request{ ACTION_ITEMACTION, std::nullopt, false };
+            }
+            action = choice->action;
+            if( action == ACTION_NULL ) {
+                return std::nullopt;
+            }
+        }
+        if( action == ACTION_CHAT ) {
+            if( !fp3d_journal::dialogue_target( you, here, npc_id, candidate->position ) ) {
+                return std::nullopt;
+            }
+            fp3d_inventory::operation operation;
+            operation.kind = fp3d_inventory::operation_kind::native;
+            operation.native_action = ACTION_CHAT;
+            operation.talking_npc_id = npc_id;
+            operation.destination_tile = candidate->position;
+            fp3d_inventory::stage( std::move( operation ) );
         }
         return request{ action, p, false };
     }

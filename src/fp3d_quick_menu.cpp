@@ -18,7 +18,7 @@ namespace fp3d_quick_menu
 namespace
 {
 constexpr float pi = 3.14159265358979323846f;
-const std::array<entry, 8> options = {{
+const std::array<entry, 8> default_options = {{
         { "投掷", "选择物品与目标，按原版规则投掷。", ACTION_THROW, nullptr },
         { "拖拽", "选择相邻家具或车辆，按原版规则拖拽。", ACTION_GRAB, nullptr },
         { "变异能力", "打开原版变异能力与特殊行动。", ACTION_MUTATIONS, nullptr },
@@ -34,14 +34,33 @@ class wheel : public cataimgui::window
 {
         SDL_Texture_Ptr background;
         float scale;
+        std::array<entry, 8> options;
+        std::string heading;
         int selected = -1;
         std::optional<int> chosen;
 
         void choose( int index ) {
+            if( index < 0 || index >= 8 || !options[index].enabled ) {
+                return;
+            }
+            if( options[index].action == ACTION_NULL && !options[index].command ) {
+                is_open = false;
+                return;
+            }
             chosen = index;
             button_action = options[index].command ? options[index].command :
                             action_ident( options[index].action );
             is_open = false;
+        }
+        void move_selection( int direction ) {
+            int next = selected < 0 ? ( direction > 0 ? -1 : 0 ) : selected;
+            for( int step = 0; step < 8; ++step ) {
+                next = ( next + direction + 8 ) % 8;
+                if( options[next].enabled ) {
+                    selected = next;
+                    return;
+                }
+            }
         }
         cataimgui::bounds get_bounds() override {
             const auto size = ImGui::GetIO().DisplaySize;
@@ -79,18 +98,20 @@ class wheel : public cataimgui::window
                     draw->PathArcTo( center, outer, first, last, 16 );
                     draw->PathArcTo( center, inner, last, first, 8 );
                 };
+                const bool active = index == selected && options[index].enabled;
                 path();
-                draw->PathFillConcave( index == selected ? IM_COL32( 113, 80, 35, 225 ) :
+                draw->PathFillConcave( active ? IM_COL32( 113, 80, 35, 225 ) :
                                        IM_COL32( 22, 21, 19, 205 ) );
                 path();
-                draw->PathStroke( index == selected ? gold : IM_COL32( 133, 120, 96, 160 ),
-                                  ImDrawFlags_Closed, index == selected ? 2 : 1 );
+                draw->PathStroke( active ? gold : IM_COL32( 133, 120, 96, 160 ),
+                                  ImDrawFlags_Closed, active ? 2 : 1 );
                 const float radius = ( inner + outer ) / 2;
                 text( options[index].label, center.x + std::cos( angle ) * radius,
-                      center.y + std::sin( angle ) * radius, index == selected ? gold : white );
+                      center.y + std::sin( angle ) * radius, !options[index].enabled ?
+                      IM_COL32( 138, 136, 130, 255 ) : active ? gold : white );
             }
             draw->AddCircleFilled( center, inner - 3, IM_COL32( 16, 15, 14, 205 ), 48 );
-            text( "快捷行动", center.x, center.y - font * .6f, white );
+            text( heading.c_str(), center.x, center.y - font * .6f, white );
             text( "Esc 返回", center.x, center.y + font * .9f, IM_COL32( 190, 188, 180, 255 ) );
             if( selected >= 0 ) {
                 text( options[selected].description, center.x, center.y + outer + font, white );
@@ -108,10 +129,12 @@ class wheel : public cataimgui::window
             }
         }
     public:
-        explicit wheel( int percent ) : cataimgui::window( "快捷行动轮盘",
-                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
-                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse ),
-            background( fp3d_compositor::copy_view() ), scale( std::clamp( percent, 100, 150 ) / 100.0f ) {}
+        wheel( const std::array<entry, 8> &choices, const std::string &caption,
+               int percent ) : cataimgui::window( "快捷行动轮盘",
+                           ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
+                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse ),
+            background( fp3d_compositor::copy_view() ), scale( std::clamp( percent, 100, 150 ) / 100.0f ),
+            options( choices ), heading( caption ) {}
         void draw() override {
             if( !is_open ) {
                 return;
@@ -145,9 +168,9 @@ class wheel : public cataimgui::window
                 if( action == "QUIT" ) {
                     is_open = false;
                 } else if( action == "DOWN" || action == "RIGHT" ) {
-                    selected = ( selected + 1 ) % 8;
+                    move_selection( 1 );
                 } else if( action == "UP" || action == "LEFT" ) {
-                    selected = selected < 0 ? 7 : ( selected + 7 ) % 8;
+                    move_selection( -1 );
                 } else if( action == "CONFIRM" && selected >= 0 ) {
                     choose( selected );
                 }
@@ -159,7 +182,7 @@ class wheel : public cataimgui::window
 
 const std::array<entry, 8> &entries()
 {
-    return options;
+    return default_options;
 }
 int sector_at( float x, float y, float inner_radius, float outer_radius )
 {
@@ -179,9 +202,18 @@ int sector_at( float x, float y, float inner_radius, float outer_radius )
 }
 std::unique_ptr<cataimgui::window> create( int scale_percent )
 {
-    return std::make_unique<wheel>( scale_percent );
+    return create( entries(), "快捷行动", scale_percent );
+}
+std::unique_ptr<cataimgui::window> create( const std::array<entry, 8> &choices,
+        const std::string &heading, int scale_percent )
+{
+    return std::make_unique<wheel>( choices, heading, scale_percent );
 }
 std::optional<entry> show()
+{
+    return show( entries(), "快捷行动" );
+}
+std::optional<entry> show( const std::array<entry, 8> &choices, const std::string &heading )
 {
     if( !fp3d_compositor::turn_based() ) {
         return std::nullopt;
@@ -201,7 +233,7 @@ std::optional<entry> show()
             g->invalidate_main_ui_adaptor();
         }
     } );
-    wheel menu( fp3d_modern_ui::scale_percent() );
+    wheel menu( choices, heading, fp3d_modern_ui::scale_percent() );
     return menu.run();
 }
 }

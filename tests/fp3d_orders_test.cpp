@@ -15,6 +15,7 @@
 #include "cata_catch.h"
 #include "cata_scope_helpers.h"
 #include "fp3d_inventory.h"
+#include "fp3d_interaction.h"
 #include "game.h"
 #include "map.h"
 #include "map_helpers.h"
@@ -172,6 +173,107 @@ TEST_CASE( "fp3d_follower_order_rejects_stale_invisible_or_illegal_targets_witho
     CHECK( rng_get_engine() == engine );
     CHECK( person.mission == mission );
     CHECK( person.get_attitude() == attitude );
+}
+
+
+TEST_CASE( "fp3d_context_wheel_reads_native_permissions_without_mutating_the_world",
+           "[fp3d][npc][wheel]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    npc &person = spawn_npc( point_bub_ms( 64, 65 ), "test_talker" );
+    person.set_fac( faction_id( "your_followers" ) );
+    person.set_attitude( NPCATT_FOLLOW );
+    bool guard = true;
+    bool follow = false;
+    bool chat = true;
+    SECTION( "following ally" ) {}
+    SECTION( "guarding ally" ) {
+        person.set_attitude( NPCATT_NULL );
+        person.set_mission( NPC_MISSION_GUARD_ALLY );
+        guard = false;
+        follow = true;
+    }
+    SECTION( "camp guard" ) {
+        person.set_attitude( NPCATT_NULL );
+        person.set_mission( NPC_MISSION_GUARD_ALLY );
+        person.companion_mission_role_id = "FACTION_CAMP";
+        guard = false;
+    }
+    SECTION( "neutral person" ) {
+        person.set_fac( faction_id( "no_faction" ) );
+        guard = false;
+    }
+    SECTION( "deaf ally" ) {
+        person.add_effect( efftype_id( "deaf" ), 1_hours, false, 3 );
+        REQUIRE_FALSE( person.can_hear( you.pos_bub(), you.get_shout_volume() ) );
+        guard = false;
+    }
+    SECTION( "distant person is outside targeted interaction reach" ) {
+        person.setpos( here, tripoint_bub_ms( 70, 65, 0 ) );
+        guard = chat = false;
+    }
+    here.build_map_cache( 0 );
+    here.update_visibility_cache( 0 );
+    on_out_of_scope cleanup( []() {
+        clear_npcs();
+    } );
+    const fp3d_targeting::target target{ you.pos_abs(), person.pos_abs(), fp3d_targeting::kind::creature, {} };
+    const auto engine = rng_get_engine();
+    const auto clock = calendar::turn;
+    const int moves = you.get_moves();
+    const auto mission = person.mission;
+    for( int sample = 0; sample < 30; ++sample ) {
+        const auto choices = fp3d_interaction::context_entries( target, you, here );
+        CHECK( choices[2].enabled == chat );
+        CHECK( choices[5].enabled == guard );
+        CHECK( choices[6].enabled == follow );
+        CHECK( choices[7].enabled );
+    }
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == clock );
+    CHECK( rng_get_engine() == engine );
+    CHECK( person.mission == mission );
+}
+
+TEST_CASE( "fp3d_short_interaction_stages_the_selected_npc_identity_once",
+           "[fp3d][npc][interaction]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    npc &person = spawn_npc( point_bub_ms( 64, 65 ), "test_talker" );
+    npc &other = spawn_npc( point_bub_ms( 65, 64 ), "test_talker" );
+    REQUIRE( person.getID() != other.getID() );
+    here.build_map_cache( 0 );
+    here.update_visibility_cache( 0 );
+    fp3d_inventory::clear_pending();
+    on_out_of_scope cleanup( []() {
+        clear_npcs();
+        fp3d_inventory::clear_pending();
+    } );
+    const fp3d_targeting::target target{ you.pos_abs(), person.pos_abs(), fp3d_targeting::kind::creature, {} };
+    const auto engine = rng_get_engine();
+    const auto clock = calendar::turn;
+    const int moves = you.get_moves();
+    const auto result = fp3d_interaction::resolve( "FP3D_INTERACT", target, you, here );
+    REQUIRE( result );
+    CHECK( result->action == ACTION_CHAT );
+    CHECK( result->position == std::optional<tripoint_bub_ms>( person.pos_bub( here ) ) );
+    CHECK( fp3d_inventory::take_talking_npc_id() == std::optional<int>( person.getID().get_value() ) );
+    CHECK_FALSE( fp3d_inventory::take_talking_npc_id() );
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == clock );
+    CHECK( rng_get_engine() == engine );
 }
 
 // Cold-process native case primitives versus the actual modern operation path.
