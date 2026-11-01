@@ -15,6 +15,7 @@
 #include "fp3d_map.h"
 #include "fp3d_hud.h"
 #include "catacharset.h"
+#include "cata_utility.h"
 #include "cursesport.h"
 #include "sdltiles.h"
 #include "fp3d_snapshot.h"
@@ -513,7 +514,7 @@ class panel : public cataimgui::window
                         continue;
                     }
                     if( ( category == 0 || entry.category == category ) &&
-                        ( search.empty() || entry.name.find( search ) != std::string::npos ) ) {
+                        lcmatch( entry.name, search ) ) {
                         indices.push_back( index );
                     }
                 }
@@ -972,7 +973,7 @@ class panel : public cataimgui::window
             std::optional<size_t> first;
             for( size_t i = 0; i < projects.size(); ++i ) {
                 const auto &entry = projects[i];
-                if( ( !project_search.empty() && entry.name.find( project_search ) == std::string::npos ) ||
+                if( !lcmatch( entry.name, project_search ) ||
                     ( !project_category.empty() && entry.category != project_category ) ) {
                     continue;
                 }
@@ -1034,7 +1035,7 @@ class panel : public cataimgui::window
                 std::vector<const fp3d_journal::person_entry *> filtered;
                 const fp3d_journal::person_entry *person = nullptr;
                 for( const auto &entry : journal.people ) {
-                    if( !people_search.empty() && entry.name.find( people_search ) == std::string::npos ) {
+                    if( !lcmatch( entry.name, people_search ) ) {
                         continue;
                     }
                     filtered.push_back( &entry );
@@ -1140,8 +1141,7 @@ class panel : public cataimgui::window
             std::optional<size_t> first_match;
             for( size_t i = 0; i < journal.missions.size(); ++i ) {
                 const auto &entry = journal.missions[i];
-                if( entry.state != mission_state || ( !mission_search.empty() &&
-                                                      entry.name.find( mission_search ) == std::string::npos ) ) {
+                if( entry.state != mission_state || !lcmatch( entry.name, mission_search ) ) {
                     continue;
                 }
                 any = true;
@@ -1271,7 +1271,7 @@ class panel : public cataimgui::window
             }
             std::vector<size_t> filtered;
             for( size_t i = 0; i < recipes.size(); ++i ) {
-                if( ( recipe_search.empty() || recipes[i].name.find( recipe_search ) != std::string::npos ) &&
+                if( lcmatch( recipes[i].name, recipe_search ) &&
                     ( recipe_skill.empty() || recipes[i].skill == recipe_skill ) &&
                     ( !favorite_recipes_only || fp3d_crafting::is_favorite( recipes[i].id ) ) &&
                     ( !recipe_category || recipes[i].category == *recipe_category ) ) {
@@ -1429,7 +1429,7 @@ class panel : public cataimgui::window
             ImGui::SetNextItemWidth( -1 );
             ImGui::InputTextWithHint( "##技能搜索", "搜索技能", &skill_search );
             for( const auto &row : skills ) {
-                if( !skill_search.empty() && row.name.find( skill_search ) == std::string::npos ) {
+                if( !lcmatch( row.name, skill_search ) ) {
                     continue;
                 }
                 ImGui::TextWrapped( "%s  %d / %d", row.name.c_str(), row.practical, row.theory );
@@ -1483,7 +1483,7 @@ class panel : public cataimgui::window
                 ImGui::InputTextWithHint( "##消息搜索", "搜索消息", &message_search );
                 std::vector<size_t> filtered;
                 for( size_t i = 0; i < messages.size(); ++i ) {
-                    if( message_search.empty() || messages[i].second.find( message_search ) != std::string::npos ) {
+                    if( lcmatch( messages[i].second, message_search ) ) {
                         filtered.push_back( i );
                     }
                 }

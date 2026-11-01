@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：95 用例 / 9133 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-use-preview-cpu.log`）；图形回归：3002 断言（`modern-use-preview-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：95 用例 / 9133 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-search-cpu.log`）；图形回归：3002 断言（`modern-search-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-use-preview`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-search`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -643,3 +643,12 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 95用例9133断言（modern-use-preview-cpu.log，含rng）、图形3002（modern-use-preview-gl.log）、ON/OFF（modern-use-preview-on.log / modern-use-preview-off.log）通过。当前原版施工续作既有隐藏对照重跑：modern-build-resume-enabled-compare/20261101-171656-107，原版两次与现代一次SHA256均为2059F612CB77BE3D4B8414CB3331E592BC848E9CA215DC5AA3598859519916ED，完成与丢失知识中断两种情形一致。该夹具预置已扣料的partial_con、逐tick提供100AP并推进1秒，仅验证原版续作handler和现代HUD读取；不包含初次选点/扣材确认，也不是完整世界do_turn。第一次调用漏设CDDA_FP3D启用环境，现代分支requested前置断言失败；已补环境重跑，初始失败日志保留。
 
 验证入口runtime/modern-controls-use-preview，正式存档和主启动入口保持原配置。继续现代菜单搜索与细节操作一致性。
+
+
+### 2026-11-01：P5.4 现代菜单使用原版文字搜索
+
+物品、建造、人物、任务、配方、技能及消息搜索统一调用原版lcmatch，不再大小写敏感；保留UTF-8匹配、原版重音处理，并遵循原版USE_PINYIN_SEARCH设置。清空搜索依旧显示全部；筛选不执行动作。仅接入既有匹配方法，不自建词库或更改原版搜索规则。
+
+95用例9133断言（modern-search-cpu.log，含rng）、既有原版lcmatch 23断言/1用例（modern-search-native.log）、图形3002（modern-search-gl.log）、ON/OFF（modern-search-on.log / modern-search-off.log）通过。没有为薄调用增加镜像单测。实体中文IME、开启拼音设置后的完整输入流程仍待实机验收；此次未宣称已完成IME验收。
+
+验证入口runtime/modern-controls-search。继续P5.1可调长按阈值，默认250毫秒保留。
