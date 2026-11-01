@@ -17,9 +17,9 @@
 | P5.6 | 墙/地板/门窗贴图蓝图及特殊工程占位，确认时重查地形/材料/知识，预览保持 RNG/AP/时间；原版施工活动、可见 NPC 对话及守卫/跟随命令、长按E目标轮盘 | 家具/楼梯等精确模型、完整队友命令与实际施工链 |
 | P5.7 | 功能/图形/ON-OFF、官方存档读回及完整回合一致；实际静止/行走/三层室外/二楼室内/楼梯往返各一分钟采样、正式存档哈希保护 | 完整正式流程；实体拖放/IME/高 DPI；战斗、正式城市与复杂室内等性能验收 |
 
-最近一次工作树回归（含并行任务改动）：93 用例 / 7780 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-craft-materials-cpu.log`）；图形回归：2942 断言（`modern-craft-materials-gl.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
+最近一次工作树回归（含并行任务改动）：94 用例 / 9061 断言（`[fp3d],[rng]`，含3个原版RNG用例；`modern-build-categories-cpu-final.log`）；图形回归：3002 断言（`modern-build-categories-gl-final.log`）。地图标记新增/修改/删除使用原版记录；原版地图 view 序列化读回验证通过。未探索格不会因手写标记变为已探索，未载入区域不会因标记生成地形。保存/删除在绘制回调之外处理，保持面板与世界时间/AP/RNG。
 
-本线程验证包为 `runtime/modern-controls-craft-materials`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
+本线程验证包为 `runtime/modern-controls-build-categories`，新增根目录“启动3D操作修复验证.cmd”；现有主启动器由并行任务指向 `render-exclusive`，保持其配置。原有 `runtime/0i1/user` 存档不变。其他任务的主菜单与 `overmap_ui.cpp` 改动保留，不纳入本轮提交。下文实施记录包含历史阶段数据，以本节及后续带日期增量为最新结论。
 
 ## 已接入的操作
 
@@ -607,3 +607,12 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 独立进程原版两次与现代各一次对照再次通过：开工modern-craft-materials-start-compare/20261101-164911-495，SHA256 710C50B1F8147E97002ED0C5D80204B47250215BDDCC6694F46C171556BE1442；完成modern-craft-materials-finish-compare/20261101-164911-495，SHA256 9643B86CA2EE7648864028A785ED16A5F04856B9B01F8485A847AAF5689995F5。均含1/3批，结果与此前基线相同；完成对照为相同受限测试行动点预算下的原版活动执行，不是完整世界do_turn。
 
 操作验证入口更新runtime/modern-controls-craft-materials。继续建设页分类与布局；实体收藏/拖放/IME及完整正式性能仍待实机验收。
+
+
+### 2026-11-01：P5.4 建造页原版分类与三栏
+
+建造页宽屏左分类、中项目/搜索、右施工说明，窄屏分类下拉；原有按分类/搜索筛选及空结果禁用选择保持，长分类名可悬停查看（制作页同样补齐）。蓝图位置、最终材料/知识/亮度/势力检查与原版ACT_BUILD链不改。建造详情、位置预览及现代开工资格的只读范围统一使用完整RNG保护，覆盖正态分布缓存；实际选材料/施工仍在保护范围之外。额外在旧详情/预览路径进行正常样本单测，1429断言原先即通过，未据此声称观察到旧版正态样本错误。
+
+94用例9061断言（modern-build-categories-cpu-final.log，含rng）、图形3002（modern-build-categories-gl-final.log）、ON/OFF（modern-build-categories-on-final.log / modern-build-categories-off-final.log）通过。新增逐原版施工组详情保持RNG/正态样本，位置预览八种材料/知识/地形/距离情形保留正常样本，以及材料移除后现代开工拒绝。图形增建造三栏位置/边界/窄屏检查，已看Undead 1080p/100%与720p/150%截图。首次图形检查误用了任务页编号，导致查找建造子窗失败1条；已按现有页面映射修正测试并重跑通过，初始失败日志保留。
+
+验证入口runtime/modern-controls-build-categories，阶段报告更新；下一步按施工阶段显示当前材料/工具与知识资格。实际建造活动完整原版对照和实体鼠标/IME/正式性能仍待后续验收。

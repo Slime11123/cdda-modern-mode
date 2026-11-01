@@ -917,13 +917,14 @@ class panel : public cataimgui::window
                 }
                 projects_loaded = true;
             }
-            const float height = ImGui::GetContentRegionAvail().y - 85 * scale;
+            const float height = std::max( 100.0f, ImGui::GetContentRegionAvail().y - 85 * scale );
             const float width = ImGui::GetContentRegionAvail().x;
-            ImGui::BeginChild( "建造项目", ImVec2( width * .44f, height ), true );
-            ImGui::SetNextItemWidth( -1 );
-            ImGui::InputTextWithHint( "##建造搜索", "搜索建造项目", &project_search );
-            if( ImGui::BeginCombo( "分类",
-                                   project_category.empty() ? "全部" : project_category.c_str() ) ) {
+            const bool category_sidebar = width >= 1100 * scale;
+            const float category_width = category_sidebar ? std::clamp( width * .16f, 130 * scale,
+                                         190 * scale ) : 0;
+            const float remaining = width - ( category_sidebar ? category_width +
+                                             ImGui::GetStyle().ItemSpacing.x : 0 );
+            const auto category_options = [&]() {
                 if( ImGui::Selectable( "全部", project_category.empty() ) ) {
                     project_category.clear();
                 }
@@ -935,8 +936,32 @@ class panel : public cataimgui::window
                     if( ImGui::Selectable( category.c_str(), project_category == category ) ) {
                         project_category = category;
                     }
+                    if( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip( "%s", category.c_str() );
+                    }
                 }
-                ImGui::EndCombo();
+            };
+            if( category_sidebar ) {
+                ImGui::BeginChild( "建造分类", ImVec2( category_width, height ), true );
+                ImGui::TextUnformatted( "建造分类" );
+                ImGui::Separator();
+                category_options();
+                ImGui::EndChild();
+                ImGui::SameLine();
+            }
+            ImGui::BeginChild( "建造项目", ImVec2( remaining * .46f, height ), true );
+            ImGui::SetNextItemWidth( -1 );
+            ImGui::InputTextWithHint( "##建造搜索", "搜索建造项目", &project_search );
+            if( !category_sidebar ) {
+                ImGui::SetNextItemWidth( -1 );
+                if( ImGui::BeginCombo( "##建造分类",
+                                      project_category.empty() ? "全部" : project_category.c_str() ) ) {
+                    category_options();
+                    ImGui::EndCombo();
+                }
+                if( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip( "建造分类" );
+                }
             }
             bool selected_visible = false;
             std::optional<size_t> first;
@@ -1191,6 +1216,9 @@ class panel : public cataimgui::window
                     ImGui::PushID( id.str().c_str() );
                     if( ImGui::Selectable( name.c_str(), recipe_category && *recipe_category == id ) ) {
                         recipe_category = id;
+                    }
+                    if( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip( "%s", name.c_str() );
                     }
                     ImGui::PopID();
                 }

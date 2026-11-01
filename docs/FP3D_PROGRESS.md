@@ -530,3 +530,5 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 2026-11-01：P5.4 制作页原版分类/三栏布局及窄屏分类下拉完成。92用例7750断言、图形2942、ON/OFF通过。操作验证入口runtime/modern-controls-craft-categories；原版材料可用性/缺项提示继续推进。
 
 2026-11-01：P5.4 制作详情增加原版开工材料/工具及缺项。93用例7780断言、图形2942、ON/OFF通过；独立原版/现代1与3批开工及完成对照哈希保持原基线。入口runtime/modern-controls-craft-materials。继续建造分类与布局。
+
+2026-11-01：建造页三栏/窄屏分类与完整RNG保护接入。94用例9061断言、图形3002、ON/OFF通过；入口runtime/modern-controls-build-categories。继续施工阶段材料/工具/知识显示。

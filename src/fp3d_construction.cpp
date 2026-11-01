@@ -9,7 +9,7 @@
 #include "construction_category.h"
 #include "output.h"
 #include "requirements.h"
-#include "rng.h"
+#include "scoped_rng.h"
 #include "skill.h"
 #include "fp3d_compositor.h"
 #include "fp3d_input.h"
@@ -37,7 +37,7 @@ std::vector<project> catalogue()
 }
 std::string details( const construction_group_str_id &group )
 {
-    restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
+    scoped_rng_restore restore_rng;
     std::string result;
     int stage = 0;
     for( const auto &entry : get_constructions() ) {
@@ -58,7 +58,7 @@ std::string details( const construction_group_str_id &group )
 bool preview_allowed( avatar &you, map &here, const construction &project,
                       const fp3d_targeting::target &target )
 {
-    restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
+    scoped_rng_restore restore_rng;
     return fp3d_interaction::valid( target, you, here ) &&
            can_construct( project, here.get_bub( target.position ) ) &&
            player_can_build( you, you.crafting_inventory(), project, true );

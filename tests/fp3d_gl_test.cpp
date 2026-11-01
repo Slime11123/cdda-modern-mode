@@ -1235,7 +1235,11 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 REQUIRE( ImGui::GetDrawData()->TotalVtxCount > 100 );
                 CHECK( ImGui::GetDrawData()->TotalVtxCount < 20000 );
-                if( page == 3 ) {
+                if( page == 3 || page == 6 ) {
+                    CAPTURE( page, layout[0], layout[1], layout[2] );
+                    const std::string category_name = page == 3 ? "/配方分类_" : "/建造分类_";
+                    const std::string grid_name = page == 3 ? "/配方_" : "/建造项目_";
+                    const std::string details_name = page == 3 ? "/配方详情_" : "/建造说明_";
                     ImGuiWindow *categories = nullptr;
                     ImGuiWindow *grid = nullptr;
                     ImGuiWindow *details = nullptr;

@@ -13,6 +13,7 @@
 #include "player_helpers.h"
 #include "rng.h"
 #include "skill.h"
+#include "scoped_rng.h"
 
 TEST_CASE( "fp3d_construction_preview_rechecks_native_requirements_without_side_effects",
            "[fp3d][construction]" )
@@ -77,6 +78,11 @@ TEST_CASE( "fp3d_construction_preview_rechecks_native_requirements_without_side_
     const int moves = you.get_moves();
     const auto terrain = here.ter( position );
     const auto items = here.i_at( you.pos_bub( here ) ).size();
+    double expected_normal;
+    {
+        scoped_rng_restore preserve;
+        expected_normal = normal_roll( 12, 3 );
+    }
     CAPTURE( you.get_knowledge_level( skill_id( "fabrication" ) ), items, terrain );
     const bool allowed = fp3d_construction::preview_allowed( you, here, *project, *target );
     CHECK( allowed == expected );
@@ -86,12 +92,39 @@ TEST_CASE( "fp3d_construction_preview_rechecks_native_requirements_without_side_
         stable = stable && current == expected;
     }
     CHECK( stable );
+    if( items == 0 ) {
+        CHECK_FALSE( fp3d_construction::begin( project->group ) );
+    }
     CHECK( rng_get_engine() == engine );
+    CHECK( normal_roll( 12, 3 ) == expected_normal );
     CHECK( calendar::turn == clock );
     CHECK( you.get_moves() == moves );
     CHECK( here.ter( position ) == terrain );
     CHECK( here.i_at( you.pos_bub( here ) ).size() == items );
     CHECK_FALSE( here.partial_con_at( position ) );
     CHECK( you.activity.is_null() );
+}
+
+TEST_CASE( "fp3d_construction_details_preserve_native_normal_samples", "[fp3d][construction]" )
+{
+    const auto &you = get_avatar();
+    const auto clock = calendar::turn;
+    const int moves = you.get_moves();
+    const auto projects = fp3d_construction::catalogue();
+    REQUIRE_FALSE( projects.empty() );
+    for( const auto &project : projects ) {
+        CAPTURE( project.id );
+        const auto engine = rng_get_engine();
+        double expected;
+        {
+            scoped_rng_restore preserve;
+            expected = normal_roll( 12, 3 );
+        }
+        REQUIRE_FALSE( fp3d_construction::details( project.id ).empty() );
+        CHECK( rng_get_engine() == engine );
+        CHECK( normal_roll( 12, 3 ) == expected );
+    }
+    CHECK( calendar::turn == clock );
+    CHECK( you.get_moves() == moves );
 }
 #endif

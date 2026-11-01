@@ -2,6 +2,7 @@
 #if defined(ENABLE_FP3D)
 #include "fp3d_compositor.h"
 #include "fp3d_construction.h"
+#include "scoped_rng.h"
 #endif
 
 #include <algorithm>
@@ -1109,7 +1110,7 @@ bool fp3d_construction::begin( const construction_group_str_id &group )
     avatar &you = get_avatar();
     bool allowed;
     {
-        restore_on_out_of_scope<cata_default_random_engine> restore_rng( rng_get_engine() );
+        scoped_rng_restore restore_rng;
         allowed = player_can_build( you, you.crafting_inventory(), group );
     }
     if( !allowed ) {
