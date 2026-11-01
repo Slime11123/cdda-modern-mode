@@ -69,6 +69,8 @@ class panel : public cataimgui::window
         std::string recipe_details;
         size_t selected_recipe = 0;
         int crafting_batch = 1;
+        bool favorite_recipes_only = false;
+        std::optional<std::pair<recipe_id, bool>> pending_recipe_favorite;
         bool journal_loaded = false;
         fp3d_journal::model journal;
         int mission_state = 0;
@@ -1175,6 +1177,7 @@ class panel : public cataimgui::window
             ImGui::TextWrapped( "已知、书籍与队友可用配方：%zu", recipes.size() );
             ImGui::SetNextItemWidth( -1 );
             ImGui::InputTextWithHint( "##配方搜索", "搜索配方", &recipe_search );
+            ImGui::Checkbox( "仅显示收藏", &favorite_recipes_only );
             if( ImGui::BeginCombo( "主技能", recipe_skill.empty() ? "全部" : recipe_skill.c_str() ) ) {
                 if( ImGui::Selectable( "全部", recipe_skill.empty() ) ) {
                     recipe_skill.clear();
@@ -1193,7 +1196,8 @@ class panel : public cataimgui::window
             std::vector<size_t> filtered;
             for( size_t i = 0; i < recipes.size(); ++i ) {
                 if( ( recipe_search.empty() || recipes[i].name.find( recipe_search ) != std::string::npos ) &&
-                    ( recipe_skill.empty() || recipes[i].skill == recipe_skill ) ) {
+                    ( recipe_skill.empty() || recipes[i].skill == recipe_skill ) &&
+                    ( !favorite_recipes_only || fp3d_crafting::is_favorite( recipes[i].id ) ) ) {
                     filtered.push_back( i );
                 }
             }
@@ -1202,7 +1206,7 @@ class panel : public cataimgui::window
                 recipe_details = fp3d_crafting::details( recipes[selected_recipe].id, you, crafting_batch );
             }
             if( filtered.empty() ) {
-                ImGui::TextWrapped( "没有匹配的配方，请修改搜索或主技能筛选。" );
+                ImGui::TextWrapped( "没有匹配的配方，请修改搜索、主技能或收藏筛选。" );
             }
             const float area = ImGui::GetContentRegionAvail().x;
             const int columns = std::max( 1, static_cast<int>( area / ( 175 * scale ) ) );
@@ -1246,8 +1250,9 @@ class panel : public cataimgui::window
                                             ImVec2( start.x + 4 * scale, start.y + 4 * scale ),
                                             ImVec2( start.x + 52 * scale, start.y + 52 * scale ) );
                         }
+                        const std::string name = ( fp3d_crafting::is_favorite( entry.id ) ? "★ " : "" ) + entry.name;
                         draw->AddText( nullptr, ImGui::GetFontSize(), ImVec2( start.x + 58 * scale, start.y + 4 * scale ),
-                                       IM_COL32( 235, 235, 235, 255 ), entry.name.c_str(), nullptr, cell - 64 * scale );
+                                       IM_COL32( 235, 235, 235, 255 ), name.c_str(), nullptr, cell - 64 * scale );
                         draw->PopClipRect();
                         if( ImGui::IsItemHovered() ) {
                             ImGui::SetTooltip( "%s", entry.name.c_str() );
@@ -1262,6 +1267,10 @@ class panel : public cataimgui::window
             if( !filtered.empty() ) {
                 const auto &entry = recipes[selected_recipe];
                 ImGui::TextWrapped( "%s", entry.name.c_str() );
+                const bool favorite = fp3d_crafting::is_favorite( entry.id );
+                if( ImGui::Button( favorite ? "取消配方收藏" : "收藏配方" ) ) {
+                    pending_recipe_favorite = std::pair{ entry.id, !favorite };
+                }
                 ImGui::TextWrapped( "主技能：%s / 难度 %d", entry.skill.c_str(), entry.difficulty );
                 ImGui::TextWrapped( "由玩家制作；材料、工具、技能、容器、光照和士气按原版检查。" );
                 ImGui::SetNextItemWidth( 100 * scale );
@@ -1763,6 +1772,14 @@ class panel : public cataimgui::window
             context.register_action( "HELP_KEYBINDINGS" );
             while( is_open ) {
                 ui_manager::redraw();
+                if( pending_recipe_favorite ) {
+                    const auto request = *pending_recipe_favorite;
+                    pending_recipe_favorite.reset();
+                    action_message = fp3d_crafting::set_favorite( you, request.first, request.second ) ?
+                                     std::string() : "配方已不在可用列表中，请刷新制作页。";
+                    recipes_loaded = false;
+                    continue;
+                }
                 if( pending_travel ) {
                     const auto target = *pending_travel;
                     pending_travel.reset();

@@ -40,6 +40,27 @@ std::vector<entry> capture( const avatar &you )
     } );
     return result;
 }
+bool is_favorite( const recipe_id &id )
+{
+    return uistate.favorite_recipes.count( id ) != 0;
+}
+bool set_favorite( const avatar &you, const recipe_id &id, bool favorite )
+{
+    if( !id.is_valid() || id->obsolete || id->is_nested() ) {
+        return false;
+    }
+    scoped_rng_restore restore_rng;
+    if( !you.get_group_available_recipes().contains( &*id ) ) {
+        return false;
+    }
+    if( favorite ) {
+        uistate.favorite_recipes.insert( id );
+        uistate.read_recipes.insert( id );
+    } else {
+        uistate.favorite_recipes.erase( id );
+    }
+    return true;
+}
 std::string details( const recipe_id &id )
 {
     if( !id.is_valid() ) {

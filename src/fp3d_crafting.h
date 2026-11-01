@@ -17,6 +17,8 @@ struct entry {
     int difficulty = 0;
 };
 std::vector<entry> capture( const avatar &you );
+bool is_favorite( const recipe_id &id );
+bool set_favorite( const avatar &you, const recipe_id &id, bool favorite );
 std::string details( const recipe_id &id );
 std::string details( const recipe_id &id, const avatar &crafter, int batch_size = 1 );
 bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error );

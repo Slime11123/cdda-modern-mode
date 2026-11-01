@@ -23,6 +23,7 @@
 #include "crafting_gui.h"
 #include "crafting.h"
 #include "skill.h"
+#include "uistate.h"
 
 static void prepare_batch_craft()
 {
@@ -63,6 +64,40 @@ TEST_CASE( "fp3d_preview_restores_normal_distribution_spare_samples", "[fp3d][cr
     fp3d_crafting::capture( get_avatar() );
     fp3d_crafting::details( recipe_id( "makeshift_crowbar_test_no_tools" ), get_avatar(), 3 );
     CHECK( normal_roll( 12, 3 ) == expected );
+}
+
+TEST_CASE( "fp3d_recipe_favorites_share_native_ui_state_without_gameplay_cost", "[fp3d][crafting]" )
+{
+    prepare_batch_craft();
+    restore_on_out_of_scope restore_favorites( uistate.favorite_recipes );
+    restore_on_out_of_scope restore_read( uistate.read_recipes );
+    const recipe_id id( "makeshift_crowbar_test_no_tools" );
+    uistate.favorite_recipes.erase( id );
+    uistate.read_recipes.erase( id );
+    const int moves = get_avatar().get_moves();
+    const auto clock = calendar::turn;
+    const auto engine = rng_get_engine();
+    REQUIRE( fp3d_crafting::set_favorite( get_avatar(), id, true ) );
+    CHECK( fp3d_crafting::is_favorite( id ) );
+    CHECK( uistate.favorite_recipes.count( id ) == 1 );
+    CHECK( uistate.read_recipes.count( id ) == 1 );
+    // Changes made in the original crafting menu are visible immediately too.
+    uistate.favorite_recipes.erase( id );
+    CHECK_FALSE( fp3d_crafting::is_favorite( id ) );
+    uistate.favorite_recipes.insert( id );
+    REQUIRE( fp3d_crafting::set_favorite( get_avatar(), id, false ) );
+    CHECK_FALSE( fp3d_crafting::is_favorite( id ) );
+    CHECK( uistate.read_recipes.count( id ) == 1 );
+    const auto favorites = uistate.favorite_recipes;
+    const auto read = uistate.read_recipes;
+    CHECK_FALSE( fp3d_crafting::set_favorite( get_avatar(), recipe_id( "not_a_recipe" ), true ) );
+    CHECK_FALSE( fp3d_crafting::set_favorite( get_avatar(), recipe_id( "cudgel_test_no_tools" ),
+                 true ) );
+    CHECK( uistate.favorite_recipes == favorites );
+    CHECK( uistate.read_recipes == read );
+    CHECK( get_avatar().get_moves() == moves );
+    CHECK( calendar::turn == clock );
+    CHECK( rng_get_engine() == engine );
 }
 
 TEST_CASE( "fp3d_batch_preview_uses_native_time_and_requirement_scaling", "[fp3d][crafting]" )
