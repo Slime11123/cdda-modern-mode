@@ -1,4 +1,5 @@
 #include "fp3d_snapshot.h"
+#include "fp3d_interaction.h"
 #include "fp3d_regression.h"
 
 #if defined(TILES) && defined(ENABLE_FP3D)
@@ -450,6 +451,13 @@ scene_snapshot capture( const avatar &you, const map &here, int above, int below
                         const auto creature = creatures.find( p );
                         capture_sprites( result, you, here, p,
                                          creature == creatures.end() ? nullptr : creature->second );
+                        if( visible && !tile.exterior_only && p.z() == player.z() && square_dist( p, player ) <= 1 ) {
+                            const fp3d_targeting::target target{ you.pos_abs(), tile.position, fp3d_targeting::kind::terrain, tile.terrain };
+                            const auto choices = fp3d_interaction::context_entries( target, you, here );
+                            if( std::any_of( choices.begin(), choices.end(), []( const auto &choice ) {
+                                return choice.visible && choice.enabled && ( choice.action != ACTION_NULL || choice.command );
+                            } ) ) { result.interactable.push_back( tile.position ); }
+                        }
                         // Empty sky/shaft cells carry no geometry. Keep only an
                         // overhead boundary; flying creatures were copied above.
                         const auto overhead = p + tripoint_rel_ms( 0, 0, 1 );

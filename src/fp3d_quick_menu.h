@@ -19,10 +19,11 @@ struct entry {
     action_id action;
     const char *command;
     bool enabled = true;
+    bool visible = true;
 };
 const std::array<entry, 8> &entries();
 // Clockwise sectors start at twelve o'clock. The centre and exterior cancel.
-int sector_at( float x, float y, float inner_radius, float outer_radius );
+int sector_at( float x, float y, float inner_radius, float outer_radius, int count = 8 );
 std::unique_ptr<cataimgui::window> create( int scale_percent = 100 );
 std::unique_ptr<cataimgui::window> create( const std::array<entry, 8> &choices,
         const std::string &heading, int scale_percent = 100 );

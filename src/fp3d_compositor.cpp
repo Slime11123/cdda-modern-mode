@@ -27,6 +27,8 @@
 #include "fp3d_scene.h"
 #include "fp3d_snapshot.h"
 #include "sdltiles.h"
+#include "input.h"
+#include "output.h"
 
 namespace fp3d_compositor
 {
@@ -40,6 +42,7 @@ SDL_GLContext context = nullptr; // Borrowed; never create or swap a context.
 GLuint framebuffer = 0;
 GLuint color_texture = 0;
 GLuint depth_buffer = 0;
+SDL_Texture_Ptr menu_background;
 bool enabled = false;
 bool panel_input = false;
 bool available = false;
@@ -412,9 +415,63 @@ std::vector<std::string> hud_lines()
     const auto target = interaction_target();
     const bool reachable = target && target->position.z() == latest_scene->origin.z() &&
                            square_dist( target->position, latest_scene->origin ) <= 1;
-    lines.push_back( reachable ? "E 交互 / F 拾取 / Tab 面板 / Q 行动轮盘" : target ?
-                     "目标超出触及范围 / 请靠近并保持同层" : "Tab 面板 / Q 行动轮盘 / Alt 状态 / F6 键位" );
+    lines.push_back( target && !reachable ? "目标超出触及范围 / 请靠近并保持同层" :
+                     "Tab 面板 / Q 行动轮盘 / Alt 状态 / F6 键位" );
     return lines;
+}
+
+bool interaction_available()
+{
+    if( !turn_based() || !draw_permitted || construction_preview ) { return false; }
+    const auto target = interaction_target();
+    if( !target || target->position.z() != latest_scene->origin.z() ||
+        square_dist( target->position, latest_scene->origin ) > 1 ) { return false; }
+    return std::find( latest_scene->interactable.begin(), latest_scene->interactable.end(),
+                      target->position ) != latest_scene->interactable.end();
+}
+std::string interaction_prompt()
+{
+    if( !interaction_available() ) { return {}; }
+    const auto &bindings = inp_mngr.get_input_for_action( "FP3D_INTERACT", "FP3D" );
+    // 3D gestures resolve raw SDL key codes even when the original menus use
+    // character input. get_desc would incorrectly hide those physical bindings.
+    return "按[" + ( bindings.empty() ? std::string( "未绑定" ) :
+                    remove_color_tags( bindings.front().long_description() ) ) + "]互动";
+}
+bool draw_menu_background( int x, int y, int width, int height )
+{
+    if( !turn_based() || draw_permitted ) { return false; }
+    if( !menu_background ) { menu_background = copy_view(); }
+    const SDL_bool clipped = SDL_RenderIsClipEnabled( renderer );
+    SDL_Rect previous;
+    SDL_RenderGetClipRect( renderer, &previous );
+    const SDL_Rect destination{ x, y, width, height };
+    SDL_RenderSetClipRect( renderer, &destination );
+    if( menu_background ) {
+        int output_width = 0, output_height = 0, logical_width = 0, logical_height = 0;
+        SDL_GetRendererOutputSize( renderer, &output_width, &output_height );
+        SDL_RenderGetLogicalSize( renderer, &logical_width, &logical_height );
+        if( logical_width == 0 || logical_height == 0 ) {
+            logical_width = output_width;
+            logical_height = output_height;
+        }
+        // Preserve the 3D viewport's aspect and position even when the native
+        // terrain window covers only part of it or SDL uses logical scaling.
+        const SDL_Rect view{ static_cast<int>( viewport_x * logical_width ),
+                             static_cast<int>( viewport_y * logical_height ),
+                             static_cast<int>( viewport_width * logical_width ),
+                             static_cast<int>( viewport_height * logical_height ) };
+        SDL_RenderCopyEx( renderer, menu_background.get(), nullptr, &view, 0, nullptr, SDL_FLIP_VERTICAL );
+    } else {
+        Uint8 r, g, b, a;
+        SDL_GetRenderDrawColor( renderer, &r, &g, &b, &a );
+        SDL_SetRenderDrawColor( renderer, 0, 0, 0, 255 );
+        SDL_RenderFillRect( renderer, &destination );
+        SDL_SetRenderDrawColor( renderer, r, g, b, a );
+    }
+    SDL_RenderSetClipRect( renderer, clipped ? &previous : nullptr );
+    // Suppress the terrain draw even if the snapshot could not be copied.
+    return true;
 }
 
 SDL_Texture_Ptr copy_view()
@@ -441,8 +498,24 @@ SDL_Texture_Ptr copy_view()
 
 std::optional<fp3d_targeting::target> interaction_target()
 {
-    return latest_scene ? fp3d_targeting::ray( *latest_scene, yaw, pitch,
-           camera.relative_to( latest_scene->origin, SDL_GetTicks() ) ) : std::nullopt;
+    if( !latest_scene ) { return std::nullopt; }
+    const auto offset = camera.relative_to( latest_scene->origin, SDL_GetTicks() );
+    // The reticle, prompt and HUD share the same pure snapshot query. Avoid
+    // scanning all scene cells again while the camera and snapshot are unchanged.
+    static unsigned generation = 0;
+    static float previous_yaw = 0;
+    static float previous_pitch = 0;
+    static fp3d_camera::offset previous_offset;
+    static std::optional<fp3d_targeting::target> cached;
+    if( generation != latest_scene->render_generation || previous_yaw != yaw ||
+        previous_pitch != pitch || previous_offset.x != offset.x || previous_offset.y != offset.y ) {
+        cached = fp3d_targeting::ray( *latest_scene, yaw, pitch, offset );
+        generation = latest_scene->render_generation;
+        previous_yaw = yaw;
+        previous_pitch = pitch;
+        previous_offset = offset;
+    }
+    return cached;
 }
 
 float heading()
@@ -467,11 +540,13 @@ void set_input_context( const std::string &category )
     if( !requested() ) {
         return;
     }
-    // Menus own the screen and mouse while they collect input. The probe is
-    // temporary presentation, so suppress it rather than cover original UI.
+    // Native windows are drawn over a frozen 3D background in the terrain
+    // draw stage; final composition must not cover their controls.
     const bool was_permitted = draw_permitted;
     draw_permitted = !fp3d_modern_ui::transfer_pending() &&
                      ( category == "DEFAULTMODE" || category == "FP3D_BUILD" || category == "MAIN_MENU" );
+    if( was_permitted && !draw_permitted ) { menu_background = copy_view(); }
+    if( draw_permitted ) { menu_background.reset(); }
     if( was_permitted != draw_permitted && g ) {
         g->invalidate_main_ui_adaptor();
     }
@@ -685,7 +760,7 @@ void compose()
             glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
             fp3d_scene::draw( *latest_scene, yaw, pitch,
                               static_cast<float>( texture_width ) / texture_height,
-                              camera.relative_to( latest_scene->origin, SDL_GetTicks() ), construction_preview );
+                              camera.relative_to( latest_scene->origin, SDL_GetTicks() ), construction_preview, interaction_available() );
             fp3d_materials::unbind();
         } else {
             draw_cube();
@@ -745,6 +820,7 @@ void compose()
 void release()
 {
     fp3d_modern_ui::clear_resume();
+    menu_background.reset();
     fp3d_materials::release();
     if( requested() ) {
         SDL_SetRelativeMouseMode( SDL_FALSE );

@@ -230,6 +230,11 @@ TEST_CASE( "fp3d_context_wheel_reads_native_permissions_without_mutating_the_wor
     const auto mission = person.mission;
     for( int sample = 0; sample < 30; ++sample ) {
         const auto choices = fp3d_interaction::context_entries( target, you, here );
+        CHECK( choices[2].visible == chat );
+        CHECK_FALSE( choices[0].visible );
+        CHECK_FALSE( choices[1].visible );
+        CHECK_FALSE( choices[3].visible );
+        CHECK_FALSE( choices[4].visible );
         CHECK( choices[2].enabled == chat );
         CHECK( choices[5].enabled == guard );
         CHECK( choices[6].enabled == follow );

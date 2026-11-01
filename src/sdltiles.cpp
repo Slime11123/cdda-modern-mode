@@ -806,6 +806,15 @@ static void draw_fp3d_hud()
     SDL_GetRenderDrawColor( renderer.get(), &r, &green, &b, &a );
     SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_BLEND );
     SDL_SetRenderDrawColor( renderer.get(), 10, 16, 22, 200 );
+    const auto prompt = fp3d_compositor::interaction_prompt();
+    if( !prompt.empty() ) {
+        const int text_width = utf8_width( prompt ) * font->width;
+        const int text_x = area[0] + ( area[2] - text_width ) / 2;
+        const int text_y = area[1] + area[3] / 2 + font->height;
+        SDL_Rect hint{ text_x - 6, text_y - 3, text_width + 12, font->height + 6 };
+        SDL_RenderFillRect( renderer.get(), &hint );
+        draw_string( *font, renderer, geometry, prompt, point( text_x, text_y ), static_cast<unsigned char>( 15 ) );
+    }
     SDL_Rect backing{ area[0] + 4, area[1] + area[3] - height - 4, area[2] - 8, height };
     SDL_RenderFillRect( renderer.get(), &backing );
     int y = backing.y + 6;
@@ -1435,6 +1444,13 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
                                       TERRAIN_WINDOW_TERM_WIDTH * font->width * scaling_factor,
                                       TERRAIN_WINDOW_TERM_HEIGHT * font->height * scaling_factor,
                                       WindowWidth, WindowHeight );
+#endif
+#if defined(ENABLE_FP3D)
+        if( fp3d_compositor::draw_menu_background( win->pos.x * fontwidth, win->pos.y * fontheight,
+                TERRAIN_WINDOW_TERM_WIDTH * font->width, TERRAIN_WINDOW_TERM_HEIGHT * font->height ) ) {
+            needupdate = true;
+            return;
+        }
 #endif
         // color blocks overlay; drawn on top of tiles and on top of overlay strings (if any).
         color_block_overlay_container color_blocks;

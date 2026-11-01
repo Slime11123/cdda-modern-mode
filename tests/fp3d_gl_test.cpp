@@ -14,6 +14,8 @@
 #include "cata_catch.h"
 #include "calendar.h"
 #include "rng.h"
+#include "input_context.h"
+#include "input.h"
 #include "avatar.h"
 #include "cata_imgui.h"
 #include "fp3d_modern_ui.h"
@@ -126,6 +128,77 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             return pixels;
         };
         const auto baseline = render();
+        {
+            const auto saved_scene = scene;
+            fp3d_snapshot::cell near_door;
+            near_door.position = tripoint_abs_ms( 0, -1, 0 );
+            near_door.terrain = "t_door_c";
+            near_door.kind = fp3d_snapshot::terrain_kind::closed_door;
+            const auto near_tile = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto &tile ) {
+                return tile.position == near_door.position;
+            } );
+            REQUIRE( near_tile != scene.cells.end() );
+            *near_tile = near_door;
+            const auto ordinary = render();
+            CHECK_FALSE( fp3d_compositor::interaction_available() );
+            scene.interactable.push_back( near_door.position );
+            const auto highlighted = render();
+            CHECK( highlighted != ordinary );
+            REQUIRE( fp3d_compositor::interaction_available() );
+            CHECK( fp3d_compositor::interaction_prompt().find( "按[" ) == 0 );
+            CHECK( fp3d_compositor::interaction_prompt().find( "]互动" ) != std::string::npos );
+            {
+                restore_on_out_of_scope restore_bindings( inp_mngr );
+                auto &bindings = const_cast<std::vector<input_event> &>(
+                                     inp_mngr.get_input_for_action( "FP3D_INTERACT", "FP3D" ) );
+                bindings = { input_event( 'v', input_event_t::keyboard_code ) };
+                CHECK( ( fp3d_compositor::interaction_prompt().find( "v" ) != std::string::npos ||
+                         fp3d_compositor::interaction_prompt().find( "V" ) != std::string::npos ) );
+            }
+            // Native terrain buffer first, original UI controls second, final
+            // composition last. The old 2D map sentinel must never show through.
+            const auto old_target = SDL_GetRenderTarget( renderer.get() );
+            SDL_Texture_Ptr legacy_buffer( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
+                                           SDL_TEXTUREACCESS_TARGET, width, height ) );
+            REQUIRE( legacy_buffer );
+            REQUIRE( SDL_SetRenderTarget( renderer.get(), legacy_buffer.get() ) == 0 );
+            REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 255, 0, 255, 255 ) == 0 );
+            REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+            fp3d_compositor::set_input_context( "NATIVE_LEGACY_WINDOW" );
+            CHECK( fp3d_compositor::interaction_prompt().empty() );
+            REQUIRE( fp3d_compositor::draw_menu_background( 0, 0, width, height ) );
+            // Native SDL scaling must keep the frozen view in the same place.
+            REQUIRE( SDL_RenderSetLogicalSize( renderer.get(), width / 2, height / 2 ) == 0 );
+            REQUIRE( fp3d_compositor::draw_menu_background( 0, 0, width / 2, height / 2 ) );
+            REQUIRE( SDL_RenderSetLogicalSize( renderer.get(), 0, 0 ) == 0 );
+            SDL_Rect control{ width / 4, height / 4, 40, 40 };
+            REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 17, 211, 49, 255 ) == 0 );
+            REQUIRE( SDL_RenderFillRect( renderer.get(), &control ) == 0 );
+            fp3d_compositor::compose();
+            std::vector<std::uint32_t> legacy_pixels( width * height );
+            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                          legacy_pixels.data(), width * 4 ) == 0 );
+            const auto pixel_format = SDL_AllocFormat( SDL_PIXELFORMAT_RGBA8888 );
+            REQUIRE( pixel_format );
+            CHECK( legacy_pixels[7 * width + 7] != SDL_MapRGBA( pixel_format, 255, 0, 255, 255 ) );
+            CHECK( legacy_pixels[( control.y + 5 ) * width + control.x + 5] == SDL_MapRGBA( pixel_format, 17, 211, 49, 255 ) );
+            SDL_FreeFormat( pixel_format );
+            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                for( const auto &sample : { std::pair{ "-interaction-reticle.png", &highlighted },
+                                           std::pair{ "-native-window-background.png", static_cast<const std::vector<std::uint32_t> *>( &legacy_pixels ) } } ) {
+                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                 const_cast<std::uint32_t *>( sample.second->data() ), width, height, 32, width * 4,
+                                                 SDL_PIXELFORMAT_RGBA8888 ) );
+                    REQUIRE( picture );
+                    CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                       ( pack + sample.first ) ).u8string().c_str() ) == 0 );
+                }
+            }
+            REQUIRE( SDL_SetRenderTarget( renderer.get(), old_target ) == 0 );
+            fp3d_compositor::set_input_context( "DEFAULTMODE" );
+            scene = saved_scene;
+            CHECK( render() == baseline );
+        }
         fp3d_scene::blueprint ghost{ tripoint_abs_ms( 0, -3, 0 ), 1, true, "test" };
         fp3d_compositor::set_blueprint( ghost );
         CHECK( render() == baseline ); // A preview behind the wall must stay hidden.
@@ -1210,7 +1283,9 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 const int wheel_hunger = you.get_hunger();
                 const int wheel_thirst = you.get_thirst();
                 auto radial = fp3d_quick_menu::create( layout[2] );
-                const ImVec2 center( layout[0] * .375f, layout[1] * .5f );
+                const auto wheel_area = fp3d_compositor::viewport_pixels();
+                const ImVec2 center( wheel_area[0] + wheel_area[2] * .5f,
+                                     wheel_area[1] + wheel_area[3] * .5f );
                 for( int frame = 0; frame < 30; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();
                     ImGui_ImplSDL2_NewFrame();
@@ -1253,8 +1328,8 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 for( int frame = 0; frame < 9; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();
                     ImGui_ImplSDL2_NewFrame();
-                    ImGui::GetIO().AddMousePosEvent( frame < 7 ? center.x - 113 : center.x + 160,
-                                                   frame < 7 ? center.y + 113 : center.y );
+                    ImGui::GetIO().AddMousePosEvent( frame < 7 ? center.x + 160 : center.x,
+                                                   frame < 7 ? center.y : center.y - 160 );
                     ImGui::GetIO().AddMouseButtonEvent( 0, frame == 4 || frame == 7 );
                     ImGui::NewFrame();
                     contextual->draw();
@@ -1289,7 +1364,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 for( int frame = 0; frame < 3; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();
                     ImGui_ImplSDL2_NewFrame();
-                    ImGui::GetIO().AddMousePosEvent( center.x - 113, center.y - 113 );
+                    ImGui::GetIO().AddMousePosEvent( center.x - 160, center.y );
                     ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
                     ImGui::NewFrame();
                     context_cancel->draw();

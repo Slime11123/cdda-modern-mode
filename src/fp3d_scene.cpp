@@ -354,7 +354,7 @@ draw_statistics statistics()
 }
 
 void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
-           float aspect, fp3d_camera::offset camera_offset, const std::optional<blueprint> &preview )
+           float aspect, fp3d_camera::offset camera_offset, const std::optional<blueprint> &preview, bool interactable )
 {
     const auto started = std::chrono::steady_clock::now();
     glMatrixMode( GL_PROJECTION );
@@ -802,13 +802,23 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             glDisable( GL_TEXTURE_2D );
         }
     }
-    glColor3f( .8f, .8f, .8f );
-    glBegin( GL_LINES );
-    glVertex2f( -.012f, 0 );
-    glVertex2f( .012f, 0 );
-    glVertex2f( 0, -.012f );
-    glVertex2f( 0, .012f );
-    glEnd();
+    if( interactable ) {
+        glColor3f( 1, .75f, .3f );
+        glBegin( GL_LINE_LOOP );
+        glVertex2f( 0, -.018f );
+        glVertex2f( .018f, 0 );
+        glVertex2f( 0, .018f );
+        glVertex2f( -.018f, 0 );
+        glEnd();
+    } else {
+        glColor3f( .8f, .8f, .8f );
+        glBegin( GL_LINES );
+        glVertex2f( -.012f, 0 );
+        glVertex2f( .012f, 0 );
+        glVertex2f( 0, -.012f );
+        glVertex2f( 0, .012f );
+        glEnd();
+    }
     last_statistics.cpu_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - started ).count();
 }

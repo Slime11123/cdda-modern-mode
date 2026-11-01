@@ -2,6 +2,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <cmath>
+#include <vector>
 #include "cata_imgui.h"
 #include "cata_scope_helpers.h"
 #include "fp3d_compositor.h"
@@ -34,13 +35,13 @@ class wheel : public cataimgui::window
 {
         SDL_Texture_Ptr background;
         float scale;
-        std::array<entry, 8> options;
+        std::vector<entry> options;
         std::string heading;
         int selected = -1;
         std::optional<int> chosen;
 
         void choose( int index ) {
-            if( index < 0 || index >= 8 || !options[index].enabled ) {
+            if( index < 0 || index >= static_cast<int>( options.size() ) || !options[index].enabled ) {
                 return;
             }
             if( options[index].action == ACTION_NULL && !options[index].command ) {
@@ -53,9 +54,13 @@ class wheel : public cataimgui::window
             is_open = false;
         }
         void move_selection( int direction ) {
+            if( options.empty() ) {
+                return;
+            }
+            const int count = options.size();
             int next = selected < 0 ? ( direction > 0 ? -1 : 0 ) : selected;
-            for( int step = 0; step < 8; ++step ) {
-                next = ( next + direction + 8 ) % 8;
+            for( int step = 0; step < count; ++step ) {
+                next = ( next + direction + count ) % count;
                 if( options[next].enabled ) {
                     selected = next;
                     return;
@@ -78,7 +83,8 @@ class wheel : public cataimgui::window
             const float outer = std::min( std::min( viewport[2], viewport[3] ) * .38f, font * 11.5f );
             const float inner = outer * .36f;
             const auto mouse = ImGui::GetMousePos();
-            const int hovered = sector_at( mouse.x - center.x, mouse.y - center.y, inner, outer );
+            const int hovered = sector_at( mouse.x - center.x, mouse.y - center.y, inner, outer,
+                                           options.size() );
             const auto delta = ImGui::GetIO().MouseDelta;
             if( delta.x != 0 || delta.y != 0 || selected < 0 ) {
                 selected = hovered;
@@ -90,10 +96,11 @@ class wheel : public cataimgui::window
             };
             const ImU32 white = IM_COL32( 235, 232, 224, 255 );
             const ImU32 gold = IM_COL32( 232, 180, 94, 255 );
-            for( int index = 0; index < 8; ++index ) {
-                const float angle = -pi / 2 + index * pi / 4;
-                const float first = angle - pi / 8 + .014f;
-                const float last = angle + pi / 8 - .014f;
+            const float step = options.empty() ? 0 : 2 * pi / options.size();
+            for( int index = 0; index < static_cast<int>( options.size() ); ++index ) {
+                const float angle = -pi / 2 + index * step;
+                const float first = angle - step / 2 + .014f;
+                const float last = angle + step / 2 - .014f;
                 const auto path = [&]() {
                     draw->PathArcTo( center, outer, first, last, 16 );
                     draw->PathArcTo( center, inner, last, first, 8 );
@@ -134,7 +141,13 @@ class wheel : public cataimgui::window
                            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
                            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse ),
             background( fp3d_compositor::copy_view() ), scale( std::clamp( percent, 100, 150 ) / 100.0f ),
-            options( choices ), heading( caption ) {}
+            heading( caption ) {
+            for( const auto &choice : choices ) {
+                if( choice.visible ) {
+                    options.push_back( choice );
+                }
+            }
+        }
         void draw() override {
             if( !is_open ) {
                 return;
@@ -184,21 +197,22 @@ const std::array<entry, 8> &entries()
 {
     return default_options;
 }
-int sector_at( float x, float y, float inner_radius, float outer_radius )
+int sector_at( float x, float y, float inner_radius, float outer_radius, int count )
 {
     if( !std::isfinite( x ) || !std::isfinite( y ) || inner_radius < 0 ||
-        outer_radius <= inner_radius ) {
+        outer_radius <= inner_radius || count < 1 || count > 8 ) {
         return -1;
     }
     const float radius = std::hypot( x, y );
     if( radius <= inner_radius || radius > outer_radius ) {
         return -1;
     }
-    float angle = std::atan2( y, x ) + pi / 2 + pi / 8;
+    const float step = 2 * pi / count;
+    float angle = std::atan2( y, x ) + pi / 2 + step / 2;
     if( angle < 0 ) {
         angle += 2 * pi;
     }
-    return static_cast<int>( angle / ( pi / 4 ) ) % 8;
+    return static_cast<int>( angle / step ) % count;
 }
 std::unique_ptr<cataimgui::window> create( int scale_percent )
 {
@@ -215,7 +229,10 @@ std::optional<entry> show()
 }
 std::optional<entry> show( const std::array<entry, 8> &choices, const std::string &heading )
 {
-    if( !fp3d_compositor::turn_based() ) {
+    const bool has_action = std::any_of( choices.begin(), choices.end(), []( const entry &choice ) {
+        return choice.visible && choice.enabled && ( choice.action != ACTION_NULL || choice.command );
+    } );
+    if( !fp3d_compositor::turn_based() || !has_action ) {
         return std::nullopt;
     }
     fp3d_input::world_gestures().cancel();

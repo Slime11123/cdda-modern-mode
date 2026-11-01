@@ -1,5 +1,6 @@
 #include "fp3d_interaction.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <algorithm>
 #include "avatar.h"
 #include "creature_tracker.h"
 #include "fp3d_input.h"
@@ -47,27 +48,33 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
 {
     const bool reachable = valid( target, you, here );
     const auto p = here.get_bub( target.position );
-    const auto *person = reachable ? get_creature_tracker().creature_at<npc>( p ) : nullptr;
-    const bool opens = reachable && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
-    const bool closes = reachable && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
+    const auto *critter = reachable ? get_creature_tracker().creature_at( p ) : nullptr;
+    const bool creature = critter && !critter->is_dead_state() && p != you.pos_bub( here ) &&
+                          you.sees( here, *critter );
+    const auto *person = creature ? get_creature_tracker().creature_at<npc>( p ) : nullptr;
+    const bool object = reachable && !creature;
+    const bool opens = object && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
+    const bool closes = object && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
+    const bool items = object && here.could_see_items( p, you ) &&
+                       here.maptile_at( p ).get_item_count() > 0;
+    const bool examine = object && ( here.has_furn( p ) || opens || closes || items ||
+                                     ( !here.ter( p ).obj().has_examine( iexamine::none ) &&
+                                       !here.ter( p ).obj().has_examine( iexamine::invalid ) && here.ter( p ).obj().can_examine( p ) ) );
     return {{
-            { "打开", "打开目标门窗或容器，沿用原版规则。", ACTION_OPEN, nullptr, opens },
-            { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes },
-            { "交谈", "与此人物交谈；交易和招募仍由原版确认。", ACTION_CHAT, nullptr, person != nullptr },
-            { "查看 / 搜索", "查看目标或搜索容器，沿用原版检查。", ACTION_EXAMINE_AND_PICKUP, nullptr, reachable },
-            {
-                "拾取物品", "打开目标位置的原版物品选择。", ACTION_PICKUP, nullptr,
-                reachable && here.could_see_items( p, you ) && here.maptile_at( p ).get_item_count() > 0
-            },
+            { "打开", "打开目标门窗或容器，沿用原版规则。", ACTION_OPEN, nullptr, opens, opens || closes },
+            { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes, opens || closes },
+            { "交谈", "与此人物交谈；交易和招募仍由原版确认。", ACTION_CHAT, nullptr, person != nullptr, person != nullptr },
+            { "查看 / 搜索", "查看目标或搜索容器，沿用原版检查。", ACTION_EXAMINE_AND_PICKUP, nullptr, examine, examine },
+            { "拾取物品", "打开目标位置的原版物品选择。", ACTION_PICKUP, nullptr, items, items },
             {
                 "原地守卫", "让队友守卫当前位置，按原版喊话和行动消耗结算。", ACTION_NULL, "FP3D_GUARD",
-                person && npc_orders::can_issue( you, *person, npc_orders::kind::guard )
+                person && npc_orders::can_issue( you, *person, npc_orders::kind::guard ), person != nullptr
             },
             {
                 "继续跟随", "让可听见的守卫队友继续跟随，保留原版营地限制。", ACTION_NULL, "FP3D_FOLLOW",
-                person && npc_orders::can_issue( you, *person, npc_orders::kind::follow )
+                person && npc_orders::can_issue( you, *person, npc_orders::kind::follow ), person != nullptr
             },
-            { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true }
+            { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true, true }
         }};
 }
 
@@ -98,7 +105,9 @@ std::optional<request> resolve( const std::string &command,
 {
     if( command == "FP3D_ACTIONS" ) {
         const auto choice = fp3d_quick_menu::show();
-        if( !choice || !fp3d_compositor::turn_based() ) { return std::nullopt; }
+        if( !choice || !fp3d_compositor::turn_based() ) {
+            return std::nullopt;
+        }
         if( choice->command ) {
             return resolve( choice->command, candidate, you, here );
         }
@@ -139,7 +148,7 @@ std::optional<request> resolve( const std::string &command,
             if( operation->talking_npc_id ) {
                 const auto target = operation->destination_tile ?
                                     fp3d_journal::dialogue_target( you, here, *operation->talking_npc_id,
-                                            *operation->destination_tile ) : std::nullopt;
+                                        *operation->destination_tile ) : std::nullopt;
                 if( native_action != ACTION_CHAT || !target ) {
                     add_msg( m_info, "此人物已移动或当前无法交谈，请刷新队友页。" );
                     return std::nullopt;

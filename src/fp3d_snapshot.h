@@ -93,6 +93,7 @@ struct scene_snapshot {
     double capture_ms = 0;
     unsigned visible = 0;
     unsigned remembered = 0;
+    std::vector<tripoint_abs_ms> interactable;
 };
 
 // Prepare native view caches independently of the 2D Tiles draw or exploration.

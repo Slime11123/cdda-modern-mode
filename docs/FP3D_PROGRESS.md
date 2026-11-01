@@ -520,3 +520,6 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 
 
 2026-11-01：P5.4 制作页加入原版1–50批直接制作，提交前重查并复用原版ACT_CRAFT；活动后保留同一页面。启动/完成三进程对照分别通过，SHA256 710C50B1…BE1442 / 9643B86C…9995F5；测试完成只提供相同有限AP预算，未宣称完整世界回合。详情与失败修正记录见FP3D_0I1_MODERN_CONTROLS.md。
+
+
+2026-11-01：按最新反馈完成目标类别轮盘筛选、可互动菱形准星及当前改键提示、原版窗口3D背景。91用例7735断言（含3个原版rng）及图形2882通过，ON/OFF通过；隐身NPC不通过提示泄漏。验证入口runtime/modern-controls-context-targets。原版彩色消息测试依赖补齐留在共享工作树；阶段细节、初次失败与实机限制见FP3D_0I1_MODERN_CONTROLS.md。
