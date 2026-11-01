@@ -25,6 +25,7 @@ This is a concise public-facing summary of the current local code and dated tech
 - Context-sensitive interaction wheels and reticle hints; underlying range, visibility, identity and safety checks remain native.
 - Native-rule crafting batch quantities, favorites/categories, material availability and construction-stage previews.
 - Responsive mission/people panels, activity-return refresh and configurable interaction hold duration for the current session.
+- Targeted E pickup: native automatic pocket selection for one item, a backpack/source panel for multiple items, and native tileset pile markers.
 - Native-style NPC dialogue and two-column trading UI, followed by focused scrolling/render-performance improvements.
 - 3D reticle-driven melee/smashing, friendly target confirmation, and equipped-item swing display.
 - Introductory 3D character information overlay and information-disclosure/font refinements.
