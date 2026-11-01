@@ -70,6 +70,7 @@ class panel : public cataimgui::window
         size_t selected_recipe = 0;
         int crafting_batch = 1;
         bool favorite_recipes_only = false;
+        std::optional<crafting_category_id> recipe_category;
         std::optional<std::pair<recipe_id, bool>> pending_recipe_favorite;
         bool journal_loaded = false;
         fp3d_journal::model journal;
@@ -1171,9 +1172,51 @@ class panel : public cataimgui::window
                                  fp3d_crafting::details( recipes[selected_recipe].id, you, crafting_batch );
                 recipes_loaded = true;
             }
-            const float height = ImGui::GetContentRegionAvail().y - 85 * scale;
+            const float height = std::max( 100.0f, ImGui::GetContentRegionAvail().y - 85 * scale );
             const float width = ImGui::GetContentRegionAvail().x;
-            ImGui::BeginChild( "配方", ImVec2( width * .56f, height ), true );
+            const bool category_sidebar = width >= 1100 * scale;
+            const float category_width = category_sidebar ? std::clamp( width * .16f, 130 * scale,
+                                         190 * scale ) : 0;
+            const float remaining = width - ( category_sidebar ? category_width +
+                                             ImGui::GetStyle().ItemSpacing.x : 0 );
+            std::map<crafting_category_id, std::string> categories;
+            for( const auto &entry : recipes ) {
+                categories.emplace( entry.category, entry.category_name );
+            }
+            const auto category_options = [&]() {
+                if( ImGui::Selectable( "全部", !recipe_category ) ) {
+                    recipe_category.reset();
+                }
+                for( const auto &[id, name] : categories ) {
+                    ImGui::PushID( id.str().c_str() );
+                    if( ImGui::Selectable( name.c_str(), recipe_category && *recipe_category == id ) ) {
+                        recipe_category = id;
+                    }
+                    ImGui::PopID();
+                }
+            };
+            if( category_sidebar ) {
+                ImGui::BeginChild( "配方分类", ImVec2( category_width, height ), true );
+                ImGui::TextUnformatted( "配方分类" );
+                ImGui::Separator();
+                category_options();
+                ImGui::EndChild();
+                ImGui::SameLine();
+            }
+            ImGui::BeginChild( "配方", ImVec2( remaining * .53f, height ), true );
+            if( !category_sidebar ) {
+                const auto category = recipe_category ? categories.find( *recipe_category ) : categories.end();
+                const char *name = !recipe_category ? "全部" :
+                                   category != categories.end() ? category->second.c_str() : "无匹配分类";
+                ImGui::SetNextItemWidth( -1 );
+                if( ImGui::BeginCombo( "##配方分类", name ) ) {
+                    category_options();
+                    ImGui::EndCombo();
+                }
+                if( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip( "配方分类" );
+                }
+            }
             ImGui::TextWrapped( "已知、书籍与队友可用配方：%zu", recipes.size() );
             ImGui::SetNextItemWidth( -1 );
             ImGui::InputTextWithHint( "##配方搜索", "搜索配方", &recipe_search );
@@ -1197,7 +1240,8 @@ class panel : public cataimgui::window
             for( size_t i = 0; i < recipes.size(); ++i ) {
                 if( ( recipe_search.empty() || recipes[i].name.find( recipe_search ) != std::string::npos ) &&
                     ( recipe_skill.empty() || recipes[i].skill == recipe_skill ) &&
-                    ( !favorite_recipes_only || fp3d_crafting::is_favorite( recipes[i].id ) ) ) {
+                    ( !favorite_recipes_only || fp3d_crafting::is_favorite( recipes[i].id ) ) &&
+                    ( !recipe_category || recipes[i].category == *recipe_category ) ) {
                     filtered.push_back( i );
                 }
             }
@@ -1206,7 +1250,7 @@ class panel : public cataimgui::window
                 recipe_details = fp3d_crafting::details( recipes[selected_recipe].id, you, crafting_batch );
             }
             if( filtered.empty() ) {
-                ImGui::TextWrapped( "没有匹配的配方，请修改搜索、主技能或收藏筛选。" );
+                ImGui::TextWrapped( "没有匹配的配方，请修改分类、搜索、主技能或收藏筛选。" );
             }
             const float area = ImGui::GetContentRegionAvail().x;
             const int columns = std::max( 1, static_cast<int>( area / ( 175 * scale ) ) );

@@ -15,6 +15,8 @@ struct entry {
     std::string name;
     std::string skill;
     int difficulty = 0;
+    crafting_category_id category;
+    std::string category_name;
 };
 std::vector<entry> capture( const avatar &you );
 bool is_favorite( const recipe_id &id );

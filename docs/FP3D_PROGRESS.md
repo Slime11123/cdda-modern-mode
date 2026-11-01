@@ -526,3 +526,5 @@ ON/OFF（`modern-wheel-final-on.log` / `modern-wheel-off.log`）通过；完整�
 
 
 2026-11-01：P5.4 制作页加入原版配方收藏/取消、星标与收藏筛选，后台更新原版记录并保留ID选择。92用例7750断言（含rng）、图形2882和ON/OFF通过；操作验证入口runtime/modern-controls-recipe-favorites，完整实机收藏与重启验收继续保留。
+
+2026-11-01：P5.4 制作页原版分类/三栏布局及窄屏分类下拉完成。92用例7750断言、图形2942、ON/OFF通过。操作验证入口runtime/modern-controls-craft-categories；原版材料可用性/缺项提示继续推进。

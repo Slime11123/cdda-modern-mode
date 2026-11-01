@@ -15,6 +15,7 @@
 #include "recipe_dictionary.h"
 #include "requirements.h"
 #include "skill.h"
+#include "translations.h"
 namespace fp3d_crafting
 {
 std::vector<entry> capture( const avatar &you )
@@ -33,7 +34,9 @@ std::vector<entry> capture( const avatar &you )
                                  rec->result()->nname( 1 );
         result.push_back( { rec->ident(), rec->result(), rec->variant(), remove_color_tags( name ),
                             rec->skill_used.is_null() ? "无主技能" : rec->skill_used->name(),
-                            rec->get_difficulty( you ) } );
+                            rec->get_difficulty( you ), rec->category,
+                            rec->category.str().empty() || rec->category.str() == "CC_*" ? "未分类" :
+                            _( rec->category.str().substr( 3 ) ) } );
     }
     std::sort( result.begin(), result.end(), []( const auto & a, const auto & b ) {
         return a.name < b.name || ( a.name == b.name && a.id.str() < b.id.str() );

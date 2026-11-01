@@ -1235,6 +1235,36 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 REQUIRE( ImGui::GetDrawData()->TotalVtxCount > 100 );
                 CHECK( ImGui::GetDrawData()->TotalVtxCount < 20000 );
+                if( page == 3 ) {
+                    ImGuiWindow *categories = nullptr;
+                    ImGuiWindow *grid = nullptr;
+                    ImGuiWindow *details = nullptr;
+                    for( ImGuiWindow *child : GImGui->Windows ) {
+                        if( !child->Active ) {
+                            continue;
+                        }
+                        const std::string name = child->Name;
+                        if( name.find( "/配方分类_" ) != std::string::npos ) {
+                            categories = child;
+                        } else if( name.find( "/配方_" ) != std::string::npos ) {
+                            grid = child;
+                        } else if( name.find( "/配方详情_" ) != std::string::npos ) {
+                            details = child;
+                        }
+                    }
+                    REQUIRE( grid );
+                    REQUIRE( details );
+                    CHECK( grid->Pos.x + grid->Size.x <= details->Pos.x );
+                    CHECK( details->Pos.x + details->Size.x <= layout[0] );
+                    CHECK( grid->Pos.y + grid->Size.y <= layout[1] );
+                    if( layout[0] == 1280 && layout[2] == 150 ) {
+                        CHECK_FALSE( categories ); // Compact category selector stays in the grid column.
+                    } else {
+                        REQUIRE( categories );
+                        CHECK( categories->Pos.x + categories->Size.x <= grid->Pos.x );
+                        CHECK( categories->Size.x >= 130 * layout[2] / 100.0f );
+                    }
+                }
                 if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
                     std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
                     REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
