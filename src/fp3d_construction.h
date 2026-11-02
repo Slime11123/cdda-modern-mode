@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include "type_id.h"
-#include "fp3d_snapshot.h"
+#include "fp3d_scene.h"
 #include "coordinates.h"
 struct construction;
 class avatar;
@@ -34,6 +34,9 @@ bool preview_allowed( avatar &you, map &here, const construction &project,
 // Single-cell completed terrain, without changing the map or running post-effects.
 std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
         const tripoint_abs_ms &position );
+// Owned placement display, including a direction marker for conditional excavation.
+fp3d_scene::blueprint placement_preview( const construction &project,
+        const tripoint_abs_ms &position, bool valid );
 // Only selects a native validated position; never consumes resources or starts work.
 std::optional<tripoint_bub_ms> choose( const std::map<tripoint_bub_ms, const construction *>
                                        &valid );

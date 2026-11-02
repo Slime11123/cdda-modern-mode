@@ -88,6 +88,55 @@ TEST_CASE( "fp3d_construction_ghost_uses_completed_terrain_without_building_it",
     CHECK( rng_get_engine() == engine );
 }
 
+TEST_CASE( "fp3d_excavation_planning_symbol_does_not_predict_hidden_levels",
+           "[fp3d][construction][blueprint]" )
+{
+    const auto &you = get_avatar();
+    const auto &here = get_map();
+    const auto p = you.pos_bub( here );
+    const auto current = here.ter( p );
+    const auto lower = here.ter( p + tripoint_rel_ms::below );
+    const auto upper = here.ter( p + tripoint_rel_ms::above );
+    const auto time = calendar::turn;
+    const auto moves = you.get_moves();
+    const auto engine = rng_get_engine();
+    for( const auto &entry : {
+             std::pair{ "constr_dig_downstair", -1 },
+             std::pair{ "constr_mine_downstair", -1 },
+             std::pair{ "constr_mine_upstair", 1 }
+         } ) {
+        const auto project = std::find_if( get_constructions().begin(), get_constructions().end(),
+        [&]( const construction & value ) {
+            return value.str_id.str() == entry.first;
+        } );
+        REQUIRE( project != get_constructions().end() );
+        for( const bool allowed : {
+                 false, true
+             } ) {
+            const auto preview = fp3d_construction::placement_preview( *project, you.pos_abs(), allowed );
+            CHECK( preview.position == you.pos_abs() );
+            CHECK( preview.valid == allowed );
+            CHECK( preview.vertical_hint == entry.second );
+            CHECK_FALSE( preview.terrain );
+            CHECK( preview.name.find( "完工结果由原版决定" ) != std::string::npos );
+        }
+    }
+    const auto regular = std::find_if( get_constructions().begin(), get_constructions().end(),
+    []( const construction & value ) {
+        return value.post_terrain == "f_cupboard";
+    } );
+    REQUIRE( regular != get_constructions().end() );
+    const auto preview = fp3d_construction::placement_preview( *regular, you.pos_abs(), true );
+    CHECK( preview.vertical_hint == 0 );
+    CHECK( preview.terrain );
+    CHECK( here.ter( p ) == current );
+    CHECK( here.ter( p + tripoint_rel_ms::below ) == lower );
+    CHECK( here.ter( p + tripoint_rel_ms::above ) == upper );
+    CHECK( calendar::turn == time );
+    CHECK( you.get_moves() == moves );
+    CHECK( rng_get_engine() == engine );
+}
+
 // Committed native activity fixture, not initial placement or full do_turn.
 TEST_CASE( "fp3d_concrete_ramp_ghost_and_native_completion_keep_upper_links_separate",
            "[fp3d][construction][blueprint]" )

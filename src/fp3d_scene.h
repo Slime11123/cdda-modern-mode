@@ -20,6 +20,8 @@ struct blueprint {
     bool valid = false;
     std::string name;
     std::optional<fp3d_snapshot::cell> terrain;
+    // A planning symbol only: -1 down, +1 up. Never opens a floor or shows another level.
+    int vertical_hint = 0;
 };
 struct draw_statistics {
     unsigned chunks = 0;

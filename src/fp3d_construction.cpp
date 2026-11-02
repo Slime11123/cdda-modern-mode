@@ -124,6 +124,33 @@ std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
     return result;
 }
 
+fp3d_scene::blueprint placement_preview( const construction &project,
+        const tripoint_abs_ms &position, bool valid )
+{
+    fp3d_scene::blueprint result;
+    result.position = position;
+    result.valid = valid;
+    result.name = "建造预览：" + project.group->name();
+    result.terrain = terrain_preview( project, position );
+    const ter_str_id terrain( project.post_terrain );
+    result.height = project.post_is_furniture ? 1.0f :
+                    terrain.is_valid() && terrain->movecost == 0 ? fp3d_camera::floor_height : .12f;
+    // These native projects have conditional post-effects instead of a fixed
+    // post_terrain. Do not inspect/generate the destination level to predict it.
+    if( !result.terrain ) {
+        if( project.group == construction_group_str_id( "dig_downstair" ) ||
+            project.group == construction_group_str_id( "mine_downstair" ) ||
+            ( terrain.is_valid() && terrain->has_flag( ter_furn_flag::TFLAG_GOES_DOWN ) ) ) {
+            result.vertical_hint = -1;
+            result.name += "（向下施工范围，完工结果由原版决定）";
+        } else if( project.group == construction_group_str_id( "mine_upstair" ) ) {
+            result.vertical_hint = 1;
+            result.name += "（向上施工范围，完工结果由原版决定）";
+        }
+    }
+    return result;
+}
+
 std::optional<tripoint_bub_ms> choose( const std::map<tripoint_bub_ms, const construction *>
                                        &valid )
 {
@@ -158,11 +185,7 @@ std::optional<tripoint_bub_ms> choose( const std::map<tripoint_bub_ms, const con
             preview.valid = allowed;
             if( match != valid.end() ) {
                 const construction &con = *match->second;
-                preview.name = "建造预览：" + con.group->name();
-                preview.terrain = terrain_preview( con, candidate->position );
-                preview.height = con.post_is_furniture ? 1.0f :
-                                 ter_str_id( con.post_terrain ).is_valid() &&
-                                 ter_str_id( con.post_terrain )->movecost == 0 ? fp3d_camera::floor_height : .12f;
+                preview = placement_preview( con, candidate->position, allowed );
             }
         }
         fp3d_compositor::set_blueprint( std::move( preview ) );

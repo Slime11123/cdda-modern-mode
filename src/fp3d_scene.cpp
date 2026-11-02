@@ -791,6 +791,33 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 glPopMatrix();
             }
             glPopMatrix();
+        } else if( preview->vertical_hint != 0 ) {
+            // Keep all of this planning symbol above the real floor. It must
+            // not masquerade as a completed opening or reveal hidden geometry.
+            const float x = offset.x();
+            const float z = offset.y();
+            for( const float side : { -.45f, .45f } ) {
+                box( x + side, z, .04f, .94f, y + .03f, y + .06f, std::nullopt );
+                box( x, z + side, .94f, .04f, y + .03f, y + .06f, std::nullopt );
+            }
+            const bool down = preview->vertical_hint < 0;
+            const float tip = y + ( down ? .18f : 1.15f );
+            const float base = y + ( down ? .5f : .83f );
+            box( x, z, .09f, .09f, y + ( down ? .5f : .18f ),
+                 y + ( down ? 1.15f : .83f ), std::nullopt );
+            glBegin( GL_TRIANGLES );
+            const std::array<std::array<float, 2>, 4> corners{{
+                {{ -.24f, -.24f }}, {{ .24f, -.24f }},
+                {{ .24f, .24f }}, {{ -.24f, .24f }}
+            }};
+            for( size_t i = 0; i < corners.size(); ++i ) {
+                const auto &a = corners[i];
+                const auto &b = corners[( i + 1 ) % corners.size()];
+                glVertex3f( x, tip, z );
+                glVertex3f( x + a[0], base, z + a[1] );
+                glVertex3f( x + b[0], base, z + b[1] );
+            }
+            glEnd();
         } else {
             box( offset.x(), offset.y(), .94f, .94f, y + .03f, y + preview->height, std::nullopt );
         }

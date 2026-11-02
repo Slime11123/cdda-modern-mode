@@ -356,6 +356,32 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             }
             const auto empty_room = render();
             const auto empty_scene = scene;
+            for( const std::string project_id : { "constr_dig_downstair", "constr_mine_upstair" } ) {
+                const auto project = std::find_if( get_constructions().begin(), get_constructions().end(),
+                [&]( const construction & value ) { return value.str_id.str() == project_id; } );
+                REQUIRE( project != get_constructions().end() );
+                auto marker = fp3d_construction::placement_preview( *project, tripoint_abs_ms( 0, -3, 0 ), true );
+                REQUIRE( marker.vertical_hint != 0 );
+                fp3d_compositor::set_blueprint( marker );
+                scene = original_scene;
+                CHECK( render() == baseline );
+                scene = empty_scene;
+                const auto allowed = render();
+                CHECK( allowed != empty_room );
+                marker.valid = false;
+                fp3d_compositor::set_blueprint( marker );
+                CHECK( render() != allowed );
+                if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                 const_cast<std::uint32_t *>( allowed.data() ), width, height,
+                                                 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                    REQUIRE( picture );
+                    CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                         ( pack + "-planning-" + project_id + ".png" ) ).u8string().c_str() ) == 0 );
+                }
+                fp3d_compositor::set_blueprint( std::nullopt );
+                CHECK( render() == empty_room );
+            }
             for( const std::string id : {
                      "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window",
                      "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half",
