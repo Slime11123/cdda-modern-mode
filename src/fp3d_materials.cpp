@@ -565,18 +565,19 @@ std::optional<uv_rect> lookup( const std::string &id )
                     ( y + slot_size - 2.5f ) / atlas_size * texture_height };
 }
 
-furniture_uv lookup_furniture( const std::string &id )
+furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
 {
     const auto surface = lookup( "$furniture:" + id );
     furniture_uv result{ surface, surface, surface };
-    // This layout belongs to the actual Undead People cupboard artwork, not
-    // every furniture sprite or every tileset. Native looks_like is supported
-    // only when it resolves to this same artwork.
-    if( !surface || !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ||
-        resolve_vegetation( *selected, id, season ) !=
-        resolve_vegetation( *selected, "f_cupboard", season ) ) {
+    // These layouts belong to the actual 32x32 Undead People artwork.
+    // Resolve native looks_like without applying the layout to unrelated art.
+    if( !surface || !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ) {
         return result;
     }
+    const auto *appearance = resolve_vegetation( *selected, id, season );
+    const auto uses = [&]( const std::string &base ) {
+        return appearance && appearance == resolve_vegetation( *selected, base, season );
+    };
     const auto crop = [&]( float x0, float y0, float x1, float y1 ) {
         const float width = surface->right - surface->left;
         const float height = surface->bottom - surface->top;
@@ -586,9 +587,42 @@ furniture_uv lookup_furniture( const std::string &id )
                         surface->left + width *x1 / 31,
                         surface->top + height *y1 / 31 };
     };
-    result.top = crop( 1, 1, 30, 9 );
-    result.front = crop( 1, 11, 30, 30 );
-    result.side = crop( 1, 12, 3, 29 );
+    if( uses( "f_cupboard" ) ) {
+        result.top = crop( 1, 1, 30, 9 );
+        result.front = crop( 1, 11, 30, 30 );
+        result.side = crop( 1, 12, 3, 29 );
+    } else if( uses( "f_crate_c" ) ) {
+        result.top = crop( 1, 1, 30, 16 );
+        result.front = crop( 1, 18, 30, 30 );
+        result.side = crop( 2, 19, 4, 29 );
+    } else if( uses( "f_crate_o" ) ) {
+        result.top = crop( 3, 3, 28, 13 );
+        result.front = crop( 1, 18, 30, 30 );
+        result.side = crop( 2, 19, 4, 29 );
+    } else if( uses( "f_locker" ) ) {
+        // The current model has open shelves and posts, rather than doors.
+        // Use metal for the frame; do not stamp tiny complete locker doors on it.
+        result.top = crop( 6, 1, 25, 8 );
+        result.front = result.side = crop( 5, 12, 6, 28 );
+    } else if( uses( "f_bookcase" ) ) {
+        result.top = crop( 2, 1, 29, 6 );
+        result.front = result.side = crop( 1, 10, 3, 29 );
+    } else if( uses( "f_rack" ) ) {
+        result.top = crop( 2, 1, 29, 8 );
+        result.front = result.side = crop( 1, 10, 2, 28 );
+    } else if( uses( "f_chair" ) ) {
+        const auto wood = crop( 6, 23, 7, 29 );
+        if( part_index == 0 ) {
+            result.top = crop( 7, 17, 24, 18 );
+            result.front = crop( 6, 19, 25, 20 );
+            result.side = wood;
+        } else if( part_index == 1 ) {
+            result.top = result.side = wood;
+            result.front = crop( 8, 3, 23, 13 );
+        } else {
+            result.top = result.front = result.side = wood;
+        }
+    }
     return result;
 }
 

@@ -70,3 +70,6 @@ CDDA is the upstream project; this is an unofficial standalone repository. Prese
 ### 2026-11-02 橱柜贴图分面 / 条件施工方向
 
 不死人橱柜现在按原图分别使用白色顶面、棕色柜门正面和木质侧面，建造蓝图同步；其他图像不套用该分区。条件挖掘楼梯使用本格方向/范围规划符号，不预测隐藏楼层结果。共享工作区功能158用例13326断言及两包图形5554断言通过，ON/测试构建通过；未重复OFF验证。两个启动器指向runtime/modern-controls-furniture-faces，重启生效。详见FP3D_0I1_MODERN_CONTROLS.md本日增量及qa/0i1/modern-furniture-faces-*。其他家具分面、朝向和完整施工链仍待继续。
+
+
+同日补充：进一步核对并修正不死人木箱、椅子及柜架取图，避免在模型构件上重复完整伪3D图片；不改独立素材或RetroDays。最终图形5611断言及ON/测试构建通过，沿用同一非渲染逻辑的158用例13326功能断言，未重复CPU/OFF。当前启动器runtime/modern-controls-furniture-surfaces；证据qa/0i1/modern-furniture-surfaces-*。

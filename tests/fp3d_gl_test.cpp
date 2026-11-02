@@ -446,6 +446,25 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     cell->furniture = ghost.terrain->furniture;
                     const auto built = render();
                     CHECK( built != empty_room );
+                    if( id == "f_crate_c" || id == "f_crate_o" || id == "f_locker" ||
+                        id == "f_bookcase" || id == "f_rack" || id == "f_chair" ) {
+                        REQUIRE( fp3d_materials::bind() );
+                        const auto faces = fp3d_materials::lookup_furniture( id );
+                        REQUIRE( faces.top );
+                        REQUIRE( faces.front );
+                        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+                            CHECK( faces.top->bottom < faces.front->top );
+                            if( id == "f_chair" ) {
+                                const auto leg = fp3d_materials::lookup_furniture( id, 2 );
+                                REQUIRE( leg.top );
+                                CHECK( leg.top->top > faces.front->bottom );
+                            }
+                        } else {
+                            CHECK( faces.top->top == faces.front->top );
+                            CHECK( faces.top->bottom == faces.front->bottom );
+                        }
+                        fp3d_materials::unbind();
+                    }
                     if( id == "f_cupboard" ) {
                         REQUIRE( fp3d_materials::bind() );
                         const auto faces = fp3d_materials::lookup_furniture( id );

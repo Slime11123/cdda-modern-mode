@@ -257,9 +257,10 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         }
     }
     if( tile.furniture ) {
-        const auto surfaces = fp3d_materials::lookup_furniture( tile.furniture->id );
         color( brightness, brightness, brightness );
+        unsigned part_index = 0;
         for( const auto &part : fp3d_furniture::parts( tile.furniture->shape ) ) {
+            const auto surfaces = fp3d_materials::lookup_furniture( tile.furniture->id, part_index++ );
             box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top,
                  surfaces.side, false, &surfaces );
             glPushMatrix();

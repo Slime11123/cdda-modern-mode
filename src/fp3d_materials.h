@@ -54,7 +54,7 @@ struct furniture_uv {
     std::optional<uv_rect> side;
 };
 // Some packs combine a top and a front view in one pseudo-3D sprite.
-furniture_uv lookup_furniture( const std::string &id );
+furniture_uv lookup_furniture( const std::string &id, unsigned part_index = 0 );
 void release();
 } // namespace fp3d_materials
 #endif
