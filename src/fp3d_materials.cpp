@@ -182,6 +182,15 @@ sprite_choice choose_sprites( const tile_type &tile, const std::string &id )
 
 const tile_type *resolve_terrain( const tileset &set, std::string id, season_type current_season )
 {
+    // Native transition tiles can be only a top-down up/down marker. The mesh
+    // supplies the slope; texture it with the corresponding physical surface.
+    if( id.compare( 0, 7, "t_ramp_" ) == 0 ) {
+        id = "t_pavement";
+    } else if( id.compare( 0, 13, "t_earth_ramp_" ) == 0 ) {
+        id = "t_dirt";
+    } else if( id.compare( 0, 16, "t_sidewalk_ramp_" ) == 0 ) {
+        id = "t_sidewalk";
+    }
     for( int jumps = 0; jumps < 10 && !id.empty(); ++jumps ) {
         if( auto tile = set.find_tile_type_by_season( id, current_season ) ) {
             return &tile->tile();

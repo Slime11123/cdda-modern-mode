@@ -21,6 +21,8 @@ This is a concise public-facing summary of the current local code and dated tech
 
 ## Recent milestones / 近期进展
 
+- Concrete uphill construction stages now preview the existing single-cell world shapes. Native committed-work completion verifies both lower and upper terrain links; ramp surfaces use ground materials instead of 2D arrow markers. 156 functional cases (13260 assertions), 5457 final graphics assertions and ON/test builds passed. Local launchers use `modern-controls-ramps`; continuous multi-cell ramp geometry, orientation and initial construction placement remain incomplete.
+
 - Added bed frames, closed/open crates, cupboards, lockers, bookcases and racks to the shared world/construction models. Sealed contents remain hidden under native rules. A committed native bed-building activity now verifies interruption, resumption and the completed model. 155 functional cases (13218 assertions), 5375 graphics assertions and ON/OFF builds passed. Local 3D launchers use `modern-controls-storage`; initial placement/component consumption and the full construction lifecycle remain unverified.
 
 - Returned to P5.6 feature work; no further FPS-analysis expansion. Basic table/chair/bed models, raised item display and part-based targeting passed 153 functional cases (13060 assertions), 4813 graphics assertions and ON/OFF builds. Both local 3D launchers use `modern-controls-furniture`. See the dated modern-controls report for boundaries.

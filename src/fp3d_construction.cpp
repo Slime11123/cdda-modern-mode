@@ -97,7 +97,7 @@ std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
     for( const auto flag : {
              ter_furn_flag::TFLAG_NO_FLOOR, ter_furn_flag::TFLAG_NO_FLOOR_WATER,
              ter_furn_flag::TFLAG_GOES_DOWN,
-             ter_furn_flag::TFLAG_RAMP, ter_furn_flag::TFLAG_RAMP_UP, ter_furn_flag::TFLAG_RAMP_DOWN,
+             ter_furn_flag::TFLAG_RAMP_DOWN,
              ter_furn_flag::TFLAG_TREE, ter_furn_flag::TFLAG_YOUNG, ter_furn_flag::TFLAG_SHRUB,
              ter_furn_flag::TFLAG_FLOWER
          } ) {
@@ -110,6 +110,9 @@ std::optional<fp3d_snapshot::cell> terrain_preview( const construction &project,
     result.terrain = terrain.str();
     result.kind = fp3d_snapshot::terrain_shape( result.terrain );
     result.goes_up = definition.has_flag( ter_furn_flag::TFLAG_GOES_UP );
+    result.is_ramp = definition.has_flag( ter_furn_flag::TFLAG_RAMP ) ||
+                     definition.has_flag( ter_furn_flag::TFLAG_RAMP_UP );
+    result.ramp_delta = result.is_ramp ? 1 : 0;
     if( result.kind == fp3d_snapshot::terrain_kind::obstacle ) {
         return std::nullopt;
     }

@@ -357,6 +357,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             for( const std::string id : {
                      "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window",
                      "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half",
+                     "t_ramp_up_high", "t_ramp_up_low",
                      "f_table", "f_chair", "f_bed", "f_bed_frame", "f_crate_c", "f_crate_o",
                      "f_cupboard", "f_locker", "f_bookcase", "f_rack"
                  } ) {
@@ -389,7 +390,8 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 if( id == "f_locker" || id == "f_bookcase" || id == "f_rack" ) {
                     CHECK( aperture_changes > 0 );
-                } else if( project.post_is_furniture || id == "t_door_o" || id == "t_floor" ) {
+                } else if( project.post_is_furniture || id == "t_door_o" || id == "t_floor" ||
+                           id == "t_ramp_up_low" ) {
                     CHECK( aperture_changes == 0 );
                 } else if( id != "t_window" ) {
                     CHECK( aperture_changes > 0 );
