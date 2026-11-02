@@ -357,7 +357,8 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             for( const std::string id : {
                      "t_floor", "t_wall_wood", "t_door_c", "t_door_o", "t_window",
                      "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half",
-                     "f_table", "f_chair", "f_bed"
+                     "f_table", "f_chair", "f_bed", "f_bed_frame", "f_crate_c", "f_crate_o",
+                     "f_cupboard", "f_locker", "f_bookcase", "f_rack"
                  } ) {
                 CAPTURE( id );
                 construction project{};
@@ -386,7 +387,9 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         aperture_changes += allowed[pixel] != empty_room[pixel];
                     }
                 }
-                if( project.post_is_furniture || id == "t_door_o" || id == "t_floor" ) {
+                if( id == "f_locker" || id == "f_bookcase" || id == "f_rack" ) {
+                    CHECK( aperture_changes > 0 );
+                } else if( project.post_is_furniture || id == "t_door_o" || id == "t_floor" ) {
                     CHECK( aperture_changes == 0 );
                 } else if( id != "t_window" ) {
                     CHECK( aperture_changes > 0 );
@@ -419,10 +422,12 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     object.id = "rock";
                     object.height = .7f;
                     object.elevation = fp3d_furniture::item_surface( cell->furniture->shape );
-                    scene.sprites.push_back( object );
-                    CHECK( render() != built );
-                    scene.sprites.clear();
-                    CHECK( render() == built );
+                    if( id != "f_crate_c" ) {
+                        scene.sprites.push_back( object );
+                        CHECK( render() != built );
+                        scene.sprites.clear();
+                        CHECK( render() == built );
+                    }
                     if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
                         SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
                                                      const_cast<std::uint32_t *>( built.data() ), width, height,

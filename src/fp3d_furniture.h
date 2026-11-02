@@ -8,7 +8,7 @@
 
 namespace fp3d_furniture
 {
-enum class kind { table, chair, bed };
+enum class kind { table, chair, bed, bed_frame, crate, open_crate, cupboard, cabinet, rack };
 struct model {
     std::string id;
     kind shape;

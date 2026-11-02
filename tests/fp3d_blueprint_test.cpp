@@ -55,7 +55,7 @@ TEST_CASE( "fp3d_construction_ghost_uses_completed_terrain_without_building_it",
     }
     construction furniture{};
     furniture.post_is_furniture = true;
-    furniture.post_terrain = "f_crate_c";
+    furniture.post_terrain = "f_woodstove";
     CHECK_FALSE( fp3d_construction::terrain_preview( furniture, position ) );
     bool frame = false;
     bool completed = false;

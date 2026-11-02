@@ -1,6 +1,6 @@
 # CDDA Modern Mode — Development Status / 开发状态
 
-**Updated: 2026-11-01 / 更新日期：2026-11-01**
+**Updated: 2026-11-02 / 更新日期：2026-11-02**
 **Source baseline / 原版基线:** CDDA 0.I-1 (`7b2efa5cea38e4d4d97dd0e63b28b9148623da59`)
 **Project state / 状态:** Experimental development preview, not a stable public release.
 
@@ -20,6 +20,8 @@ This is a concise public-facing summary of the current local code and dated tech
 | Compatibility | Original AP, game turns, combat and save processing with targeted native comparisons | No comprehensive guarantee for all mods, saves and game versions |
 
 ## Recent milestones / 近期进展
+
+- Added bed frames, closed/open crates, cupboards, lockers, bookcases and racks to the shared world/construction models. Sealed contents remain hidden under native rules. A committed native bed-building activity now verifies interruption, resumption and the completed model. 155 functional cases (13218 assertions), 5375 graphics assertions and ON/OFF builds passed. Local 3D launchers use `modern-controls-storage`; initial placement/component consumption and the full construction lifecycle remain unverified.
 
 - Returned to P5.6 feature work; no further FPS-analysis expansion. Basic table/chair/bed models, raised item display and part-based targeting passed 153 functional cases (13060 assertions), 4813 graphics assertions and ON/OFF builds. Both local 3D launchers use `modern-controls-furniture`. See the dated modern-controls report for boundaries.
 
