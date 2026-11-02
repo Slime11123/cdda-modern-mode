@@ -48,6 +48,13 @@ bool ready();
 bool bind();
 void unbind();
 std::optional<uv_rect> lookup( const std::string &id );
+struct furniture_uv {
+    std::optional<uv_rect> top;
+    std::optional<uv_rect> front;
+    std::optional<uv_rect> side;
+};
+// Some packs combine a top and a front view in one pseudo-3D sprite.
+furniture_uv lookup_furniture( const std::string &id );
 void release();
 } // namespace fp3d_materials
 #endif

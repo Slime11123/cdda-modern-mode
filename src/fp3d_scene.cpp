@@ -44,13 +44,15 @@ void floor( float x, float z, float y, const std::optional<fp3d_materials::uv_re
 }
 
 void box( float x, float z, float width, float depth, float bottom, float top,
-          const std::optional<fp3d_materials::uv_rect> &material, bool tile_sides = false )
+          const std::optional<fp3d_materials::uv_rect> &material, bool tile_sides = false,
+          const fp3d_materials::furniture_uv *faces = nullptr )
 {
     const float l = x - width / 2;
     const float r = x + width / 2;
     const float n = z - depth / 2;
     const float s = z + depth / 2;
-    const auto uv = material.value_or( fp3d_materials::uv_rect{ 0, 0, 1, 1 } );
+    const auto uv = ( faces ? faces->top : material ).value_or(
+                        fp3d_materials::uv_rect{ 0, 0, 1, 1 } );
     if( material ) {
         glEnable( GL_TEXTURE_2D );
     } else {
@@ -66,33 +68,34 @@ void box( float x, float z, float width, float depth, float bottom, float top,
     glVertex3f( r, top, s );
     glTexCoord2f( uv.right, uv.top );
     glVertex3f( r, top, n );
-    const auto side = [&]( float x0, float z0, float x1, float z1 ) {
+    const auto side = [&]( float x0, float z0, float x1, float z1, bool front = false ) {
+        const auto side_uv = faces ? ( front ? faces->front : faces->side ).value_or( uv ) : uv;
         // Atlas slots cannot use GL_REPEAT. Split upright wall faces into
         // one-metre rows and crop partial rows instead of stretching a square
         // terrain image over the full storey. Keep window surrounds aligned.
-        const float u1 = tile_sides ? uv.left + ( uv.right - uv.left ) *
-                         std::min( 1.0f, std::hypot( x1 - x0, z1 - z0 ) ) : uv.right;
+        const float u1 = tile_sides ? side_uv.left + ( side_uv.right - side_uv.left ) *
+                         std::min( 1.0f, std::hypot( x1 - x0, z1 - z0 ) ) : side_uv.right;
         const int first = tile_sides ? static_cast<int>( std::floor( bottom ) ) : 0;
         const int last = tile_sides ? static_cast<int>( std::ceil( top ) ) : 1;
         for( int row = first; row < last; ++row ) {
             const float y0 = tile_sides ? std::max( bottom, static_cast<float>( row ) ) : bottom;
             const float y1 = tile_sides ? std::min( top, static_cast<float>( row + 1 ) ) : top;
-            const float v0 = tile_sides ? uv.bottom + ( uv.top - uv.bottom ) * ( y0 - row ) : uv.bottom;
-            const float v1 = tile_sides ? uv.bottom + ( uv.top - uv.bottom ) * ( y1 - row ) : uv.top;
-            glTexCoord2f( uv.left, v0 );
+            const float v0 = tile_sides ? side_uv.bottom + ( side_uv.top - side_uv.bottom ) * ( y0 - row ) : side_uv.bottom;
+            const float v1 = tile_sides ? side_uv.bottom + ( side_uv.top - side_uv.bottom ) * ( y1 - row ) : side_uv.top;
+            glTexCoord2f( side_uv.left, v0 );
             glVertex3f( x0, y0, z0 );
             glTexCoord2f( u1, v0 );
             glVertex3f( x1, y0, z1 );
             glTexCoord2f( u1, v1 );
             glVertex3f( x1, y1, z1 );
-            glTexCoord2f( uv.left, v1 );
+            glTexCoord2f( side_uv.left, v1 );
             glVertex3f( x0, y1, z0 );
         }
     };
     glNormal3f( 0, 0, -1 );
     side( l, n, r, n );
     glNormal3f( 0, 0, 1 );
-    side( r, s, l, s );
+    side( r, s, l, s, true );
     glNormal3f( -1, 0, 0 );
     side( l, s, l, n );
     glNormal3f( 1, 0, 0 );
@@ -254,15 +257,16 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         }
     }
     if( tile.furniture ) {
-        const auto surface = fp3d_materials::lookup( "$furniture:" + tile.furniture->id );
+        const auto surfaces = fp3d_materials::lookup_furniture( tile.furniture->id );
         color( brightness, brightness, brightness );
         for( const auto &part : fp3d_furniture::parts( tile.furniture->shape ) ) {
-            box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top, surface );
+            box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top,
+                 surfaces.side, false, &surfaces );
             glPushMatrix();
             glTranslatef( x + part.x, part.bottom, z + part.z );
             glScalef( part.width, 1, part.depth );
             glRotatef( 180, 1, 0, 0 );
-            floor( 0, 0, 0, surface );
+            floor( 0, 0, 0, surfaces.side );
             glPopMatrix();
         }
     }

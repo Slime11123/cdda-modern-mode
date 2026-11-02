@@ -2,7 +2,9 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cmath>
 #include <chrono>
 #include <fstream>
 #include <cstdlib>
@@ -418,6 +420,46 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     cell->furniture = ghost.terrain->furniture;
                     const auto built = render();
                     CHECK( built != empty_room );
+                    if( id == "f_cupboard" ) {
+                        REQUIRE( fp3d_materials::bind() );
+                        const auto faces = fp3d_materials::lookup_furniture( id );
+                        REQUIRE( faces.top );
+                        REQUIRE( faces.front );
+                        REQUIRE( faces.side );
+                        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+                            CHECK( faces.top->bottom < faces.front->top );
+                            CHECK( faces.side->right - faces.side->left <
+                                   faces.front->right - faces.front->left );
+                        } else {
+                            CHECK( faces.top->top == faces.front->top );
+                            CHECK( faces.top->bottom == faces.front->bottom );
+                        }
+                        fp3d_materials::unbind();
+                        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+                            // Sample actual projected surfaces. The old whole-sprite
+                            // mapping put a white countertop stripe on the front.
+                            const float focal = width / ( 2 * std::tan(
+                                                    fp3d_camera::horizontal_fov_degrees * 3.14159265f / 360 ) );
+                            const auto format = SDL_AllocFormat( SDL_PIXELFORMAT_RGBA8888 );
+                            REQUIRE( format );
+                            const auto sample = [&]( float x, float y, float distance ) {
+                                const int px = std::lround( width / 2.0f + focal * x / distance );
+                                const int py = std::lround( height / 2.0f + focal *
+                                                           ( fp3d_camera::eye_height - y ) / distance );
+                                std::array<Uint8, 4> rgba{};
+                                SDL_GetRGBA( built[py * width + px], format, &rgba[0], &rgba[1], &rgba[2], &rgba[3] );
+                                return rgba;
+                            };
+                            const auto top = sample( 0, .86f, 3 );
+                            const auto front = sample( .2f, .75f, 2.6f );
+                            CAPTURE( top, front );
+                            CHECK( top[0] > 30 );
+                            CHECK( std::abs( int( top[0] ) - top[2] ) < 12 );
+                            CHECK( front[0] > front[2] * 1.3f );
+                            CHECK( front[1] > front[2] * 1.3f );
+                            SDL_FreeFormat( format );
+                        }
+                    }
                     fp3d_snapshot::sprite object;
                     object.kind = fp3d_snapshot::sprite_kind::item;
                     object.position = ghost.position;

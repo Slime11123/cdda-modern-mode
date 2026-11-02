@@ -565,6 +565,33 @@ std::optional<uv_rect> lookup( const std::string &id )
                     ( y + slot_size - 2.5f ) / atlas_size * texture_height };
 }
 
+furniture_uv lookup_furniture( const std::string &id )
+{
+    const auto surface = lookup( "$furniture:" + id );
+    furniture_uv result{ surface, surface, surface };
+    // This layout belongs to the actual Undead People cupboard artwork, not
+    // every furniture sprite or every tileset. Native looks_like is supported
+    // only when it resolves to this same artwork.
+    if( !surface || !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ||
+        resolve_vegetation( *selected, id, season ) !=
+        resolve_vegetation( *selected, "f_cupboard", season ) ) {
+        return result;
+    }
+    const auto crop = [&]( float x0, float y0, float x1, float y1 ) {
+        const float width = surface->right - surface->left;
+        const float height = surface->bottom - surface->top;
+        // Endpoints are source pixel centres within the padded 32x32 slot.
+        return uv_rect{ surface->left + width *x0 / 31,
+                        surface->top + height *y0 / 31,
+                        surface->left + width *x1 / 31,
+                        surface->top + height *y1 / 31 };
+    };
+    result.top = crop( 1, 1, 30, 9 );
+    result.front = crop( 1, 11, 30, 30 );
+    result.side = crop( 1, 12, 3, 29 );
+    return result;
+}
+
 void release()
 {
     ++material_revision;
