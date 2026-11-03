@@ -28,6 +28,9 @@ std::vector<project> catalogue();
 std::string details( const construction_group_str_id &group, avatar *crafter = nullptr );
 // Implemented beside the native menu so its private legality checks are reused.
 bool begin( const construction_group_str_id &group );
+// Main-thread handoff after 3D site selection. begin() owns the initial faction
+// confirmation; this rechecks the selected site and uses native consumption.
+bool start( const construction_str_id &project, const fp3d_targeting::target &target );
 // Read-only legality check shared by the preview and its final position confirmation.
 bool preview_allowed( avatar &you, map &here, const construction &project,
                       const fp3d_targeting::target &target );

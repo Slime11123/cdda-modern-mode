@@ -83,3 +83,8 @@ CDDA is the upstream project; this is an unofficial standalone repository. Prese
 ### 2026-11-03 3D柜体邻墙朝向
 
 橱柜、储物柜和书柜按当前已知墙/窗边界自动调整正面；世界、蓝图和准星同步。功能168用例16826断言、两图块包图形6314断言/2用例、ON/OFF及测试构建通过；运行包帮助入口退出0，实际截图已核对。原版占格/存档未改；P5.6其余施工与模型项目未标完成。启动器runtime/modern-3d-cabinet-facing；详见FP3D_FURNITURE_FACING.md。
+
+
+### 2026-11-03 3D确认位置后的原版施工提交
+
+3D开工重新校验当前条件，共用原版资源提交/ACT_BUILD；真实木桌、床垫的扣材到完工和无效请求保护已自动覆盖。171用例16961功能断言、6315图形断言/2用例及ON/OFF/测试构建通过；两包帮助入口退出0。启动器runtime/modern-3d-construction-start，详见FP3D_CONSTRUCTION_START.md。自动检查尚未覆盖实体选点、替代材料/取消弹窗、充能工具和完整世界回合，未宣布P5.6完成。

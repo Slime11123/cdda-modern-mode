@@ -1260,6 +1260,53 @@ std::pair<std::map<tripoint_bub_ms, const construction *>, std::vector<construct
     return ret;
 }
 
+// Shared native commitment step. Selection/UI stays with each caller.
+static bool start_construction_at( const construction &con, const tripoint_bub_ms &pnt )
+{
+    avatar &player_character = get_avatar();
+    map &here = get_map();
+    // Maybe there is already a partial_con on an existing trap, that isn't caught by the usual trap-checking.
+    // because the pre-requisite construction is already a trap anyway.
+    // This shouldn't normally happen, unless it's a spike pit being built on a pit for example.
+    partial_con *pre_c = here.partial_con_at( pnt );
+    if( pre_c ) {
+        add_msg( m_info,
+                 _( "There is already an unfinished construction there, examine it to continue working on it." ) );
+        return false;
+    }
+    std::list<item> used;
+    // create the partial construction struct
+    partial_con pc;
+    pc.id = con.id;
+    if( player_character.has_trait( trait_DEBUG_HS ) ) {
+        // Gift components
+        for( const auto &it : con.requirements->get_components() ) {
+            used.emplace_back( it.front().type );
+        }
+    } else {
+        // Use up the components
+        for( const std::vector<item_comp> &it : con.requirements->get_components() ) {
+            std::list<item> tmp = player_character.consume_items( it, 1, is_crafting_component,
+                                  return_false<itype_id>, true );
+            if( tmp.empty() ) {
+                return false;
+            }
+            used.splice( used.end(), tmp );
+        }
+    }
+    pc.components = used;
+    here.partial_con_set( pnt, pc );
+    for( const auto &it : con.requirements->get_tools() ) {
+        player_character.consume_tools( it );
+    }
+    player_character.invalidate_crafting_inventory();
+    player_character.invalidate_weight_carried_cache();
+    player_character.assign_activity( ACT_BUILD );
+    player_character.activity.placement = here.get_abs( pnt );
+    return true;
+}
+
+
 void place_construction( std::vector<construction_group_str_id> const &groups )
 {
     avatar &player_character = get_avatar();
@@ -1324,45 +1371,16 @@ void place_construction( std::vector<construction_group_str_id> const &groups )
         cons.front()->explain_failure( pnt );
         return;
     }
-    // Maybe there is already a partial_con on an existing trap, that isn't caught by the usual trap-checking.
-    // because the pre-requisite construction is already a trap anyway.
-    // This shouldn't normally happen, unless it's a spike pit being built on a pit for example.
-    partial_con *pre_c = here.partial_con_at( pnt );
-    if( pre_c ) {
-        add_msg( m_info,
-                 _( "There is already an unfinished construction there, examine it to continue working on it." ) );
+    const construction &con = *valid.at( pnt );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_compositor::turn_based() ) {
+        const fp3d_targeting::target target{ player_character.pos_abs(), here.get_abs( pnt ),
+                                             fp3d_targeting::kind::terrain, here.ter( pnt ).id().str() };
+        fp3d_construction::start( con.str_id, target );
         return;
     }
-    std::list<item> used;
-    const construction &con = *valid.find( pnt )->second;
-    // create the partial construction struct
-    partial_con pc;
-    pc.id = con.id;
-    if( player_character.has_trait( trait_DEBUG_HS ) ) {
-        // Gift components
-        for( const auto &it : con.requirements->get_components() ) {
-            used.emplace_back( it.front().type );
-        }
-    } else {
-        // Use up the components
-        for( const std::vector<item_comp> &it : con.requirements->get_components() ) {
-            std::list<item> tmp = player_character.consume_items( it, 1, is_crafting_component,
-                                  return_false<itype_id>, true );
-            if( tmp.empty() ) {
-                return;
-            }
-            used.splice( used.end(), tmp );
-        }
-    }
-    pc.components = used;
-    here.partial_con_set( pnt, pc );
-    for( const auto &it : con.requirements->get_tools() ) {
-        player_character.consume_tools( it );
-    }
-    player_character.invalidate_crafting_inventory();
-    player_character.invalidate_weight_carried_cache();
-    player_character.assign_activity( ACT_BUILD );
-    player_character.activity.placement = here.get_abs( pnt );
+#endif
+    start_construction_at( con, pnt );
 }
 
 void complete_construction( Character *you )
@@ -2802,3 +2820,31 @@ bool construction_str_id::is_valid() const
     }
     return construction_id_map.find( *this ) != construction_id_map.end();
 }
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+bool fp3d_construction::start( const construction_str_id &project,
+                              const fp3d_targeting::target &target )
+{
+    if( !project.is_valid() ) {
+        return false;
+    }
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const construction &con = project.obj();
+    // The preview may have populated a cache before the final confirmation.
+    you.invalidate_crafting_inventory();
+    {
+        scoped_rng_restore restore_rng;
+        if( target.position == you.pos_abs() || !preview_allowed( you, here, con, target ) ) {
+            add_msg( m_info, _( "You can't build that!" ) );
+            return false;
+        }
+        if( con.group != construction_group_deconstruct_simple_furniture &&
+            !player_can_see_to_build( you, con.group ) ) {
+            add_msg( m_info, _( "It is too dark to construct right now." ) );
+            return false;
+        }
+    }
+    return start_construction_at( con, here.get_bub( target.position ) );
+}
+#endif
