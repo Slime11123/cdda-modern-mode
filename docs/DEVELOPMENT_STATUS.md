@@ -1,6 +1,6 @@
 # CDDA Modern Mode — Development Status / 开发状态
 
-**Updated: 2026-11-02 / 更新日期：2026-11-02**
+**Updated: 2026-11-03 / 更新日期：2026-11-03**
 **Source baseline / 原版基线:** CDDA 0.I-1 (`7b2efa5cea38e4d4d97dd0e63b28b9148623da59`)
 **Project state / 状态:** Experimental development preview, not a stable public release.
 
@@ -78,3 +78,8 @@ CDDA is the upstream project; this is an unofficial standalone repository. Prese
 ### 2026-11-02 双门储物柜 / 已授权柜内物品显示
 
 按用户标注将储物柜改为完整柜体和双门正面，修复窄边框拉伸条纹；橱柜/储物柜已授权物品图标可穿过柜体显示，墙/楼板及普通生物遮挡保留。159用例13352功能断言、两包6073图形断言/2用例及ON/测试构建通过，运行包帮助入口退出0；未重复OFF构建。启动器runtime/modern-controls-locker-doors，保存退出重开生效。报告FP3D_STORAGE_DOORS_AND_CONTENTS.md；柜门动画及正式游玩验收未标完成。
+
+
+### 2026-11-03 3D柜体邻墙朝向
+
+橱柜、储物柜和书柜按当前已知墙/窗边界自动调整正面；世界、蓝图和准星同步。功能168用例16826断言、两图块包图形6314断言/2用例、ON/OFF及测试构建通过；运行包帮助入口退出0，实际截图已核对。原版占格/存档未改；P5.6其余施工与模型项目未标完成。启动器runtime/modern-3d-cabinet-facing；详见FP3D_FURNITURE_FACING.md。

@@ -2,6 +2,7 @@
 #ifndef CATA_SRC_FP3D_FURNITURE_H
 #define CATA_SRC_FP3D_FURNITURE_H
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,6 +23,10 @@ const std::vector<part> &parts( kind shape );
 float item_surface( kind shape );
 // Only already-captured accessible contents receive the storage display pass.
 bool shows_contents( kind shape );
+// Backing walls in native north/east/south/west order; no live-map queries.
+unsigned facing( kind shape, const std::array<bool, 4> &walls );
+// Same quarter-turn transform as the rendered model, for part-level picking.
+part rotated( part value, unsigned quarter_turns );
 }
 #endif
 #endif

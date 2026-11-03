@@ -8,11 +8,14 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "cata_catch.h"
 #include "cata_scope_helpers.h"
 #include "cata_tiles.h"
 #include "fp3d_materials.h"
+#include "fp3d_construction.h"
+#include "construction.h"
 #include "sdl_geometry.h"
 #include "sdltiles.h"
 
@@ -202,6 +205,93 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
         object.elevation = .1f;
         scene.sprites.push_back( object );
         CHECK( render() == sealed ); // Sealed native containers still hide contents.
+        for( const std::string facing_id : {
+                 "f_locker", "f_bookcase"
+             } ) {
+            CAPTURE( facing_id );
+            // Neighbor-wall changes rotate the shared instance, not its cached
+            // texture/model. The same geometry must be used by the placement ghost.
+            scene = floor_scene;
+            const auto cabinet_position = tripoint_abs_ms( 0, -2, 0 );
+            auto &oriented = *std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto & entry ) {
+                return entry.position == cabinet_position;
+            } );
+            oriented.furniture = fp3d_furniture::describe( facing_id );
+            const auto front = render();
+            auto &backing = *std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto & entry ) {
+                return entry.position == cabinet_position + tripoint_rel_ms::east;
+            } );
+            backing.kind = fp3d_snapshot::terrain_kind::wall;
+            backing.terrain = "t_wall";
+            const auto turned = render();
+            unsigned face_changes = 0;
+            for( int py = height / 2; py < height / 2 + 48; ++py ) {
+                for( int px = width / 2 - 16; px < width / 2 + 16; ++px ) {
+                    face_changes += front[py * width + px] != turned[py * width + px];
+                }
+            }
+            // Glyph packs can paint the central region black in both poses.
+            // Check the actual separate-face artwork here and both packs' full
+            // geometric footprint with an opaque diagnostic material below.
+            if( pack == "UNDEAD_PEOPLE_BASE" ) {
+                CHECK( face_changes > 20 );
+            }
+            save( facing_id + "-east-backing-front-faces-west", turned );
+            scene.origin = tripoint_abs_ms( -1, 0, 0 );
+            save( facing_id + "-east-backing-oblique", render() );
+            scene.origin = tripoint_abs_ms::zero;
+            oriented.furniture.reset();
+            const auto only_wall = render();
+            construction project{};
+            project.post_is_furniture = true;
+            project.post_terrain = facing_id;
+            fp3d_scene::blueprint ghost{ cabinet_position, 1.85f, true, "oriented storage" };
+            ghost.terrain = fp3d_construction::terrain_preview( project, cabinet_position );
+            REQUIRE( ghost.terrain );
+            fp3d_compositor::set_blueprint( ghost );
+            const auto preview = render();
+            save( facing_id + "-east-backing-blueprint", preview );
+            ghost.valid = false;
+            fp3d_compositor::set_blueprint( ghost );
+            CHECK( render() != preview );
+            fp3d_compositor::set_blueprint( std::nullopt );
+            CHECK( render() == only_wall );
+            // Material transparency must not redefine geometry. An unknown
+            // image uses the renderer's opaque fallback while preserving the
+            // real furniture shape and all normal orientation code paths.
+            auto probe = *fp3d_furniture::describe( facing_id );
+            probe.id = "fp3d_facing_geometry_probe_" + facing_id;
+            oriented.furniture = probe;
+            const auto built_geometry = render();
+            oriented.furniture.reset();
+            ghost.valid = true;
+            ghost.terrain->furniture = probe;
+            fp3d_compositor::set_blueprint( ghost );
+            const auto ghost_geometry = render();
+            const auto span = [&]( const std::vector<std::uint32_t> &pixels ) {
+                int first = width;
+                int last = -1;
+                for( int px = width / 2 - 80; px < width / 2 + 80; ++px ) {
+                    const size_t pixel = ( height / 2 + 30 ) * width + px;
+                    if( pixels[pixel] != only_wall[pixel] ) {
+                        first = std::min( first, px );
+                        last = std::max( last, px );
+                    }
+                }
+                return std::pair{ first, last };
+            };
+            const auto built_span = span( built_geometry );
+            const auto ghost_span = span( ghost_geometry );
+            CHECK( built_span.first < built_span.second );
+            CHECK( std::abs( built_span.first - ghost_span.first ) <= 1 );
+            CHECK( std::abs( built_span.second - ghost_span.second ) <= 1 );
+            fp3d_compositor::set_blueprint( std::nullopt );
+            CHECK( render() == only_wall );
+            oriented.furniture = fp3d_furniture::describe( facing_id );
+            backing.kind = fp3d_snapshot::terrain_kind::floor;
+            backing.terrain = "t_floor";
+            CHECK( render() == front ); // Removing the backing restores the free-space orientation.
+        }
     }
 }
 #endif

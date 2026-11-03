@@ -1,5 +1,6 @@
 #include "fp3d_furniture.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <utility>
 #include "mapdata.h"
 namespace fp3d_furniture
 {
@@ -167,5 +168,49 @@ bool shows_contents( kind shape )
 {
     return shape == kind::cupboard || shape == kind::locker;
 }
+
+unsigned facing( kind shape, const std::array<bool, 4> &walls )
+{
+    if( shape != kind::cupboard && shape != kind::locker && shape != kind::cabinet ) {
+        return 0;
+    }
+    // Preserve the established orientation in free space. Prefer a wall behind
+    // the cabinet and an open front; corners and corridors resolve consistently.
+    for( unsigned back = 0; back < walls.size(); ++back ) {
+        if( walls[back] && !walls[( back + 2 ) % 4] ) {
+            return back;
+        }
+    }
+    for( unsigned back = 0; back < walls.size(); ++back ) {
+        if( !walls[( back + 2 ) % 4] ) {
+            return back;
+        }
+    }
+    return 0;
+}
+
+part rotated( part value, unsigned quarter_turns )
+{
+    const float x = value.x;
+    const float z = value.z;
+    switch( quarter_turns % 4 ) {
+        case 1:
+            value.x = -z;
+            value.z = x;
+            std::swap( value.width, value.depth );
+            break;
+        case 2:
+            value.x = -x;
+            value.z = -z;
+            break;
+        case 3:
+            value.x = z;
+            value.z = -x;
+            std::swap( value.width, value.depth );
+            break;
+    }
+    return value;
+}
+
 }
 #endif

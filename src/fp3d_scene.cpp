@@ -166,26 +166,32 @@ void window_face( const std::optional<fp3d_materials::uv_rect> &material )
     glEnd();
 }
 
-void furniture_geometry( const fp3d_furniture::model &model, float x, float z )
+void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
+                         unsigned facing = 0 )
 {
+    glPushMatrix();
+    glTranslatef( x, 0, z );
+    glRotatef( -90.0f * facing, 0, 1, 0 );
     unsigned part_index = 0;
     for( const auto &part : fp3d_furniture::parts( model.shape ) ) {
         const auto surfaces = fp3d_materials::lookup_furniture( model.id, part_index++ );
-        box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top,
+        box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
              surfaces.side, false, &surfaces );
         glPushMatrix();
-        glTranslatef( x + part.x, part.bottom, z + part.z );
+        glTranslatef( part.x, part.bottom, part.z );
         glScalef( part.width, 1, part.depth );
         glRotatef( 180, 1, 0, 0 );
         floor( 0, 0, 0, surfaces.side );
         glPopMatrix();
     }
+    glPopMatrix();
 }
 
 void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const fp3d_snapshot::cell *below, const fp3d_snapshot::cell *above,
                 int ew, int ns, const std::string &wall_surface,
-                const std::array<float, 4> *tint = nullptr, bool defer_storage = false )
+                const std::array<float, 4> *tint = nullptr, bool defer_storage = false,
+                unsigned furniture_facing = 0 )
 {
     const auto color = [&]( float r, float g, float b ) {
         if( tint ) {
@@ -275,7 +281,7 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     if( tile.furniture && ( !defer_storage ||
                            !fp3d_furniture::shows_contents( tile.furniture->shape ) ) ) {
         color( brightness, brightness, brightness );
-        furniture_geometry( *tile.furniture, x, z );
+        furniture_geometry( *tile.furniture, x, z, furniture_facing );
     }
     if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
         color( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
@@ -558,6 +564,13 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         return tile && ( tile->kind == fp3d_snapshot::terrain_kind::wall ||
                          tile->kind == fp3d_snapshot::terrain_kind::window );
     };
+    const auto furniture_facing = [&]( const fp3d_snapshot::cell &tile ) {
+        return tile.furniture ? fp3d_furniture::facing( tile.furniture->shape,
+        { known_wall( tile.position + tripoint_rel_ms::north ),
+          known_wall( tile.position + tripoint_rel_ms::east ),
+          known_wall( tile.position + tripoint_rel_ms::south ),
+          known_wall( tile.position + tripoint_rel_ms::west ) } ) : 0;
+    };
     const auto window_wall = [&]( const fp3d_snapshot::cell & tile ) {
         for( const auto &direction : {
                  tripoint_rel_ms::east, tripoint_rel_ms::west,
@@ -667,7 +680,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, -1 ) ),
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, 1 ) ), ew, ns,
                                tile->kind == fp3d_snapshot::terrain_kind::window ? window_wall( *tile ) : "",
-                               nullptr, true );
+                               nullptr, true, furniture_facing( *tile ) );
                 }
                 if( mesh.list ) {
                     glEndList();
@@ -726,6 +739,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         const auto offset = tile.position - scene.origin;
         glPushMatrix();
         glTranslatef( offset.x(), offset.z() * fp3d_camera::floor_height, offset.y() );
+        glRotatef( -90.0f * furniture_facing( tile ), 0, 1, 0 );
         if( it != storage_meshes.end() ) {
             glCallList( it->second );
         } else {
@@ -876,7 +890,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                            known_wall( tile.position + tripoint_rel_ms::south );
             glPushMatrix();
             glTranslatef( 0, y + .025f, 0 );
-            draw_cell( tile, offset.x(), offset.y(), nullptr, nullptr, ew, ns, window_wall( tile ), &tint );
+            draw_cell( tile, offset.x(), offset.y(), nullptr, nullptr, ew, ns, window_wall( tile ),
+                       &tint, false, furniture_facing( tile ) );
             if( tile.kind == fp3d_snapshot::terrain_kind::window &&
                 tile.pane == fp3d_snapshot::window_pane::glazed ) {
                 glDisable( GL_LIGHTING );

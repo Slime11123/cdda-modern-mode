@@ -101,7 +101,14 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             { x + dx + width / 2, y + dy + depth / 2, z + top } ) );
         };
         if( tile->furniture ) {
-            for( const auto &part : fp3d_furniture::parts( tile->furniture->shape ) ) {
+            const unsigned facing = fp3d_furniture::facing( tile->furniture->shape, {
+                wall_at( tile->position + tripoint_rel_ms::north ),
+                wall_at( tile->position + tripoint_rel_ms::east ),
+                wall_at( tile->position + tripoint_rel_ms::south ),
+                wall_at( tile->position + tripoint_rel_ms::west )
+            } );
+            for( const auto &original : fp3d_furniture::parts( tile->furniture->shape ) ) {
+                const auto part = fp3d_furniture::rotated( original, facing );
                 const auto hit = intersect( eye, direction,
                 { x + part.x - part.width / 2, y + part.z - part.depth / 2, z + part.bottom },
                 { x + part.x + part.width / 2, y + part.z + part.depth / 2, z + part.top } );
