@@ -13,6 +13,10 @@
 #include "output.h"
 #include "string_formatter.h"
 #include "ui_manager.h"
+#include "translations.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 
 class query_popup_impl : public cataimgui::window
 {
@@ -48,6 +52,11 @@ class query_popup_impl : public cataimgui::window
     protected:
         void draw_controls() override;
         cataimgui::bounds get_bounds() override {
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( fp3d_simple_ui::active() ) {
+                return { -1, -1, std::min( 760.f, ImGui::GetMainViewport()->Size.x * .9f ), -1 };
+            }
+#endif
             return { -1.f, parent->ontop ? 0 : -1.f, -1.f, -1.f};
         }
 };
@@ -56,6 +65,48 @@ void query_popup_impl::draw_controls()
 {
     ImGui::SetNavCursorVisible( true );
     mouse_selected_option = -1;
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() ) {
+        fp3d_simple_ui::accent_text( _( "Confirm" ) );
+        ImGui::Separator();
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float height = std::min( ImGui::GetMainViewport()->Size.y * .55f,
+                                       ImGui::CalcTextSize( remove_color_tags( parent->text ).c_str(), nullptr,
+                                           false, width ).y + 16 );
+        if( ImGui::BeginChild( "message", ImVec2( 0, std::max( ImGui::GetTextLineHeight(), height ) ) ) ) {
+            cataimgui::draw_colored_text( parent->text, parent->default_text_color, width );
+        }
+        ImGui::EndChild();
+        ImGui::Separator();
+        for( size_t ind = 0; ind < parent->buttons.size(); ++ind ) {
+            ImGui::PushID( ind );
+            const std::string label = remove_color_tags( parent->buttons[ind].text );
+            const float button_width = ImGui::CalcTextSize( label.c_str() ).x +
+                                       ImGui::GetStyle().FramePadding.x * 2;
+            if( ind > 0 && ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x +
+                button_width <= ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x ) {
+                ImGui::SameLine();
+            }
+            if( action_button( "CONFIRM", label ) ) {
+                keyboard_selected_option = ind;
+            }
+            if( ImGui::IsItemHovered() ) {
+                mouse_selected_option = ind;
+            }
+            if( keyboard_selected_option != last_keyboard_selected_option &&
+                keyboard_selected_option == short( ind ) && ImGui::IsWindowFocused() ) {
+                ImGui::SetKeyboardFocusHere( -1 );
+            }
+            ImGui::PopID();
+        }
+        last_keyboard_selected_option = keyboard_selected_option;
+        if( parent->buttons.empty() && ( parent->anykey || parent->cancel ) ) {
+            action_button( parent->cancel ? "QUIT" : "ANY_INPUT", _( "Close" ) );
+        }
+        return;
+    }
+#endif
 
     for( const std::string &line : parent->folded_msg ) {
         cataimgui::draw_colored_text( line, parent->default_text_color );
@@ -325,6 +376,9 @@ query_popup::result query_popup::query_once()
         ui_manager::redraw();
         res.action = ctxt.handle_input( 50 );
         res.evt = ctxt.get_raw_input();
+        if( impl->has_button_action() ) {
+            res.action = impl->get_button_action();
+        }
 
         // If we're tracking mouse movement
         if( !options.empty() && res.action == "SELECT" && impl->get_mouse_selected_option() != -1 ) {

@@ -41,6 +41,11 @@
 #include "type_id.h"
 #include "ui_manager.h"
 #include "uilist.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#include "cata_imgui.h"
+#include "imgui/imgui.h"
+#endif
 #include "uistate.h"
 #include "units.h"
 #include "vehicle.h"
@@ -670,7 +675,103 @@ void avatar::power_bionics()
     ctxt.register_action( "TOGGLE_SPRITE" );
     ctxt.register_action( "SORT" );
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    std::unique_ptr<cataimgui::window> simple_panel;
+    if( fp3d_simple_ui::active() ) {
+        ctxt.set_timeout( 50 );
+        simple_panel = fp3d_simple_ui::create_panel( _( "Bionics" ), [ &,
+        last_cursor = -1]( cataimgui::window & panel ) mutable {
+            cataimgui::draw_colored_text( string_format( "电量：%s / %s",
+                                          units::display( get_power_level() ), units::display( get_max_power_level() ) ), c_white );
+            fp3d_simple_ui::accent_text( tab_mode == TAB_ACTIVE ? "主动模块" : "被动模块" );
+            panel.action_button( "NEXT_TAB", tab_mode == TAB_ACTIVE ? "切换到被动模块" : "切换到主动模块" );
+            ImGui::SameLine();
+            panel.action_button( "SORT", "排序" );
+            ImGui::Separator();
+            sorted_bionics &list = tab_mode == TAB_ACTIVE ? active : passive;
+            const bool wide = ImGui::GetWindowWidth() > 900;
+            const float height = std::max( 80.f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * ( wide ? 2 : 5 ) );
+            if( ImGui::BeginTable( "bionics", 2, ImGuiTableFlags_SizingStretchSame ) )
+            {
+                ImGui::TableNextColumn();
+                if( ImGui::BeginChild( "list", ImVec2( 0, height ) ) ) {
+                    for( size_t i = 0; i < list.size(); ++i ) {
+                        ImGui::PushID( i );
+                        if( ImGui::Selectable( build_bionic_powerdesc_string( *list[i], this ).c_str(),
+                                               cursor == static_cast<int>( i ) ) ) {
+                            cursor = i;
+                        }
+                        if( cursor == static_cast<int>( i ) && cursor != last_cursor ) {
+                            ImGui::SetScrollHereY();
+                        }
+                        ImGui::PopID();
+                    }
+                    if( list.empty() ) {
+                        ImGui::TextUnformatted( tab_mode == TAB_ACTIVE ? _( "No activatable bionics installed." ) :
+                                                _( "No passive bionics installed." ) );
+                    }
+                    last_cursor = cursor;
+                }
+                ImGui::EndChild();
+                ImGui::TableNextColumn();
+                if( ImGui::BeginChild( "details", ImVec2( 0, height ) ) && cursor >= 0 &&
+                    cursor < static_cast<int>( list.size() ) ) {
+                    const bionic &bio = *list[cursor];
+                    fp3d_simple_ui::accent_text( bio.id->name.translated() );
+                    ImGui::Separator();
+                    const float width = ImGui::GetContentRegionAvail().x;
+                    cataimgui::draw_colored_text( build_bionic_poweronly_string( bio, this ), c_white, width );
+                    cataimgui::draw_colored_text( bio.id->description.translated(), c_white, width );
+                    if( get_option<bool>( "CBM_SLOTS_ENABLED" ) ) {
+                        cataimgui::draw_colored_text( list_occupied_bps( bio.id,
+                                                      _( "This bionic occupies the following body parts:" ), true ), c_white, width );
+                        ImGui::Separator();
+                        for( const bodypart_id &part : get_all_body_parts() ) {
+                            const int total = get_total_bionics_slots( part );
+                            cataimgui::draw_colored_text( string_format( "%s: %d/%d",
+                                                          body_part_name_as_heading( part, 1 ),
+                                                          total - get_free_bionics_slots( part ), total ), c_white, width );
+                        }
+                    }
+                    if( bio.has_weapon() ) {
+                        cataimgui::draw_colored_text( string_format( _( "Installed weapon: %s" ),
+                                                      bio.get_weapon().tname() ), c_white, width );
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::EndTable();
+            }
+            ImGui::BeginDisabled( list.empty() );
+            panel.action_button( "FP3D_ACTIVATE", "启用 / 停用" );
+            if( wide )
+            {
+                ImGui::SameLine();
+            }
+            panel.action_button( "FP3D_REASSIGN", ctxt.get_button_text( "REASSIGN" ) );
+            if( wide )
+            {
+                ImGui::SameLine();
+            }
+            panel.action_button( "TOGGLE_SAFE_FUEL", ctxt.get_button_text( "TOGGLE_SAFE_FUEL" ) );
+            panel.action_button( "TOGGLE_SPRITE", ctxt.get_button_text( "TOGGLE_SPRITE" ) );
+            ImGui::EndDisabled();
+            if( wide )
+            {
+                ImGui::SameLine();
+            }
+            panel.action_button( "QUIT", _( "Back" ) );
+        }, [&]() {
+            return !hide;
+        } );
+    }
+#endif
+
     ui.on_redraw( [&]( const ui_adaptor & ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_panel ) {
+            return;
+        }
+#endif
         if( hide ) {
             return;
         }
@@ -770,7 +871,24 @@ void avatar::power_bionics()
         }
 #endif
 
-        const std::string action = ctxt.handle_input();
+        std::string action = ctxt.handle_input();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_panel ) {
+            if( simple_panel->has_button_action() ) {
+                action = simple_panel->get_button_action();
+            }
+            if( !simple_panel->get_is_open() ) {
+                action = "QUIT";
+            }
+            if( action == "FP3D_ACTIVATE" ) {
+                menu_mode = ACTIVATING;
+                action = "CONFIRM";
+            } else if( action == "FP3D_REASSIGN" ) {
+                menu_mode = REASSIGNING;
+                action = "CONFIRM";
+            }
+        }
+#endif
         const int ch = ctxt.get_raw_input().get_first_input();
         bionic *tmp = nullptr;
 

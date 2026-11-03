@@ -19,6 +19,11 @@
 #include "string_formatter.h"
 #include "translations.h"
 #include "ui_manager.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#include "cata_imgui.h"
+#include "imgui/imgui.h"
+#endif
 enum class mutation_menu_mode {
     activating,
     examining,
@@ -238,7 +243,101 @@ void avatar::power_mutations()
 
     std::optional<trait_id> examine_id;
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    std::unique_ptr<cataimgui::window> simple_panel;
+    if( fp3d_simple_ui::active() ) {
+        ctxt.set_timeout( 50 );
+        simple_panel = fp3d_simple_ui::create_panel( _( "Mutations" ), [ &,
+        last_cursor = -1]( cataimgui::window & panel ) mutable {
+            fp3d_simple_ui::accent_text( tab_mode == mutation_tab_mode::active ? "主动能力" : "被动特性" );
+            panel.action_button( "NEXT_TAB", tab_mode == mutation_tab_mode::active ? "切换到被动特性" : "切换到主动能力" );
+            ImGui::Separator();
+            const std::vector<trait_id> &list = tab_mode == mutation_tab_mode::active ? active : passive;
+            const bool wide = ImGui::GetWindowWidth() > 900;
+            const float height = std::max( 80.f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * ( wide ? 2 : 4 ) );
+            if( ImGui::BeginTable( "mutations", 2, ImGuiTableFlags_SizingStretchSame ) )
+            {
+                ImGui::TableNextColumn();
+                if( ImGui::BeginChild( "list", ImVec2( 0, height ) ) ) {
+                    for( size_t i = 0; i < list.size(); ++i ) {
+                        ImGui::PushID( i );
+                        const auto &data = cached_mutations.at( list[i] );
+                        const std::string name = mutation_name( list[i] ) + ( data.powered ? _( " - Active" ) : "" );
+                        if( ImGui::Selectable( name.c_str(), cursor == static_cast<int>( i ) ) ) {
+                            cursor = i;
+                            examine_id = list[i];
+                        }
+                        if( cursor == static_cast<int>( i ) && cursor != last_cursor ) {
+                            ImGui::SetScrollHereY();
+                        }
+                        ImGui::PopID();
+                    }
+                    if( list.empty() ) {
+                        ImGui::TextUnformatted( _( "None" ) );
+                    }
+                    last_cursor = cursor;
+                }
+                ImGui::EndChild();
+                ImGui::TableNextColumn();
+                if( ImGui::BeginChild( "details", ImVec2( 0, height ) ) && cursor >= 0 &&
+                    cursor < static_cast<int>( list.size() ) ) {
+                    const trait_id &id = list[cursor];
+                    fp3d_simple_ui::accent_text( mutation_name( id ) );
+                    ImGui::Separator();
+                    const float width = ImGui::GetContentRegionAvail().x;
+                    std::string description = mutation_desc( id );
+                    if( !purifiable( id ) ) {
+                        description +=
+                            _( "\n<color_yellow>This trait is an intrinsic part of you now, purifier won't be able to remove it.</color>" );
+                    }
+                    cataimgui::draw_colored_text( description, c_white, width );
+                    if( id->activated ) {
+                        std::string resources;
+                        if( id->hunger ) {
+                            resources += _( " kcal" );
+                        }
+                        if( id->thirst ) {
+                            resources += _( " thirst" );
+                        }
+                        if( id->sleepiness ) {
+                            resources += _( " sleepiness" );
+                        }
+                        if( id->mana ) {
+                            resources += _( " mana" );
+                        }
+                        cataimgui::draw_colored_text( string_format( "消耗：%d", id->cost ) + resources, c_white,
+                                                      width );
+                        cataimgui::draw_colored_text( string_format( "冷却：%s", to_string_clipped( id->cooldown ) ),
+                                                      c_white, width );
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::EndTable();
+            }
+            ImGui::BeginDisabled( list.empty() );
+            panel.action_button( "FP3D_ACTIVATE", "启用 / 停用" );
+            if( wide )
+            {
+                ImGui::SameLine();
+            }
+            panel.action_button( "FP3D_REASSIGN", ctxt.get_button_text( "REASSIGN" ) );
+            if( wide )
+            {
+                ImGui::SameLine();
+            }
+            panel.action_button( "FP3D_SPRITE", ctxt.get_button_text( "TOGGLE_SPRITE" ) );
+            ImGui::EndDisabled();
+            panel.action_button( "QUIT", _( "Back" ) );
+        } );
+    }
+#endif
+
     ui.on_redraw( [&]( const ui_adaptor & ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_panel ) {
+            return;
+        }
+#endif
         werase( wBio );
         draw_border( wBio, BORDER_COLOR, _( "Mutations" ) );
         wattron( wBio, BORDER_COLOR );
@@ -383,8 +482,30 @@ void avatar::power_mutations()
         recalc_max_scroll_position();
         ui_manager::redraw();
         bool handled = false;
-        const std::string action = ctxt.handle_input();
-        const input_event evt = ctxt.get_raw_input();
+        std::string action = ctxt.handle_input();
+        input_event evt = ctxt.get_raw_input();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_panel ) {
+            if( simple_panel->has_button_action() ) {
+                action = simple_panel->get_button_action();
+                evt = input_event();
+            }
+            if( !simple_panel->get_is_open() ) {
+                action = "QUIT";
+                evt = input_event();
+            }
+            if( action == "FP3D_ACTIVATE" ) {
+                menu_mode = mutation_menu_mode::activating;
+                action = "CONFIRM";
+            } else if( action == "FP3D_REASSIGN" ) {
+                menu_mode = mutation_menu_mode::reassigning;
+                action = "CONFIRM";
+            } else if( action == "FP3D_SPRITE" ) {
+                menu_mode = mutation_menu_mode::hiding;
+                action = "CONFIRM";
+            }
+        }
+#endif
         if( evt.type == input_event_t::keyboard_char && !evt.sequence.empty() ) {
             const int ch = evt.get_first_input();
             if( ch == ' ' ) { //skip if space is pressed (space is used as an empty hotkey)
@@ -440,6 +561,9 @@ void avatar::power_mutations()
                             if( cached_mutations[mut_id].powered ) {
                                 add_msg_if_player( m_neutral, _( "You stop using your %s." ), mutation_name( mut_data.id ) );
                                 // Reset menu in advance
+#if defined(TILES) && defined(ENABLE_FP3D)
+                                simple_panel.reset();
+#endif
                                 ui.reset();
                                 deactivate_mutation( mut_id );
                                 // Action done, leave screen
@@ -451,6 +575,9 @@ void avatar::power_mutations()
                                 add_msg_if_player( m_neutral,
                                                    string_format( mut_data.activation_msg, mutation_name( mut_data.id ) ) );
                                 // Reset menu in advance
+#if defined(TILES) && defined(ENABLE_FP3D)
+                                simple_panel.reset();
+#endif
                                 ui.reset();
                                 activate_mutation( mut_id );
                                 // Action done, leave screen
@@ -615,6 +742,9 @@ void avatar::power_mutations()
                                 if( cached_mutations[mut_id].powered ) {
                                     add_msg_if_player( m_neutral, _( "You stop using your %s." ), mutation_name( mut_data.id ) );
                                     // Reset menu in advance
+#if defined(TILES) && defined(ENABLE_FP3D)
+                                    simple_panel.reset();
+#endif
                                     ui.reset();
                                     deactivate_mutation( mut_id );
                                     // Action done, leave screen
@@ -626,6 +756,9 @@ void avatar::power_mutations()
                                     add_msg_if_player( m_neutral,
                                                        string_format( mut_data.activation_msg, mutation_name( mut_data.id ) ) );
                                     // Reset menu in advance
+#if defined(TILES) && defined(ENABLE_FP3D)
+                                    simple_panel.reset();
+#endif
                                     ui.reset();
                                     activate_mutation( mut_id );
                                     // Action done, leave screen

@@ -6,10 +6,14 @@
 #include "imgui/imgui_stdlib.h"
 #include "input_enums.h"
 #include "text.h"
+#include "output.h"
 #include "translations.h"
 #include "uilist.h"
 #include "ui_manager.h"
 #include "uistate.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 
 input_popup::input_popup( int width, const std::string &title, const point &pos,
                           ImGuiWindowFlags flags ) :
@@ -75,6 +79,11 @@ bool input_popup::cancelled() const
 
 cataimgui::bounds input_popup::get_bounds()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() ) {
+        return { -1, -1, std::min( 640.f, ImGui::GetMainViewport()->Size.x * .9f ), -1 };
+    }
+#endif
     return {
         pos.x < 0 ? -1.f : str_width_to_pixels( pos.x ),
         pos.y < 0 ? -1.f : str_height_to_pixels( pos.y ),
@@ -85,6 +94,44 @@ cataimgui::bounds input_popup::get_bounds()
 
 void input_popup::draw_controls()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() ) {
+        if( !description.empty() ) {
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float height = std::min( ImGui::GetMainViewport()->Size.y * .45f,
+                                           ImGui::CalcTextSize( remove_color_tags( description ).c_str(), nullptr,
+                                               false, width ).y + 12 );
+            if( ImGui::BeginChild( "description", ImVec2( 0, height ) ) ) {
+                if( description_monofont ) {
+                    cataimgui::PushMonoFont();
+                }
+                cataimgui::draw_colored_text( description,
+                                             description_default_color == c_green ? c_white : description_default_color, width );
+                if( description_monofont ) {
+                    ImGui::PopFont();
+                }
+            }
+            ImGui::EndChild();
+        }
+        if( !label.empty() ) {
+            fp3d_simple_ui::accent_text( label );
+        }
+        if( !ImGui::IsWindowFocused() ) {
+            set_focus = true;
+        }
+        if( set_focus && ImGui::IsWindowFocused() ) {
+            ImGui::SetKeyboardFocusHere();
+            set_focus = false;
+        }
+        ImGui::SetNextItemWidth( -1 );
+        draw_input_control();
+        ImGui::Separator();
+        action_button( "TEXT.CONFIRM", _( "Confirm" ) );
+        ImGui::SameLine();
+        action_button( "TEXT.QUIT", _( "Cancel" ) );
+        return;
+    }
+#endif
     if( !description.empty() ) {
         if( description_monofont ) {
             cataimgui::PushMonoFont();
@@ -315,6 +362,9 @@ std::string string_input_popup_imgui::query()
         ui_manager::redraw_invalidated();
 
         std::string action = ctxt.handle_input();
+        if( has_button_action() ) {
+            action = get_button_action();
+        }
         if( handle_custom_callbacks( action ) ) {
             continue;
         }
@@ -381,6 +431,10 @@ T number_input_popup<T>::query()
     while( true ) {
         ui_manager::redraw_invalidated();
         std::string action = ctxt.handle_input();
+
+        if( has_button_action() ) {
+            action = get_button_action();
+        }
 
         if( handle_custom_callbacks( action ) ) {
             continue;

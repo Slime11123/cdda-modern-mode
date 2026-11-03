@@ -54,6 +54,9 @@
 #include "translations.h"
 #include "type_id.h"
 #include "uilist.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 #include "ui_iteminfo.h"
 #include "ui_manager.h"
 #include "uistate.h"
@@ -753,6 +756,11 @@ std::string inventory_selector_preset::get_caption( const inventory_entry &entry
 std::string inventory_selector_preset::get_denial( const inventory_entry &entry ) const
 {
     return entry.is_item() ? get_denial( entry.any_item() ) : std::string();
+}
+
+std::string inventory_selector_preset::get_cell_title( size_t cell_index ) const
+{
+    return cells[cell_index].title;
 }
 
 std::string inventory_selector_preset::get_cell_text( const inventory_entry &entry,
@@ -3361,8 +3369,91 @@ std::string inventory_selector::action_bound_to_key( char key ) const
     return ctxt.input_to_action( input_event( key, input_event_t::keyboard_char ) );
 }
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+std::vector<uilist_entry> inventory_selector::simple_pick_entries(
+    std::vector<item_location> &locations )
+{
+    locations.clear();
+    std::vector<uilist_entry> rows;
+    std::unordered_set<const item *> seen;
+    const auto matches = filter_from_string<inventory_entry>( filter,
+    [this]( const std::string & term ) {
+        return preset.get_filter( term );
+    } );
+    for( inventory_column *column : columns ) {
+        column->set_height( std::max( 24, TERMY ) );
+        column->prepare_paging( filter );
+        for( inventory_entry *entry : column->get_entries( return_item, true ) ) {
+            const item_location &location = entry->any_item();
+            if( !location || !matches( *entry ) || !seen.insert( location.get_item() ).second ) {
+                continue;
+            }
+            const std::string denial = preset.get_denial( *entry );
+            uilist_entry row( locations.size(), entry->is_selectable() && denial.empty(),
+                              MENU_AUTOASSIGN, preset.get_cell_text( *entry, 0 ) );
+            row.desc = location.describe( &u );
+            if( !denial.empty() ) {
+                row.desc += "\n" + colorize( denial, c_light_red );
+            }
+            for( size_t cell = 1; cell < preset.get_cells_count(); ++cell ) {
+                const std::string value = preset.get_cell_text( *entry, cell );
+                if( !value.empty() ) {
+                    const std::string caption = preset.get_cell_title( cell );
+                    row.desc += "\n" + ( caption.empty() ? value : caption + ": " + value );
+                }
+            }
+            rows.push_back( std::move( row ) );
+            locations.push_back( location );
+        }
+    }
+    return rows;
+}
+
+std::optional<item_location> inventory_selector::execute_simple_pick()
+{
+    std::vector<item_location> locations;
+    uilist menu;
+    menu.title = title;
+    menu.text = hint;
+    for( const std::string &stat : get_stats() ) {
+        menu.text += "\n" + stat;
+    }
+    menu.entries = simple_pick_entries( locations );
+    const inventory_entry &highlighted = get_highlighted();
+    if( highlighted.is_item() ) {
+        const auto found = std::find( locations.begin(), locations.end(), highlighted.any_item() );
+        if( found != locations.end() ) {
+            menu.selected = std::distance( locations.begin(), found );
+        }
+    }
+    const int advanced = locations.size();
+    menu.addentry( advanced, true, 0, "完整物品选择 / 高级操作" );
+    menu.entries.back().desc = "分类、复杂筛选、内容层次与额外操作";
+    menu.desc_enabled = true;
+    menu.query();
+    if( menu.ret == advanced ) {
+        return std::nullopt;
+    }
+    if( menu.ret >= 0 && menu.ret < static_cast<int>( locations.size() ) ) {
+        item_location selected = locations[menu.ret];
+        if( selected && preset.is_shown( selected ) && preset.get_denial( selected ).empty() ) {
+            highlight( selected );
+            return selected;
+        }
+    }
+    return item_location();
+}
+#endif
+
 item_location inventory_pick_selector::execute()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() && !drag_enabled && preset.get_cells_count() > 0 ) {
+        if( const auto selection = execute_simple_pick() ) {
+            return *selection;
+        }
+    }
+#endif
     shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
     debug_print_timer( tp_start );
     item_location startDragItem;

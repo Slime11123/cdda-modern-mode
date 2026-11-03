@@ -27,6 +27,10 @@
 #include "string_formatter.h"
 #include "translations.h"
 #include "ui_manager.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#include "uilist.h"
+#endif
 
 static const efftype_id effect_cold( "cold" );
 static const efftype_id effect_hot( "hot" );
@@ -602,6 +606,15 @@ void player_morale::display( int focus_eq, int pain_penalty, int sleepiness_pena
                 }
             }
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+            void append_simple( uilist &menu ) const {
+                if( !sep_line && ( !left.empty() || !right.empty() ) ) {
+                    menu.addentry( 0, true, 0, colorize( left, c_white ) );
+                    menu.entries.back().ctxt = colorize( right, color );
+                }
+            }
+#endif
+
             void draw( catacurses::window &w, const int posy ) const {
                 int width = getmaxx( w );
                 if( sep_line ) {
@@ -719,6 +732,23 @@ void player_morale::display( int focus_eq, int pain_penalty, int sleepiness_pena
         morale_line::line_color::normal
     );
     bottom_lines.emplace_back();
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() ) {
+        uilist menu;
+        menu.title = _( "Morale" );
+        menu.allow_confirm = false;
+        menu.filtering = false;
+        for( const middle_morale_line &line : middle_lines ) {
+            line.ml.append_simple( menu );
+        }
+        for( const morale_line &line : bottom_lines ) {
+            line.append_simple( menu );
+        }
+        menu.query();
+        return;
+    }
+#endif
 
     const auto calc_max_width = []( const int width, const morale_line & ml ) -> int {
         return std::max( width, ml.max_width() );

@@ -41,6 +41,7 @@ class item_stack;
 class string_input_popup;
 class tinymap;
 class ui_adaptor;
+struct uilist_entry;
 template <typename E> struct enum_traits;
 
 enum class navigation_mode : int {
@@ -257,6 +258,7 @@ class inventory_selector_preset
         std::string get_denial( const inventory_entry &entry ) const;
         /** Text in the cell */
         std::string get_cell_text( const inventory_entry &entry, size_t cell_index ) const;
+        std::string get_cell_title( size_t cell_index ) const;
         /** @return Whether the cell is a stub */
         bool is_stub_cell( const inventory_entry &entry, size_t cell_index ) const;
         /** Number of cells in the preset. */
@@ -716,6 +718,10 @@ class inventory_selector
          * The input context for navigation, already contains some actions for movement.
          */
         input_context ctxt;
+
+        // 3D presentation only; selection is returned to the original caller.
+        std::vector<uilist_entry> simple_pick_entries( std::vector<item_location> &locations );
+        std::optional<item_location> execute_simple_pick();
 
         const item_category *naturalize_category( const item_category &category,
                 const tripoint_bub_ms &pos );

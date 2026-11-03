@@ -1,0 +1,327 @@
+#include "fp3d_compositor.h"
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "cata_catch.h"
+#include "cata_imgui.h"
+#include "cached_options.h"
+#include "cata_scope_helpers.h"
+#include "color_loader.h"
+#include "fp3d_simple_ui.h"
+#include "fp3d_snapshot.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_internal.h"
+#include "imgui/imgui_impl_sdlrenderer2.h"
+#include "input_popup.h"
+#include "popup.h"
+#include "rng.h"
+#include "calendar.h"
+#include "sdl_geometry.h"
+#include "sdltiles.h"
+#include "uilist.h"
+#include "ui_manager.h"
+#include "avatar.h"
+#include "inventory_ui.h"
+#include "item.h"
+#include "map_helpers.h"
+#include "player_helpers.h"
+
+namespace
+{
+class visible_picker : public inventory_pick_selector
+{
+    public:
+        using inventory_pick_selector::inventory_pick_selector;
+        using inventory_selector::simple_pick_entries;
+};
+
+class picker_preset : public inventory_selector_preset
+{
+    public:
+        picker_preset() {
+            append_cell( []( const item_location & ) {
+                return "native value";
+            }, "native field" );
+        }
+        bool is_shown( const item_location &location ) const override {
+            return location->typeId() == itype_id( "apple" ) || location->typeId() == itype_id( "lighter" );
+        }
+        std::string get_denial( const item_location &location ) const override {
+            return location->typeId() == itype_id( "lighter" ) ? "native denial" : "";
+        }
+};
+
+class visible_query : public query_popup
+{
+    public:
+        using query_popup::create_or_get_impl;
+};
+
+ImGuiWindow *find_window( const std::string &name )
+{
+    for( ImGuiWindow *window : GImGui->Windows ) {
+        if( window->Active && std::string( window->Name ).find( name ) != std::string::npos ) {
+            return window;
+        }
+    }
+    return nullptr;
+}
+}
+
+TEST_CASE( "fp3d_simple_item_picker_preserves_native_filter_and_denials", "[fp3d][fp3d_picker]" )
+{
+    clear_map();
+    clear_avatar();
+    avatar &you = get_avatar();
+    REQUIRE( you.wear_item( item( itype_id( "backpack" ), calendar::turn ) ) );
+    const item_location apple = you.i_add( item( itype_id( "apple" ), calendar::turn ) );
+    const item_location lighter = you.i_add( item( itype_id( "lighter" ), calendar::turn ) );
+    const item_location rock = you.i_add( item( itype_id( "rock" ), calendar::turn ) );
+    REQUIRE( apple );
+    REQUIRE( lighter );
+    REQUIRE( rock );
+    const auto before_time = calendar::turn;
+    const auto before_rng = rng_get_engine();
+    const int before_moves = you.get_moves();
+    picker_preset preset;
+    visible_picker selector( you, preset );
+    selector.add_character_items( you );
+    std::vector<item_location> locations;
+    const auto rows = selector.simple_pick_entries( locations );
+    REQUIRE( rows.size() == 2 );
+    REQUIRE( locations.size() == rows.size() );
+    bool found_denial = false;
+    bool found_apple = false;
+    for( size_t i = 0; i < rows.size(); ++i ) {
+        CHECK( rows[i].retval == static_cast<int>( i ) );
+        CHECK( rows[i].desc.find( "native field: native value" ) != std::string::npos );
+        if( locations[i] == apple ) {
+            CHECK( rows[i].enabled );
+            found_apple = true;
+        } else if( locations[i] == lighter ) {
+            CHECK_FALSE( rows[i].enabled );
+            CHECK( rows[i].desc.find( "native denial" ) != std::string::npos );
+            found_denial = true;
+        } else {
+            FAIL( "unexpected item escaped native preset" );
+        }
+    }
+    CHECK( found_apple );
+    CHECK( found_denial );
+    selector.set_filter( "apple" );
+    const auto filtered = selector.simple_pick_entries( locations );
+    REQUIRE( filtered.size() == 1 );
+    CHECK( locations.front() == apple );
+    CHECK( apple );
+    CHECK( lighter );
+    CHECK( rock );
+    CHECK( calendar::turn == before_time );
+    CHECK( rng_get_engine() == before_rng );
+    CHECK( you.get_moves() == before_moves );
+}
+
+TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_simple_ui]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() {
+        SDL_QuitSubSystem( SDL_INIT_VIDEO );
+    } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Simple windows regression", SDL_WINDOWPOS_UNDEFINED,
+                           SDL_WINDOWPOS_UNDEFINED, 1280, 720, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    int driver = -1;
+    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
+        SDL_RendererInfo info{};
+        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
+            driver = i;
+        }
+    }
+    REQUIRE( driver >= 0 );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    auto previous_client = std::move( imclient );
+    imclient = std::make_unique<cataimgui::client>( renderer, window, geometry );
+    on_out_of_scope cleanup( [&]() {
+        fp3d_compositor::release();
+        ImGui_ImplSDLRenderer2_Shutdown();
+        imclient.reset();
+        ImGui::DestroyContext();
+        imclient = std::move( previous_client );
+    } );
+    color_loader<SDL_Color>().load( windowsPalette );
+    init_colors();
+    REQUIRE( ImGui::GetIO().Fonts->AddFontFromFileTTF( "data/font/unifont.ttf", 18, nullptr,
+             ImGui::GetIO().Fonts->GetGlyphRangesChineseFull() ) );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    fp3d_compositor::publish( fp3d_snapshot::scene_snapshot{} );
+    fp3d_compositor::apply_modes( true, true );
+    REQUIRE( fp3d_simple_ui::active() );
+    restore_on_out_of_scope restore_test( test_mode );
+    test_mode = false;
+    const auto before_time = calendar::turn;
+    const auto before_rng = rng_get_engine();
+    const int colors = GImGui->ColorStack.Size;
+    const int variables = GImGui->StyleVarStack.Size;
+    const ImVec4 background = ImGui::GetStyleColorVec4( ImGuiCol_WindowBg );
+    const auto frame = [&]() {
+        SDL_SetRenderDrawColor( renderer.get(), 60, 80, 100, 255 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        ui_manager::redraw();
+        CHECK( GImGui->ColorStack.Size == colors );
+        CHECK( GImGui->StyleVarStack.Size == variables );
+        CHECK( ImGui::GetStyleColorVec4( ImGuiCol_WindowBg ).w == background.w );
+    };
+    const auto save = [&]( const std::string & name ) {
+        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+            std::filesystem::create_directories( directory );
+            int width = 0;
+            int height = 0;
+            REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+            SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormat( 0, width, height, 32,
+                                     SDL_PIXELFORMAT_RGBA8888 ) );
+            REQUIRE( picture );
+            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, picture->format->format,
+                                           picture->pixels, picture->pitch ) == 0 );
+            CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                 ( name + ".png" ) ).u8string().c_str() ) == 0 );
+        }
+    };
+
+    {
+        uilist menu;
+        menu.title = "物品操作 / 简易窗口";
+        menu.text = "选择操作；无法使用的选项保留原因。长说明可以单独滚动。";
+        menu.desc_enabled = true;
+        menu.addentry_desc( 41, true, 'a', "查看详情", "保留原版效果、消耗与检查。" );
+        menu.addentry_desc( 42, false, 'b', "无法使用", "缺少必要的工具。" );
+        for( int i = 0; i < 120; ++i ) {
+            menu.addentry_desc( i + 100, true, MENU_AUTOASSIGN, "物品操作 " + std::to_string( i ),
+                                std::string( 2000, 'A' ) + "中文说明" );
+        }
+        auto ui = menu.create_or_get_ui();
+        for( const point resolution : {
+                 point( 1280, 720 ), point( 1920, 1080 ), point( 640, 480 )
+             } ) {
+            SDL_SetWindowSize( window.get(), resolution.x, resolution.y );
+            ui_manager::screen_resized();
+            frame();
+            frame();
+            ImGuiWindow *root = find_window( "物品操作 / 简易窗口##" );
+            REQUIRE( root );
+            CHECK( root->Pos.x >= 0 );
+            CHECK( root->Pos.y >= 0 );
+            CHECK( root->Pos.x + root->Size.x <= resolution.x + 1 );
+            CHECK( root->Pos.y + root->Size.y <= resolution.y + 1 );
+            ImGuiWindow *choices = find_window( "/choices" );
+            REQUIRE( choices );
+            CHECK( choices->ScrollMax.y > 0 );
+            save( "choices-" + std::to_string( resolution.y ) );
+        }
+        SDL_SetWindowSize( window.get(), 1280, 720 );
+        ui_manager::screen_resized();
+        frame();
+        frame();
+        ImGuiWindow *choices = find_window( "/choices" );
+        REQUIRE( choices );
+        const auto click_row = [&]( int row ) {
+            const float row_height = choices->CalcFontSize() + 12 + ImGui::GetStyle().ItemSpacing.y;
+            ImGui::GetIO().AddMousePosEvent( choices->DC.CursorStartPos.x + 30,
+                                             choices->DC.CursorStartPos.y + row * row_height + 8 );
+            frame();
+            ImGui::GetIO().AddMouseButtonEvent( 0, true );
+            frame();
+            ImGui::GetIO().AddMouseButtonEvent( 0, false );
+            frame();
+        };
+        click_row( 1 );
+        CHECK( menu.selected == 0 );
+        click_row( 2 );
+        CHECK( menu.selected == 2 );
+        CHECK( menu.entries[menu.selected].retval == 100 );
+        menu.entries.clear();
+        menu.filterlist();
+        frame();
+        CHECK( menu.selected == -1 );
+    }
+    {
+        number_input_popup<int> input( 40, 5, "选择数量" );
+        input.set_description( "输入转移数量；取消会保留原来的数量。", c_white );
+        input.set_label( "数量" );
+        frame();
+        frame();
+        save( "quantity" );
+        ImGuiWindow *root = find_window( "选择数量##" );
+        REQUIRE( root );
+        // Bottom row: real mouse release on the Confirm button.
+        ImGui::GetIO().AddMousePosEvent( root->DC.CursorStartPos.x + 25,
+                                         root->DC.CursorPosPrevLine.y + 8 );
+        frame();
+        ImGui::GetIO().AddMouseButtonEvent( 0, true );
+        frame();
+        ImGui::GetIO().AddMouseButtonEvent( 0, false );
+        frame();
+        CHECK( input.get_button_action() == "TEXT.CONFIRM" );
+    }
+    {
+        visible_query query;
+        query.context( "YESNO" ).message( "%s",
+                                          "是否继续？实际结果由原版确认。" ).option( "YES" ).option( "NO" ).cursor( 1 );
+        auto ui = query.create_or_get_impl();
+        frame();
+        frame();
+        save( "confirmation" );
+        REQUIRE( find_window( "QUERY_POPUP##" ) );
+    }
+    {
+        bool visible = true;
+        int draws = 0;
+        auto adapted = fp3d_simple_ui::create_panel( "适配窗口", [&]( cataimgui::window & panel ) {
+            ++draws;
+            CHECK( ImGui::GetStyleColorVec4( ImGuiCol_Text ).x == 1.f );
+            CHECK( ImGui::GetStyleColorVec4( ImGuiCol_WindowBg ).w < 1.f );
+            panel.action_button( "CONFIRM", "执行原版操作" );
+        }, [&]() {
+            return visible;
+        } );
+        frame();
+        frame();
+        CHECK( draws >= 2 );
+        visible = false;
+        const int previous_draws = draws;
+        frame();
+        CHECK( draws == previous_draws );
+        CHECK_FALSE( find_window( "适配窗口##" ) );
+        visible = true;
+        frame();
+        CHECK( draws > previous_draws );
+    }
+    for( const bool modern : {
+             false, true
+         } ) {
+        fp3d_compositor::apply_modes( true, modern );
+        CHECK( fp3d_simple_ui::active() );
+        CHECK( fp3d_simple_ui::text_color( c_black ).x == Approx( .88f ) );
+        nc_color white = c_white;
+        nc_color red = c_red;
+        CHECK( fp3d_simple_ui::text_color( c_white ).x == cataimgui::imvec4_from_color( white ).x );
+        CHECK( fp3d_simple_ui::text_color( c_red ).y == cataimgui::imvec4_from_color( red ).y );
+        fp3d_compositor::apply_modes( false, modern );
+        CHECK_FALSE( fp3d_simple_ui::active() );
+        nc_color black = c_black;
+        CHECK( fp3d_simple_ui::text_color( c_black ).x == cataimgui::imvec4_from_color( black ).x );
+        const fp3d_simple_ui::scoped_theme unchanged;
+        CHECK( GImGui->ColorStack.Size == colors );
+    }
+    CHECK( calendar::turn == before_time );
+    CHECK( rng_get_engine() == before_rng );
+}
+#endif

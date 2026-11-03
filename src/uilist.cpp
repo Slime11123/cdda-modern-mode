@@ -24,6 +24,9 @@
 #include "cata_imgui.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 
 #if defined(__ANDROID__)
 #include <jni.h>
@@ -58,9 +61,26 @@ class uilist_impl : cataimgui::window
                 parent.setup();
             }
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( simple_layout() ) {
+                const ImVec2 screen = ImGui::GetMainViewport()->Size;
+                const float width = std::min( screen.x * .92f, parent.desc_enabled ? 960.f : 640.f );
+                const float rows = std::min<size_t>( parent.entries.size(), 12 );
+                const float height = std::min( screen.y * .84f,
+                                               std::max( 240.f, rows * ( ImGui::GetTextLineHeight() * 2 + 14 ) + 150 ) );
+                return { -1, -1, width, height };
+            }
+#endif
             return parent.desired_bounds.value_or( parent.calculated_bounds );
         }
         void draw_controls() override;
+#if defined(TILES) && defined(ENABLE_FP3D)
+        bool simple_layout() const {
+            // Custom preview callbacks depend on the native table's column positions.
+            return fp3d_simple_ui::active() && !parent.callback && !parent.desired_bounds;
+        }
+        void draw_simple_list();
+#endif
 };
 
 void uilist_impl::draw_controls()
@@ -76,7 +96,21 @@ void uilist_impl::draw_controls()
     }
 #endif
     if( !parent.text.empty() ) {
-        cataimgui::draw_colored_text( parent.text );
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_layout() ) {
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float height = std::min( ImGui::GetWindowHeight() * .2f,
+                                           ImGui::CalcTextSize( remove_color_tags( parent.text ).c_str(), nullptr,
+                                               false, width ).y + 8 );
+            if( ImGui::BeginChild( "introduction", ImVec2( 0, height ) ) ) {
+                cataimgui::draw_colored_text( parent.text, c_white, width );
+            }
+            ImGui::EndChild();
+        } else
+#endif
+        {
+            cataimgui::draw_colored_text( parent.text );
+        }
         ImGui::Separator();
     }
 
@@ -102,6 +136,13 @@ void uilist_impl::draw_controls()
             ImGui::EndTabBar();
         }
     }
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( simple_layout() ) {
+        draw_simple_list();
+        return;
+    }
+#endif
 
     // An invisible table with three columns. Used to create a sidebar effect.
     // Ideally we would use a layout engine for this, but ImGui does not natively support any.
@@ -226,6 +267,103 @@ void uilist_impl::draw_controls()
         cataimgui::draw_colored_text( description );
     }
 }
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+void uilist_impl::draw_simple_list()
+{
+    const float footer_height = ImGui::GetFrameHeightWithSpacing();
+    const float height = std::max( ImGui::GetFrameHeight() * 2,
+                                   ImGui::GetContentRegionAvail().y - footer_height );
+    if( ImGui::BeginTable( "simple choices", parent.desc_enabled ? 2 : 1,
+                           ImGuiTableFlags_SizingStretchProp ) ) {
+        ImGui::TableSetupColumn( "choices", ImGuiTableColumnFlags_WidthStretch, .58f );
+        if( parent.desc_enabled ) {
+            ImGui::TableSetupColumn( "details", ImGuiTableColumnFlags_WidthStretch, .42f );
+        }
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex( 0 );
+        if( ImGui::BeginChild( "choices", ImVec2( 0, height ) ) ) {
+            const bool secondary = parent.calculated_secondary_width > 0;
+            const float row_height = ImGui::GetTextLineHeight() * ( secondary ? 2 : 1 ) + 12;
+            ImGuiListClipper clipper;
+            clipper.Begin( parent.fentries.size(), row_height + ImGui::GetStyle().ItemSpacing.y );
+            if( parent.fselected >= 0 && parent.fselected < static_cast<int>( parent.fentries.size() ) ) {
+                clipper.IncludeRangeByIndices( parent.fselected, parent.fselected + 1 );
+            }
+            while( clipper.Step() ) {
+                for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i ) {
+                    const uilist_entry &entry = parent.entries[parent.fentries[i]];
+                    const bool selected = i == parent.fselected;
+                    ImGui::PushID( i );
+                    const ImVec2 start = ImGui::GetCursorScreenPos();
+                    const float width = ImGui::GetContentRegionAvail().x;
+                    const auto flags = entry.enabled || parent.allow_disabled ?
+                                       ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled;
+                    if( ImGui::Selectable( "##choice", selected, flags, ImVec2( 0, row_height ) ) ) {
+                        parent.fselected = i;
+                        parent.selected = parent.previewing = parent.fentries[i];
+                        parent.clicked = parent.allow_confirm;
+                        parent.need_to_scroll = true;
+                    }
+                    if( selected && parent.need_to_scroll ) {
+                        ImGui::SetScrollHereY();
+                        parent.need_to_scroll = false;
+                    }
+                    if( ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) ) {
+                        parent.previewing = parent.fentries[i];
+                        ImGui::SetTooltip( "%s", remove_color_tags( entry.txt + " " + entry.ctxt ).c_str() );
+                    }
+                    const ImVec2 next = ImGui::GetCursorScreenPos();
+                    ImGui::PushClipRect( start, ImVec2( start.x + width, start.y + row_height ), true );
+                    ImGui::SetCursorScreenPos( ImVec2( start.x + 6, start.y + 6 ) );
+                    if( entry.hotkey && *entry.hotkey != input_event() ) {
+                        fp3d_simple_ui::accent_text( entry.hotkey->short_description() );
+                        ImGui::SameLine();
+                    }
+                    const nc_color color = !entry.enabled ? c_light_gray :
+                                           entry.text_color == parent.text_color ? c_white : entry.text_color;
+                    cataimgui::draw_colored_text( entry.txt, color );
+                    if( secondary ) {
+                        ImGui::SetCursorScreenPos( ImVec2( start.x + 6,
+                                                           start.y + 6 + ImGui::GetTextLineHeight() ) );
+                        cataimgui::draw_colored_text( entry.ctxt, c_light_gray );
+                    }
+                    ImGui::PopClipRect();
+                    ImGui::SetCursorScreenPos( next );
+                    ImGui::PopID();
+                }
+            }
+            if( parent.fentries.empty() ) {
+                ImGui::TextUnformatted( _( "No matches." ) );
+            }
+        }
+        ImGui::EndChild();
+        if( parent.desc_enabled ) {
+            ImGui::TableSetColumnIndex( 1 );
+            if( ImGui::BeginChild( "details", ImVec2( 0, height ) ) ) {
+                fp3d_simple_ui::accent_text( _( "Description" ) );
+                ImGui::Separator();
+                if( !parent.footer_text.empty() ) {
+                    cataimgui::draw_colored_text( parent.footer_text, c_white, ImGui::GetContentRegionAvail().x );
+                } else if( parent.previewing >= 0 &&
+                           parent.previewing < static_cast<int>( parent.entries.size() ) ) {
+                    cataimgui::draw_colored_text( parent.entries[parent.previewing].desc, c_white,
+                                                  ImGui::GetContentRegionAvail().x );
+                }
+            }
+            ImGui::EndChild();
+        }
+        ImGui::EndTable();
+    }
+    if( parent.filtering ) {
+        action_button( "UILIST.FILTER", _( "Search" ) );
+        ImGui::SameLine();
+    }
+    if( parent.allow_cancel ) {
+        action_button( "UILIST.QUIT", _( "Back" ) );
+    }
+}
+#endif
 
 catacurses::window new_centered_win( int nlines, int ncols )
 {
@@ -963,6 +1101,14 @@ shared_ptr_fast<uilist_impl> uilist::query( bool loop, int timeout,
         ui_manager::redraw();
 
         ret_act = ctxt.handle_input( timeout );
+        if( ui->has_button_action() ) {
+            ret_act = ui->get_button_action();
+        }
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( fp3d_simple_ui::active() && allow_cancel && !ui->get_is_open() ) {
+            ret_act = "UILIST.QUIT";
+        }
+#endif
         const input_event event = ctxt.get_raw_input();
         ret_evt = event;
         const auto iter = keymap.find( ret_evt );

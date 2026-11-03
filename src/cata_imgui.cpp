@@ -16,6 +16,9 @@
 #include "system_locale.h"
 #include "ui_manager.h"
 #include "input_context.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 
 static ImGuiKey cata_key_to_imgui( int cata_key );
 
@@ -689,7 +692,11 @@ static void PushOrPopColor( std::string_view seg, int minimumColorStackSize )
     color_tag_parse_result tag = get_color_from_tag( seg, report_color_error::yes );
     switch( tag.type ) {
         case color_tag_parse_result::open_color_tag:
+#if defined(TILES) && defined(ENABLE_FP3D)
+            ImGui::PushStyleColor( ImGuiCol_Text, fp3d_simple_ui::text_color( tag.color ) );
+#else
             ImGui::PushStyleColor( ImGuiCol_Text, tag.color );
+#endif
             break;
         case color_tag_parse_result::close_color_tag:
             if( GImGui->ColorStack.Size > minimumColorStackSize ) {
@@ -747,7 +754,11 @@ void cataimgui::draw_colored_text( const std::string &original_text, const nc_co
                                    float wrap_width, bool *is_selected, bool *is_focused, bool *is_hovered )
 {
     nc_color color_cpy = color;
+#if defined(TILES) && defined(ENABLE_FP3D)
+    ImGui::PushStyleColor( ImGuiCol_Text, fp3d_simple_ui::text_color( color_cpy ) );
+#else
     ImGui::PushStyleColor( ImGuiCol_Text, color_cpy );
+#endif
     draw_colored_text( original_text, wrap_width, is_selected, is_focused, is_hovered );
     ImGui::PopStyleColor();
 }
@@ -755,9 +766,8 @@ void cataimgui::draw_colored_text( const std::string &original_text, const nc_co
 void cataimgui::draw_colored_text( const std::string &original_text, nc_color &color,
                                    float wrap_width, bool *is_selected, bool *is_focused, bool *is_hovered )
 {
-    ImGui::PushStyleColor( ImGuiCol_Text, color );
-    draw_colored_text( original_text, wrap_width, is_selected, is_focused, is_hovered );
-    ImGui::PopStyleColor();
+    draw_colored_text( original_text, static_cast<const nc_color &>( color ), wrap_width,
+                       is_selected, is_focused, is_hovered );
 }
 
 void cataimgui::draw_colored_text( const std::string &original_text,
@@ -947,6 +957,9 @@ void cataimgui::window::draw()
     if( !is_open ) {
         return;
     }
+#if defined(TILES) && defined(ENABLE_FP3D)
+    const fp3d_simple_ui::scoped_theme survival_theme;
+#endif
     bool handled_resize = false;
     if( is_bounds_changed() ) {
         cached_bounds = get_bounds();
