@@ -3956,7 +3956,7 @@ shared_ptr_fast<ui_adaptor> game::create_or_get_main_ui_adaptor()
             int sidebar_left = panel_manager::get_manager().get_width_left();
             int sidebar_right = panel_manager::get_manager().get_width_right();
 #if defined(ENABLE_FP3D)
-            if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+            if( fp3d_compositor::uses_hud() ) {
                 sidebar_left = 0;
                 sidebar_right = 0;
             }
@@ -4211,6 +4211,9 @@ void game::draw( ui_adaptor &ui )
     if( fp3d_compositor::active() && ter_view_p.z() == u.posz() ) {
         fp3d_snapshot::prepare_view( u, here );
         fp3d_compositor::publish( fp3d_snapshot::capture( u, here ) );
+    } else if( fp3d_compositor::uses_hud() &&
+               fp3d_compositor::controls() != fp3d_input::mode::first_person_3d ) {
+        fp3d_compositor::publish_hud( fp3d_hud::capture( u ) );
     }
 #endif
     draw_ter();
@@ -4242,7 +4245,7 @@ void game::draw( ui_adaptor &ui )
 void game::draw_panels( bool force_draw )
 {
 #if defined(ENABLE_FP3D)
-    if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+    if( fp3d_compositor::uses_hud() ) {
         return;
     }
 #endif
@@ -12061,6 +12064,9 @@ void game::on_move_effects()
 
 void game::on_options_changed()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    mark_main_ui_adaptor_resize();
+#endif
 #if defined(TILES)
     tilecontext->on_options_changed();
 #endif

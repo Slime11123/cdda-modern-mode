@@ -31,6 +31,7 @@
 #include "ui_manager.h"
 #include "input.h"
 #include "output.h"
+#include "options.h"
 
 namespace fp3d_compositor
 {
@@ -64,6 +65,7 @@ Uint32 last_report = 0;
 float yaw = 0.0f;
 float pitch = 0.0f;
 std::optional<fp3d_snapshot::scene_snapshot> latest_scene;
+std::optional<fp3d_hud::data> latest_2d_hud;
 unsigned published_generation = 0;
 unsigned prepared_generation = 0;
 unsigned prepared_material_revision = 0;
@@ -369,7 +371,7 @@ bool process_event( const SDL_Event &event )
 
 bool menu_text_input()
 {
-    return panel_input && turn_based() && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
+    return panel_input && survival_menu_available() && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
 }
 
 bool captures_game_input()
@@ -389,6 +391,26 @@ bool modern_2d_input()
 {
     return controls() == fp3d_input::mode::modern_2d && world_input && window &&
            SDL_GetKeyboardFocus() == window;
+}
+
+bool survival_menu_available()
+{
+    return requested() && available && ( modern_2d || turn_based() );
+}
+
+bool uses_hud()
+{
+    if( !requested() ) {
+        return false;
+    }
+    const auto style = get_option<std::string>( "FP3D_UI_STYLE" );
+    return style == "hud" || ( style == "auto" &&
+                              controls() == fp3d_input::mode::first_person_3d );
+}
+
+void publish_hud( fp3d_hud::data hud )
+{
+    latest_2d_hud = std::move( hud );
 }
 
 bool covers_map( const tripoint_abs_ms &center )
@@ -425,26 +447,31 @@ void set_blueprint( std::optional<fp3d_scene::blueprint> preview )
 
 std::vector<std::string> hud_lines()
 {
-    if( !turn_based() || !draw_permitted ) {
+    if( !uses_hud() || !draw_permitted ||
+        ( enabled ? !latest_scene.has_value() : !latest_2d_hud.has_value() ) ) {
         return {};
     }
-    if( construction_preview ) {
+    if( enabled && construction_preview ) {
         return { construction_preview->name, construction_preview->valid ?
                  "可建造：E / 左键确认；Esc 取消" : "此格不可建造；转动视角选择相邻格；Esc 取消" };
     }
-    std::vector<std::string> lines{ latest_scene->hud.status };
-    if( fp3d_hud::navigation_enabled() && latest_scene->hud.navigation_heading ) {
-        const float delta = std::remainder( *latest_scene->hud.navigation_heading - yaw, 360.0f );
+    const auto &hud = enabled ? latest_scene->hud : *latest_2d_hud;
+    std::vector<std::string> lines{ hud.status };
+    if( fp3d_hud::navigation_enabled() && hud.navigation_heading ) {
+        const float delta = std::remainder( *hud.navigation_heading - heading(), 360.0f );
         lines.push_back( "目的地 " + std::string( std::abs( delta ) < 15 ? "前方" : delta > 0 ?
                          "右转" : "左转" ) +
-                         " / 大地图距离 " + std::to_string( latest_scene->hud.navigation_distance ) +
-                         " / 楼层差 " + std::to_string( latest_scene->hud.navigation_z ) );
+                         " / 大地图距离 " + std::to_string( hud.navigation_distance ) +
+                         " / 楼层差 " + std::to_string( hud.navigation_z ) );
     }
-    const auto &slots = latest_scene->hud.slots;
+    const auto &slots = hud.slots;
     lines.insert( lines.end(), slots.begin(), slots.end() );
     if( fp3d_input::world_gestures().expanded_hud() ) {
-        const auto &expanded = latest_scene->hud.expanded;
+        const auto &expanded = hud.expanded;
         lines.insert( lines.end(), expanded.begin(), expanded.end() );
+    }
+    if( !enabled ) {
+        return lines;
     }
     const auto target = interaction_target();
     const bool reachable = target && target->position.z() == latest_scene->origin.z() &&
@@ -456,7 +483,8 @@ std::vector<std::string> hud_lines()
 
 fp3d_hud::data hud_data()
 {
-    return latest_scene ? latest_scene->hud : fp3d_hud::data{};
+    return enabled ? ( latest_scene ? latest_scene->hud : fp3d_hud::data{} ) :
+           latest_2d_hud.value_or( fp3d_hud::data{} );
 }
 
 bool interaction_available()
@@ -515,7 +543,8 @@ bool draw_menu_background( int x, int y, int width, int height )
 
 SDL_Texture_Ptr copy_view()
 {
-    if( !available || !framebuffer || !latest_scene || SDL_GL_GetCurrentContext() != context ) {
+    if( modern_2d ) { return copy_2d_display_buffer(); }
+    if( !enabled || !available || !framebuffer || !latest_scene || SDL_GL_GetCurrentContext() != context ) {
         return {};
     }
     SDL_RenderFlush( renderer );
@@ -559,13 +588,13 @@ std::optional<fp3d_targeting::target> interaction_target()
 
 float heading()
 {
-    return yaw;
+    return enabled ? yaw : 0.0f;
 }
 
 void set_viewport( int x, int y, int width, int height, int display_width, int display_height )
 {
     if( display_width > 0 && display_height > 0 ) {
-        const int effective_width = enabled ? display_width - x : width;
+        const int effective_width = enabled && uses_hud() ? display_width - x : width;
         viewport_x = static_cast<float>( x ) / display_width;
         viewport_y = static_cast<float>( y ) / display_height;
         viewport_width = static_cast<float>( effective_width ) / display_width;
@@ -599,6 +628,7 @@ void set_input_context( const std::string &category )
         fp3d_entry::reset();
         fp3d_inventory::clear_slots();
         latest_scene.reset();
+        latest_2d_hud.reset();
         camera.reset();
         accepted_walk.reset();
     }
@@ -663,7 +693,7 @@ bool tick()
     sync_mouse();
     if( requested() && window ) {
         std::string title = enabled ? "CDDA 0.I-1 - 3D模式 (F5: 2D经典 | F6: 按键设置)" :
-                            modern_2d ? "CDDA 0.I-1 - 2D现代模式 / WASD (F5: 3D | F6: 按键设置)" :
+                            modern_2d ? "CDDA 0.I-1 - 2D现代模式 / WASD (Tab: 生存菜单 | F5: 3D | F6: 按键设置)" :
                             "CDDA 0.I-1 - 2D经典模式 (F5: 2D现代 | F6: 按键设置)";
         if( enabled && latest_scene ) {
             const auto &p = latest_scene->origin;
@@ -909,6 +939,7 @@ void release()
     draw_permitted = true;
     latest_scene.reset();
     construction_preview.reset();
+    latest_2d_hud.reset();
     camera.reset();
     held_swing.reset();
     swing_pending = false;

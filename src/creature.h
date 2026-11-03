@@ -398,6 +398,8 @@ class Creature : public viewer
          */
         /*@{*/
         bool sees( const map &here, const Creature &critter ) const override;
+        // Presentation-only option; normal perception keeps its lighting checks.
+        bool sees( const map &here, const Creature &critter, bool ignore_light ) const;
         bool sees( const map &here, const tripoint_bub_ms &t, bool is_avatar = false,
                    int range_mod = 0 ) const override;
         /*@}*/

@@ -8,7 +8,7 @@
 
 namespace fp3d_furniture
 {
-enum class kind { table, chair, bed, bed_frame, crate, open_crate, cupboard, cabinet, rack };
+enum class kind { table, chair, bed, bed_frame, crate, open_crate, cupboard, cabinet, rack, locker };
 struct model {
     std::string id;
     kind shape;
@@ -20,6 +20,8 @@ struct part {
 std::optional<model> describe( const std::string &id );
 const std::vector<part> &parts( kind shape );
 float item_surface( kind shape );
+// Only already-captured accessible contents receive the storage display pass.
+bool shows_contents( kind shape );
 }
 #endif
 #endif

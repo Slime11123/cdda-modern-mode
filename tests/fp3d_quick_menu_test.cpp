@@ -72,6 +72,7 @@ TEST_CASE( "fp3d_wheel_key_is_independent_rebindable_and_registered", "[fp3d][wh
     const input_event v( 'v', input_event_t::keyboard_code );
     const auto original_q = world.input_to_action( q );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d, q, 0 ) == "FP3D_ACTIONS" );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, q, 0 ) == "FP3D_ACTIONS" );
     CHECK( world.is_registered_action( "FP3D_ACTIONS" ) );
     CHECK( fp3d_input::resolve( fp3d_input::mode::original_2d, q, 0 ).empty() );
     const auto preferences = PATH_INFO::user_keybindings().generic_u8string();
@@ -93,6 +94,8 @@ TEST_CASE( "fp3d_wheel_key_is_independent_rebindable_and_registered", "[fp3d][wh
     inp_mngr.init();
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d, q, 0 ).empty() );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d, v, 0 ) == "FP3D_ACTIONS" );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, q, 0 ) == "FP3D_ACTIONS" );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, v, 0 ).empty() );
     CHECK( world.input_to_action( q ) == original_q );
 }
 #endif

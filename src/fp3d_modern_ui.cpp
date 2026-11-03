@@ -48,6 +48,7 @@ class panel : public cataimgui::window
         map &here;
         fp3d_inventory::model view;
         std::optional<tripoint_abs_ms> pickup_target;
+        std::optional<tripoint_abs_ms> crafting_position;
         std::map<std::string, SDL_Texture_Ptr> icons;
         SDL_Texture_Ptr background;
         std::set<size_t> selected;
@@ -1219,6 +1220,9 @@ class panel : public cataimgui::window
             compatible( ACTION_MISSIONS, "完整任务管理（原版兼容）" );
         }
         void crafting() {
+            if( crafting_position ) {
+                ImGui::TextWrapped( "简易制作 · %s", here.name( here.get_bub( *crafting_position ) ).c_str() );
+            }
             if( !recipes_loaded ) {
                 const recipe_id previous = selected_recipe < recipes.size() ? recipes[selected_recipe].id : recipe_id();
                 recipes = fp3d_crafting::capture( you );
@@ -1388,16 +1392,19 @@ class panel : public cataimgui::window
                     request.kind = fp3d_inventory::operation_kind::craft;
                     request.crafting_recipe = entry.id;
                     request.crafting_batch = crafting_batch;
+                    request.crafting_position = crafting_position;
                     result = std::move( request );
                 }
-                ImGui::TextWrapped( "材料替代与特殊确认仍由原版处理；选择其他制作人请用下方完整菜单。" );
-                if( ImGui::Button( "在原版确认制作" ) ) {
-                    fp3d_inventory::operation request;
-                    request.kind = fp3d_inventory::operation_kind::native;
-                    request.native_action = ACTION_CRAFT;
-                    request.crafting_recipe = entry.id;
-                    result = std::move( request );
-                    is_open = false;
+                if( !crafting_position ) {
+                    ImGui::TextWrapped( "材料替代与特殊确认仍由原版处理；选择其他制作人请用下方完整菜单。" );
+                    if( ImGui::Button( "在原版确认制作" ) ) {
+                        fp3d_inventory::operation request;
+                        request.kind = fp3d_inventory::operation_kind::native;
+                        request.native_action = ACTION_CRAFT;
+                        request.crafting_recipe = entry.id;
+                        result = std::move( request );
+                        is_open = false;
+                    }
                 }
                 ImGui::Separator();
                 ImGui::TextWrapped( "%s", recipe_details.c_str() );
@@ -1405,7 +1412,9 @@ class panel : public cataimgui::window
                 ImGui::TextWrapped( recipes.empty() ? "当前没有可用配方。" : "没有匹配的配方。" );
             }
             ImGui::EndChild();
-            compatible( ACTION_CRAFT, "完整制作菜单（原版兼容）" );
+            if( !crafting_position ) {
+                compatible( ACTION_CRAFT, "完整制作菜单（原版兼容）" );
+            }
         }
         void health() {
             const float height = ImGui::GetContentRegionAvail().y - 85 * scale;
@@ -1656,7 +1665,10 @@ class panel : public cataimgui::window
             if( pickup_target ) {
                 ImGui::TextUnformatted( "拾取物品" );
             }
-            for( int i = 0; !pickup_target && i < 9; ++i ) {
+            if( crafting_position ) {
+                ImGui::TextUnformatted( "简易制作" );
+            }
+            for( int i = 0; !pickup_target && !crafting_position && i < 9; ++i ) {
                 if( i ) {
                     ImGui::SameLine();
                 }
@@ -1672,7 +1684,7 @@ class panel : public cataimgui::window
             ImGui::Separator();
             ImGui::SetNextItemWidth( 125 * scale );
             ImGui::Combo( "界面缩放", &scale_choice, "100%\0" "125%\0" "150%\0" );
-            if( pickup_target || remembered_page == 0 ) {
+            if( pickup_target || ( !crafting_position && remembered_page == 0 ) ) {
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth( 125 * scale );
                 ImGui::Combo( "左右排序", &sort_order, "名称\0重量\0体积\0" );
@@ -1691,6 +1703,8 @@ class panel : public cataimgui::window
                 ImGui::TextUnformatted( "目标容器 / 地面物品" );
                 groups( true );
                 ImGui::EndChild();
+            } else if( crafting_position ) {
+                crafting();
             } else if( remembered_page == 0 ) {
                 const float available_height = ImGui::GetContentRegionAvail().y - 70 * scale;
                 ImGui::BeginChild( "分类", ImVec2( 58 * scale, available_height ), true );
@@ -1812,7 +1826,9 @@ class panel : public cataimgui::window
                 ImGui::EndPopup();
             }
             ImGui::PushTextWrapPos( 0 );
-            ImGui::TextDisabled( "%s", pickup_target || remembered_page == 0 ?
+            ImGui::TextDisabled( "%s", crafting_position ?
+                                 "选择配方，查看材料与工具，设置批量后点击制作；Esc 或 Tab 返回。" :
+                                 pickup_target || remembered_page == 0 ?
                                  "左键选择 / 双击详情 / Shift 多选 / 右键操作 / 拖拽 / Esc 或 Tab 返回；转移按原版耗时处理，完成后刷新。" :
                                  "滚动查看 / Esc 或 Tab 返回；查看不消耗回合，实际操作按原版规则结算。" );
             ImGui::PopTextWrapPos();
@@ -1820,11 +1836,14 @@ class panel : public cataimgui::window
     public:
         void draw() override {
             ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-            if( background ) {
+            if( background && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
                 ImGui::GetBackgroundDrawList()->AddImage( ( ImTextureID )( intptr_t )background.get(),
                         ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize, ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
             }
-            ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f, .72f ) );
+            // The native 2D buffer is retained between UI frames. An opaque panel
+            // prevents old page contents accumulating under translucent children.
+            const float opacity = fp3d_compositor::controls() == fp3d_input::mode::modern_2d ? 1.0f : .72f;
+            ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f, opacity ) );
             ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .045f, .043f, .038f, .48f ) );
             ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .12f, .115f, .10f, .74f ) );
             ImGui::PushStyleColor( ImGuiCol_Header, ImVec4( .43f, .31f, .15f, .70f ) );
@@ -1941,6 +1960,9 @@ class panel : public cataimgui::window
             }
         }
         bool waiting() const { return activity_pending; }
+        void set_crafting_position( std::optional<tripoint_abs_ms> position ) {
+            crafting_position = position;
+        }
         void resume() {
             activity_pending = false;
             direct_action_completed = false;
@@ -1955,6 +1977,8 @@ class panel : public cataimgui::window
             context.register_action( "SELECT" );
             context.register_action( "MOUSE_MOVE" );
             context.register_action( "HELP_KEYBINDINGS" );
+            const auto profile = fp3d_compositor::controls() == fp3d_input::mode::modern_2d ?
+                                 fp3d_input::modern_2d_context() : fp3d_input::context();
             while( is_open ) {
                 ui_manager::redraw();
                 if( pending_recipe_favorite ) {
@@ -2033,7 +2057,7 @@ class panel : public cataimgui::window
                 }
                 const auto &action = context.handle_input( 16 );
                 if( action == "QUIT" || ( !ImGui::GetIO().WantTextInput &&
-                                          fp3d_input::context().input_to_action( context.get_raw_input() ) == "FP3D_PANEL" ) ) {
+                                          profile.input_to_action( context.get_raw_input() ) == "FP3D_PANEL" ) ) {
                     if( details_open ) {
                         details_open = false;
                     } else if( !ImGui::IsPopupOpen( nullptr, ImGuiPopupFlags_AnyPopupId ) ) {
@@ -2071,15 +2095,19 @@ bool take_resume()
     return resume;
 }
 std::unique_ptr<cataimgui::window> create( avatar &you, map &here, int scale_percent, bool nearby,
-        int initial_page, item_location initial_use, std::optional<tripoint_abs_ms> pickup_target )
+        int initial_page, item_location initial_use, std::optional<tripoint_abs_ms> pickup_target,
+        std::optional<tripoint_abs_ms> crafting_position )
 {
     if( scale_percent > 0 ) {
         scale_choice = std::clamp( ( scale_percent - 100 ) / 25, 0, 2 );
     }
-    return std::make_unique<panel>( you, here, nearby, initial_page, initial_use, pickup_target );
+    auto menu = std::make_unique<panel>( you, here, nearby, initial_page, initial_use, pickup_target );
+    menu->set_crafting_position( crafting_position );
+    return menu;
 }
 std::optional<fp3d_inventory::operation> show( avatar &you, map &here, bool nearby,
-        int initial_page, std::optional<tripoint_abs_ms> pickup_target )
+        int initial_page, std::optional<tripoint_abs_ms> pickup_target,
+        std::optional<tripoint_abs_ms> crafting_position )
 {
     fp3d_input::world_gestures().cancel();
     fp3d_compositor::set_input_context( "FP3D_PANEL" );
@@ -2088,6 +2116,9 @@ std::optional<fp3d_inventory::operation> show( avatar &you, map &here, bool near
     imgui_io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     auto menu = retained_panel ? std::move( retained_panel ) : std::make_unique<panel>( you, here, nearby, initial_page,
                 item_location(), pickup_target );
+    if( crafting_position ) {
+        menu->set_crafting_position( crafting_position );
+    }
     menu->resume();
     auto result = menu->run();
     const bool waiting = menu->waiting();

@@ -12,14 +12,16 @@ namespace fp3d_modern_ui
 {
 std::unique_ptr<cataimgui::window> create( avatar &you, map &here, int scale_percent = 0,
         bool nearby = false, int initial_page = -1, item_location initial_use = {},
-        std::optional<tripoint_abs_ms> pickup_target = std::nullopt );
+        std::optional<tripoint_abs_ms> pickup_target = std::nullopt,
+        std::optional<tripoint_abs_ms> crafting_position = std::nullopt );
 int scale_percent();
 bool transfer_pending();
 bool take_resume();
 void clear_resume();
 // Returns an owned request. The drawing callback never executes gameplay.
 std::optional<fp3d_inventory::operation> show( avatar &you, map &here, bool nearby = false,
-        int initial_page = -1, std::optional<tripoint_abs_ms> pickup_target = std::nullopt );
+        int initial_page = -1, std::optional<tripoint_abs_ms> pickup_target = std::nullopt,
+        std::optional<tripoint_abs_ms> crafting_position = std::nullopt );
 }
 #endif
 #endif

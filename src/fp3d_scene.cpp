@@ -93,13 +93,13 @@ void box( float x, float z, float width, float depth, float bottom, float top,
         }
     };
     glNormal3f( 0, 0, -1 );
-    side( l, n, r, n );
+    side( faces ? r : l, n, faces ? l : r, n );
     glNormal3f( 0, 0, 1 );
-    side( r, s, l, s, true );
+    side( faces ? l : r, s, faces ? r : l, s, true );
     glNormal3f( -1, 0, 0 );
-    side( l, s, l, n );
+    side( l, faces ? n : s, l, faces ? s : n );
     glNormal3f( 1, 0, 0 );
-    side( r, n, r, s );
+    side( r, faces ? s : n, r, faces ? n : s );
     glEnd();
 }
 
@@ -166,10 +166,26 @@ void window_face( const std::optional<fp3d_materials::uv_rect> &material )
     glEnd();
 }
 
+void furniture_geometry( const fp3d_furniture::model &model, float x, float z )
+{
+    unsigned part_index = 0;
+    for( const auto &part : fp3d_furniture::parts( model.shape ) ) {
+        const auto surfaces = fp3d_materials::lookup_furniture( model.id, part_index++ );
+        box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top,
+             surfaces.side, false, &surfaces );
+        glPushMatrix();
+        glTranslatef( x + part.x, part.bottom, z + part.z );
+        glScalef( part.width, 1, part.depth );
+        glRotatef( 180, 1, 0, 0 );
+        floor( 0, 0, 0, surfaces.side );
+        glPopMatrix();
+    }
+}
+
 void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const fp3d_snapshot::cell *below, const fp3d_snapshot::cell *above,
                 int ew, int ns, const std::string &wall_surface,
-                const std::array<float, 4> *tint = nullptr )
+                const std::array<float, 4> *tint = nullptr, bool defer_storage = false )
 {
     const auto color = [&]( float r, float g, float b ) {
         if( tint ) {
@@ -256,20 +272,10 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             glEnable( GL_LIGHTING );
         }
     }
-    if( tile.furniture ) {
+    if( tile.furniture && ( !defer_storage ||
+                           !fp3d_furniture::shows_contents( tile.furniture->shape ) ) ) {
         color( brightness, brightness, brightness );
-        unsigned part_index = 0;
-        for( const auto &part : fp3d_furniture::parts( tile.furniture->shape ) ) {
-            const auto surfaces = fp3d_materials::lookup_furniture( tile.furniture->id, part_index++ );
-            box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top,
-                 surfaces.side, false, &surfaces );
-            glPushMatrix();
-            glTranslatef( x + part.x, part.bottom, z + part.z );
-            glScalef( part.width, 1, part.depth );
-            glRotatef( 180, 1, 0, 0 );
-            floor( 0, 0, 0, surfaces.side );
-            glPopMatrix();
-        }
+        furniture_geometry( *tile.furniture, x, z );
     }
     if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
         color( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
@@ -344,6 +350,8 @@ landscape_chunks;
 unsigned indexed_generation = 0;
 std::unordered_map<tripoint_abs_ms, chunk_mesh> landscape_meshes;
 std::unordered_map<tripoint_abs_ms, chunk_mesh> meshes;
+std::vector<const fp3d_snapshot::cell *> storage_cells;
+std::unordered_map<std::string, GLuint> storage_meshes;
 unsigned mesh_material_revision = 0;
 draw_statistics last_statistics;
 
@@ -362,6 +370,11 @@ void release()
         }
     }
     meshes.clear();
+    for( const auto &entry : storage_meshes ) {
+        glDeleteLists( entry.second, 1 );
+    }
+    storage_meshes.clear();
+    storage_cells.clear();
     for( const auto &entry : landscape_meshes ) {
         if( entry.second.list ) {
             glDeleteLists( entry.second.list, 1 );
@@ -418,11 +431,15 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     last_statistics.indexed_cells = 0;
     if( new_scene ) {
         cells.clear();
+        storage_cells.clear();
         chunks.clear();
         landscape_chunks.clear();
         cells.reserve( scene.cells.size() );
         for( const auto &tile : scene.cells ) {
             cells.emplace( tile.position, &tile );
+            if( tile.furniture && fp3d_furniture::shows_contents( tile.furniture->shape ) ) {
+                storage_cells.push_back( &tile );
+            }
         }
         last_statistics.indexed_cells = scene.cells.size();
         constexpr int landscape_chunk_size = 48;
@@ -649,7 +666,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                     draw_cell( *tile, local.x(), local.y(),
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, -1 ) ),
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, 1 ) ), ew, ns,
-                               tile->kind == fp3d_snapshot::terrain_kind::window ? window_wall( *tile ) : "" );
+                               tile->kind == fp3d_snapshot::terrain_kind::window ? window_wall( *tile ) : "",
+                               nullptr, true );
                 }
                 if( mesh.list ) {
                     glEndList();
@@ -668,20 +686,75 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         }
         glPopMatrix();
     }
-    // Upright cutout billboards retain normal depth occlusion. Alpha testing
-    // avoids ordering transparent rectangles or exposing actors through walls.
+    // Draw storage color against terrain depth, then already-authorized item
+    // sprites, then storage depth. Only the storage model is see-through to its
+    // contents; terrain and the later actor pass keep normal depth occlusion.
+    std::vector<const fp3d_snapshot::cell *> visible_storage;
+    for( const auto *tile : storage_cells ) {
+        const auto offset = tile->position - scene.origin;
+        if( view.contains( offset.x() - camera_offset.x,
+                           offset.z() * fp3d_camera::floor_height + .9f - fp3d_camera::eye_height,
+                           offset.y() - camera_offset.y, 1.4f ) ) {
+            visible_storage.push_back( tile );
+        }
+    }
+    const auto storage_distance = [&]( const fp3d_snapshot::cell *tile ) {
+        const auto offset = tile->position - scene.origin;
+        const float x = offset.x() - camera_offset.x;
+        const float z = offset.y() - camera_offset.y;
+        const float y = offset.z() * fp3d_camera::floor_height + .9f - fp3d_camera::eye_height;
+        return x * x + y * y + z * z;
+    };
+    std::sort( visible_storage.begin(), visible_storage.end(), [&]( const auto *a, const auto *b ) {
+        return storage_distance( a ) > storage_distance( b );
+    } );
+    const auto draw_storage = [&]( const fp3d_snapshot::cell &tile ) {
+        const auto &model = *tile.furniture;
+        const auto key = model.id + ":" + std::to_string( static_cast<unsigned>( model.shape ) );
+        auto it = storage_meshes.find( key );
+        if( it == storage_meshes.end() ) {
+            const GLuint list = glGenLists( 1 );
+            if( list ) {
+                glNewList( list, GL_COMPILE );
+                furniture_geometry( model, 0, 0 );
+                glEndList();
+                it = storage_meshes.emplace( key, list ).first;
+            }
+        }
+        const float brightness = tile.known == fp3d_snapshot::knowledge::remembered ? .23f : .9f;
+        glColor3f( brightness, brightness, brightness );
+        const auto offset = tile.position - scene.origin;
+        glPushMatrix();
+        glTranslatef( offset.x(), offset.z() * fp3d_camera::floor_height, offset.y() );
+        if( it != storage_meshes.end() ) {
+            glCallList( it->second );
+        } else {
+            furniture_geometry( model, 0, 0 );
+        }
+        glPopMatrix();
+    };
+    glDepthMask( GL_FALSE );
+    glEnable( GL_CULL_FACE );
+    glFrontFace( GL_CCW );
+    glCullFace( GL_BACK );
+    glEnable( GL_LIGHTING );
+    for( const auto *tile : visible_storage ) {
+        draw_storage( *tile );
+    }
+    glDepthMask( GL_TRUE );
+    glDisable( GL_CULL_FACE );
     glDisable( GL_LIGHTING );
     glEnable( GL_ALPHA_TEST );
     glAlphaFunc( GL_GREATER, .5f );
     const float right_x = view.right_x();
     const float right_z = view.right_z();
-    for( const auto &image : scene.sprites ) {
+    const auto draw_sprite = [&]( const fp3d_snapshot::sprite &image ) {
         const tripoint_rel_ms position = image.position - scene.origin;
         if( !view.contains( position.x() - camera_offset.x,
                             position.z() * fp3d_camera::floor_height + image.elevation +
                             image.height / 2 - fp3d_camera::eye_height,
                             position.y() - camera_offset.y, image.height * .74f ) ) {
-            continue;
+            return;
         }
         const auto material = fp3d_materials::lookup( fp3d_materials::sprite_key( image ) );
         if( material ) {
@@ -716,6 +789,30 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         glVertex3f( x - dx, image.height, z - dz );
         glEnd();
         glPopMatrix();
+    };
+    const auto storage_item = [&]( const fp3d_snapshot::sprite &image ) {
+        const auto *owner = known_cell( image.position );
+        return image.kind == fp3d_snapshot::sprite_kind::item && owner && owner->furniture &&
+               owner->known == fp3d_snapshot::knowledge::visible && !owner->exterior_only &&
+               fp3d_furniture::shows_contents( owner->furniture->shape );
+    };
+    for( const auto &image : scene.sprites ) {
+        if( storage_item( image ) ) {
+            draw_sprite( image );
+        }
+    }
+    glDisable( GL_ALPHA_TEST );
+    glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+    for( const auto *tile : visible_storage ) {
+        draw_storage( *tile );
+    }
+    glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+    glEnable( GL_ALPHA_TEST );
+    // Actors and ordinary ground items still cannot be seen through cabinets.
+    for( const auto &image : scene.sprites ) {
+        if( !storage_item( image ) ) {
+            draw_sprite( image );
+        }
     }
     // Glass is drawn after all opaque geometry and actors, back to front.
     // Depth testing keeps nearer walls/actors opaque; glass never writes depth.

@@ -573,7 +573,60 @@ TEST_CASE( "fp3d_view_requires_neither_2d_exploration_nor_2d_visibility_mask", "
     fp3d_snapshot::prepare_view( you, here );
     REQUIRE_FALSE( you.sees( here, target ) );
     const auto night_scene = fp3d_snapshot::capture( you, here );
-    CHECK_FALSE( find_cell( night_scene, absolute ) );
+    const auto *night_tile = find_cell( night_scene, absolute );
+    REQUIRE( night_tile );
+    CHECK( night_tile->known == fp3d_snapshot::knowledge::visible );
+    CHECK_FALSE( night_tile->exterior_only );
+    CHECK_FALSE( you.sees( here, target ) );
+}
+
+TEST_CASE( "fp3d_dark_contents_use_los_without_changing_native_perception", "[fp3d][vision]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    const auto target = player + tripoint_rel_ms( 15, 0, 0 );
+    monster &zombie = spawn_test_monster( "mon_zombie", target, false );
+    here.furn_set( target, furn_str_id( "f_table" ) );
+    here.add_item_or_charges( target, item( itype_id( "rock" ) ) );
+    set_time( calendar::turn_zero + 1_hours );
+    refresh_vision( here, player.z() );
+    REQUIRE_FALSE( you.sees( here, target ) );
+    REQUIRE_FALSE( you.sees( here, zombie ) );
+    const auto position = here.get_abs( target );
+    const auto has = [&]( const fp3d_snapshot::scene_snapshot & scene, const std::string & id ) {
+        return std::any_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto & image ) {
+            return image.position == position && image.id == id;
+        } );
+    };
+    const auto rng = rng_get_engine();
+    const auto time = calendar::turn;
+    const auto scene = fp3d_snapshot::capture( you, here );
+    const auto *tile = find_cell( scene, position );
+    REQUIRE( tile );
+    CHECK( tile->furniture.has_value() );
+    CHECK_FALSE( tile->exterior_only );
+    CHECK( has( scene, "rock" ) );
+    CHECK( has( scene, "mon_zombie" ) );
+    CHECK_FALSE( you.sees( here, target ) );
+    CHECK_FALSE( you.sees( here, zombie ) );
+    CHECK( rng_get_engine() == rng );
+    CHECK( calendar::turn == time );
+
+    zombie.add_effect( efftype_id( "invisibility" ), 1_hours );
+    CHECK_FALSE( has( fp3d_snapshot::capture( you, here ), "mon_zombie" ) );
+    zombie.remove_effect( efftype_id( "invisibility" ) );
+
+    for( int dy = -20; dy <= 20; ++dy ) {
+        here.ter_set( player + tripoint_rel_ms( 7, dy, 0 ), ter_str_id( "t_wall" ) );
+    }
+    refresh_vision( here, player.z() );
+    const auto blocked = fp3d_snapshot::capture( you, here );
+    CHECK_FALSE( has( blocked, "rock" ) );
+    CHECK_FALSE( has( blocked, "mon_zombie" ) );
+    const auto *hidden = find_cell( blocked, position );
+    CHECK( ( hidden == nullptr || !hidden->furniture.has_value() ) );
 }
 
 TEST_CASE( "fp3d_multilevel_native_visibility_and_memory", "[fp3d][multilevel]" )
@@ -663,7 +716,8 @@ TEST_CASE( "fp3d_multilevel_native_visibility_and_memory", "[fp3d][multilevel]" 
     fp3d_snapshot::prepare_view( you, here );
     const auto dark = fp3d_snapshot::capture( you, here );
     const auto *night_wall = find_cell( dark, here.get_abs( player + tripoint_rel_ms( 4, 0, 1 ) ) );
-    CHECK( night_wall == nullptr );
+    REQUIRE( night_wall );
+    CHECK( night_wall->kind == fp3d_snapshot::terrain_kind::wall );
     set_time_to_day();
     player_wear_blindfold();
     here.invalidate_visibility_cache();
@@ -810,7 +864,7 @@ TEST_CASE( "fp3d_native_stair_actions_keep_presentation_in_sync", "[fp3d][multil
     CHECK( fp3d_snapshot::capture( you, here ).origin == you.pos_abs() );
 }
 
-TEST_CASE( "fp3d_batched_perception_matches_native_queries", "[fp3d][vision][performance]" )
+TEST_CASE( "fp3d_batched_perception_preserves_los_across_lighting", "[fp3d][vision][performance]" )
 {
     prepare_scene();
     avatar &you = get_avatar();
@@ -820,6 +874,7 @@ TEST_CASE( "fp3d_batched_perception_matches_native_queries", "[fp3d][vision][per
         here.ter_set( player + tripoint_rel_ms( 8, y, 0 ), ter_str_id( "t_wall" ) );
     }
     here.ter_set( player + tripoint_rel_ms( 4, 0, 1 ), ter_str_id( "t_wall" ) );
+    std::unordered_map<tripoint_abs_ms, bool> daylight_visibility;
     for( int scenario = 0; scenario < 6; ++scenario ) {
         if( scenario == 1 ) {
             set_time( calendar::turn_zero + 1_hours );
@@ -865,7 +920,13 @@ TEST_CASE( "fp3d_batched_perception_matches_native_queries", "[fp3d][vision][per
                     const bool captured = tile != cells.end() &&
                                           tile->second->known == fp3d_snapshot::knowledge::visible &&
                                           !tile->second->exterior_only;
-                    mismatches += captured != you.sees( here, p );
+                    const auto absolute = here.get_abs( p );
+                    if( scenario == 0 ) {
+                        daylight_visibility.emplace( absolute, captured );
+                    }
+                    const bool expected = scenario == 1 ? daylight_visibility.at( absolute ) :
+                                          scenario == 2 ? false : you.sees( here, p );
+                    mismatches += captured != expected;
                 }
             }
         }
@@ -970,7 +1031,7 @@ TEST_CASE( "fp3d_visible_outdoors_supplies_window_sky", "[fp3d][windows]" )
     REQUIRE_FALSE( you.sees( here, exterior ) );
     CHECK_FALSE( fp3d_snapshot::capture( you, here ).sky.visible );
 }
-TEST_CASE( "fp3d_dark_indoor_surfaces_occlude_without_revealing_contents", "[fp3d][multilevel]" )
+TEST_CASE( "fp3d_dark_indoor_surfaces_and_contents_remain_visible", "[fp3d][multilevel]" )
 {
     prepare_scene();
     avatar &you = get_avatar();
@@ -995,14 +1056,14 @@ TEST_CASE( "fp3d_dark_indoor_surfaces_occlude_without_revealing_contents", "[fp3
     REQUIRE( surface );
     CHECK( surface->floor_present );
     CHECK( surface->ceiling_present );
-    CHECK( surface->exterior_only );
+    CHECK_FALSE( surface->exterior_only );
     const auto wall_position = origin + tripoint_rel_ms( 0, -8, 0 );
     const auto *wall = find_cell( scene, here.get_abs( wall_position ) );
     REQUIRE( wall );
     CHECK( wall->kind == fp3d_snapshot::terrain_kind::wall );
 
-    CHECK( std::none_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto &sprite ) {
-        return sprite.position == here.get_abs( target );
+    CHECK( std::any_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto &sprite ) {
+        return sprite.position == here.get_abs( target ) && sprite.id == "rock";
     } ) );
     CHECK( rng_get_engine() == before );
 }

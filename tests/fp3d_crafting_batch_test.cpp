@@ -212,6 +212,30 @@ TEST_CASE( "fp3d_batch_request_starts_native_craft_and_consumes_only_selected_co
     CHECK( rng_get_engine() == engine );
 }
 
+TEST_CASE( "fp3d_workbench_crafting_places_native_craft_on_selected_surface", "[fp3d][crafting]" )
+{
+    prepare_batch_craft();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto bench = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.furn_set( bench, furn_str_id( "f_counter" ) );
+    fp3d_inventory::operation request;
+    request.kind = fp3d_inventory::operation_kind::craft;
+    request.crafting_recipe = recipe_id( "makeshift_crowbar_test_no_tools" );
+    request.crafting_position = here.get_abs( bench );
+    const auto clock = calendar::turn;
+    std::string error;
+    REQUIRE( fp3d_inventory::execute( request, you, here, &error ) );
+    CHECK( error.empty() );
+    REQUIRE( you.activity.id() == activity_id( "ACT_CRAFT" ) );
+    REQUIRE( here.i_at( bench ).size() == 1 );
+    const item &craft = *here.i_at( bench ).begin();
+    CHECK( craft.is_craft() );
+    CHECK( craft.get_making().ident() == request.crafting_recipe );
+    CHECK( ground_planks() == 4 );
+    CHECK( calendar::turn == clock );
+}
+
 TEST_CASE( "fp3d_batch_request_rechecks_invalid_and_changed_conditions_without_consumption",
            "[fp3d][crafting]" )
 {
@@ -224,6 +248,12 @@ TEST_CASE( "fp3d_batch_request_rechecks_invalid_and_changed_conditions_without_c
     request.crafting_batch = 3;
     SECTION( "zero batch" ) {
         request.crafting_batch = 0;
+    }
+    SECTION( "workbench is out of reach" ) {
+        request.crafting_position = here.get_abs( you.pos_bub( here ) + tripoint_rel_ms( 3, 0, 0 ) );
+    }
+    SECTION( "workbench is on another floor" ) {
+        request.crafting_position = here.get_abs( you.pos_bub( here ) + tripoint_rel_ms( 0, 0, 1 ) );
     }
     SECTION( "oversized batch" ) {
         request.crafting_batch = 51;

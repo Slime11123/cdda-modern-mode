@@ -600,10 +600,11 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         result.front = crop( 1, 18, 30, 30 );
         result.side = crop( 2, 19, 4, 29 );
     } else if( uses( "f_locker" ) ) {
-        // The current model has open shelves and posts, rather than doors.
-        // Use metal for the frame; do not stamp tiny complete locker doors on it.
-        result.top = crop( 6, 1, 25, 8 );
-        result.front = result.side = crop( 5, 12, 6, 28 );
+        // Preserve both doors together on the cabinet front. The top band
+        // belongs only on top; a small panel patch supplies unstriped side metal.
+        result.top = crop( 5, 1, 26, 8 );
+        result.front = crop( 5, 10, 26, 29 );
+        result.side = crop( 8, 21, 12, 26 );
     } else if( uses( "f_bookcase" ) ) {
         result.top = crop( 2, 1, 29, 6 );
         result.front = result.side = crop( 1, 10, 3, 29 );

@@ -12,6 +12,7 @@
 #include "input_context.h"
 #include "translations.h"
 #include "uilist.h"
+#include "options.h"
 #include "sdl_wrappers.h"
 
 namespace fp3d_input
@@ -41,6 +42,8 @@ input_context modern_2d_context()
     result.register_action( "MODERN_2D_SOUTH", to_translation( "2D现代 向南移动" ) );
     result.register_action( "MODERN_2D_WEST", to_translation( "2D现代 向西移动" ) );
     result.register_action( "MODERN_2D_EAST", to_translation( "2D现代 向东移动" ) );
+    result.register_action( "FP3D_PANEL", to_translation( "2D现代 综合生存面板" ) );
+    result.register_action( "FP3D_ACTIONS", to_translation( "2D现代 快捷行动菜单" ) );
     return result;
 }
 
@@ -81,6 +84,9 @@ std::string resolve( mode controls, const input_event &event, float yaw, bool dr
 {
     if( controls == mode::modern_2d ) {
         const auto command = modern_2d_context().input_to_action( event );
+        if( command == "FP3D_PANEL" || command == "FP3D_ACTIONS" ) {
+            return command;
+        }
         for( const auto &entry : {
                  std::pair{ "MODERN_2D_NORTH", tripoint_rel_ms::north },
                  std::pair{ "MODERN_2D_SOUTH", tripoint_rel_ms::south },
@@ -295,15 +301,34 @@ void gestures::set_hold_delay( int milliseconds )
 action_id display_bindings( input_context &original )
 {
     uilist menu;
-    menu.title = "操作方式（F5：2D经典 → 2D现代 → 3D）";
+    menu.title = "操作与 UI 设置（F5：2D经典 → 2D现代 → 3D）";
     menu.text =
         "2D经典：原版界面与键位。2D现代：框架阶段，WASD 移动，其余暂沿用原版。\n"
         "3D：现有第一人称操作。修改现代键位请使用局部绑定（+），三套配置互不覆盖。";
     menu.addentry( 0, true, '1', "1. 2D经典模式：原版按键" );
     menu.addentry( 1, true, '2', "2. 2D现代模式：独立移动按键（框架）" );
     menu.addentry( 2, true, '3', "3. 3D模式：第一人称按键" );
+    menu.addentry( 3, true, '4', "4. UI 栏样式（独立选择）" );
     menu.selected = static_cast<int>( fp3d_compositor::controls() );
     menu.query();
+    if( menu.ret == 3 ) {
+        uilist styles;
+        styles.title = "UI 栏样式";
+        styles.text = "只改变信息栏显示，不改变视角和操作键位。选择后自动保存。";
+        styles.addentry( 0, true, '1', "跟随模式（2D 原版侧栏 / 3D HUD）" );
+        styles.addentry( 1, true, '2', "原版侧栏（所有模式）" );
+        styles.addentry( 2, true, '3', "3D HUD（所有模式）" );
+        const auto current = get_option<std::string>( "FP3D_UI_STYLE" );
+        styles.selected = current == "classic" ? 1 : current == "hud" ? 2 : 0;
+        styles.query();
+        if( styles.ret >= 0 && styles.ret <= 2 ) {
+            get_options().get_option( "FP3D_UI_STYLE" ).setValue(
+                std::string( styles.ret == 1 ? "classic" : styles.ret == 2 ? "hud" : "auto" ) );
+            get_options().save();
+            g->mark_main_ui_adaptor_resize();
+        }
+        return ACTION_NULL;
+    }
     if( menu.ret == 0 ) {
         return original.display_menu( true );
     }

@@ -452,7 +452,8 @@ class cata_tiles
         /** Draw to screen */
         void draw( const point &dest, const tripoint_bub_ms &center, int width, int height,
                    std::multimap<point, formatted_text> &overlay_strings,
-                   color_block_overlay_container &color_blocks );
+                   color_block_overlay_container &color_blocks,
+                   const point &pixel_offset = point::zero );
         void draw_om( const point &dest, const tripoint_abs_omt &center_abs_omt, bool blink );
 
         /** Minimap functionality */

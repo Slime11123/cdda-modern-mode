@@ -50,6 +50,12 @@ TEST_CASE( "fp3d_furniture_blueprints_use_native_projects_without_changing_the_w
     REQUIRE( variant );
     CHECK( variant->shape == fp3d_furniture::kind::table );
     CHECK( variant->id == "f_table_fancy" );
+    const auto locker = fp3d_furniture::describe( "f_locker" );
+    const auto bookcase = fp3d_furniture::describe( "f_bookcase" );
+    REQUIRE( locker );
+    REQUIRE( bookcase );
+    CHECK( locker->shape == fp3d_furniture::kind::locker );
+    CHECK( locker->shape != bookcase->shape );
     CHECK_FALSE( fp3d_furniture::describe( "f_woodstove" ) );
     CHECK_FALSE( fp3d_furniture::describe( "not_a_furniture" ) );
     CHECK( here.furn( you.pos_bub( here ) ) == before );

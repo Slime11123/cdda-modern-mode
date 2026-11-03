@@ -32,7 +32,10 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_cupboard" ) {
             return model{ id, kind::cupboard };
         }
-        if( appearance == "f_locker" || appearance == "f_bookcase" ) {
+        if( appearance == "f_locker" ) {
+            return model{ id, kind::locker };
+        }
+        if( appearance == "f_bookcase" ) {
             return model{ id, kind::cabinet };
         }
         if( appearance == "f_rack" ) {
@@ -89,6 +92,9 @@ const std::vector<part> &parts( kind shape )
     static const std::vector<part> cupboard{
         { 0, 0, .94f, .80f, 0, .86f }
     };
+    static const std::vector<part> locker{
+        { 0, 0, .94f, .84f, 0, 1.85f }
+    };
     static const std::vector<part> cabinet{
         { -.43f, 0, .08f, .84f, 0, 1.85f },
         { .43f, 0, .08f, .84f, 0, 1.85f },
@@ -123,6 +129,8 @@ const std::vector<part> &parts( kind shape )
             return cupboard;
         case kind::cabinet:
             return cabinet;
+        case kind::locker:
+            return locker;
         case kind::rack:
             return rack;
     }
@@ -145,13 +153,19 @@ float item_surface( kind shape )
         case kind::open_crate:
             return .10f;
         case kind::cupboard:
-            return .86f;
+            return .15f;
         case kind::cabinet:
+        case kind::locker:
             return 1.00f;
         case kind::rack:
             return .84f;
     }
     return 0;
+}
+
+bool shows_contents( kind shape )
+{
+    return shape == kind::cupboard || shape == kind::locker;
 }
 }
 #endif

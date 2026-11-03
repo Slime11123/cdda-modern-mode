@@ -13,6 +13,7 @@
 #include "fp3d_materials.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_entry.h"
+#include "modern_2d_camera.h"
 #endif
 
 #include <algorithm>
@@ -87,6 +88,15 @@
 #include "cata_imgui.h"
 
 std::unique_ptr<cataimgui::client> imclient;
+
+#if defined(ENABLE_FP3D)
+static modern_2d_camera edge_camera;
+static point modern_2d_pan()
+{
+    return g && g->get_zoom() > 4 && fp3d_compositor::modern_2d_input() ?
+           edge_camera.pixels() : point::zero;
+}
+#endif
 
 #if defined(__linux__)
 #   include <cstdlib> // getenv()/setenv()
@@ -560,6 +570,40 @@ SDL_Rect get_android_render_rect( float DisplayBufferWidth, float DisplayBufferH
     return dstrect;
 }
 
+#endif
+
+#if defined(ENABLE_FP3D)
+SDL_Texture_Ptr copy_2d_display_buffer()
+{
+    if( !renderer || !display_buffer ) { return {}; }
+    int width = 0;
+    int height = 0;
+    if( SDL_QueryTexture( display_buffer.get(), nullptr, nullptr, &width, &height ) != 0 ) { return {}; }
+    SDL_Texture_Ptr image( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
+                           SDL_TEXTUREACCESS_TARGET, width, height ) );
+    if( !image ) { return {}; }
+    auto *previous_target = SDL_GetRenderTarget( renderer.get() );
+    SDL_Rect viewport;
+    SDL_Rect clip;
+    SDL_RenderGetViewport( renderer.get(), &viewport );
+    SDL_RenderGetClipRect( renderer.get(), &clip );
+    const bool clipped = SDL_RenderIsClipEnabled( renderer.get() );
+    float sx = 1;
+    float sy = 1;
+    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    on_out_of_scope restore( [&]() {
+        SDL_SetRenderTarget( renderer.get(), previous_target );
+        SDL_RenderSetScale( renderer.get(), sx, sy );
+        SDL_RenderSetViewport( renderer.get(), &viewport );
+        SDL_RenderSetClipRect( renderer.get(), clipped ? &clip : nullptr );
+    } );
+    if( SDL_SetRenderTarget( renderer.get(), image.get() ) != 0 ) { return {}; }
+    SDL_RenderSetScale( renderer.get(), 1, 1 );
+    SDL_RenderSetViewport( renderer.get(), nullptr );
+    SDL_RenderSetClipRect( renderer.get(), nullptr );
+    if( SDL_RenderCopy( renderer.get(), display_buffer.get(), nullptr, nullptr ) != 0 ) { return {}; }
+    return image;
+}
 #endif
 
 void refresh_display()
@@ -1728,6 +1772,10 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
         // Strings with colors do be drawn with map_font on top of tiles.
         std::multimap<point, formatted_text> overlay_strings;
 
+        point pixel_offset = point::zero;
+#if defined(ENABLE_FP3D)
+        pixel_offset = modern_2d_pan();
+#endif
         // game::w_terrain can be drawn by the tilecontext.
         // skip the normal drawing code for it.
         tilecontext->draw(
@@ -1736,7 +1784,14 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
             TERRAIN_WINDOW_TERM_WIDTH * font->width,
             TERRAIN_WINDOW_TERM_HEIGHT * font->height,
             overlay_strings,
-            color_blocks );
+            color_blocks, pixel_offset );
+
+        if( pixel_offset != point::zero ) {
+            const SDL_Rect terrain_clip = { win->pos.x * fontwidth, win->pos.y * fontheight,
+                                            TERRAIN_WINDOW_TERM_WIDTH * fontwidth,
+                                            TERRAIN_WINDOW_TERM_HEIGHT * fontheight };
+            SDL_RenderSetClipRect( renderer.get(), &terrain_clip );
+        }
 
         // color blocks overlay
         if( !color_blocks.second.empty() ) {
@@ -1799,6 +1854,9 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
             x_offset = width;
         }
 
+        if( pixel_offset != point::zero ) {
+            SDL_RenderSetClipRect( renderer.get(), nullptr );
+        }
         update = true;
     } else if( g && w == g->w_terrain && map_font ) {
         // When the terrain updates, predraw a black space around its edge
@@ -3025,6 +3083,38 @@ static bool fp3d_preferred_text_input = true;
 static void CheckMessages()
 {
 #if defined(ENABLE_FP3D)
+    // Animate while waiting for input, without submitting a game action.
+    static Uint32 last_edge_frame = SDL_GetTicks();
+    const Uint32 edge_now = SDL_GetTicks();
+    if( edge_now - last_edge_frame >= 16 ) {
+        point mouse;
+        SDL_GetMouseState( &mouse.x, &mouse.y );
+        bool changed = false;
+        if( g && g->w_terrain && use_tiles ) {
+            const auto *terrain = g->w_terrain.get<cata_cursesport::WINDOW>();
+            // Mouse state is in window coordinates, while the map is drawn in
+            // renderer coordinates (which can also include DPI/logical scaling).
+            float logical_x = 0;
+            float logical_y = 0;
+            SDL_RenderWindowToLogical( renderer.get(), mouse.x, mouse.y, &logical_x, &logical_y );
+            mouse = point( static_cast<int>( std::floor( logical_x ) ),
+                           static_cast<int>( std::floor( logical_y ) ) );
+            mouse -= point( terrain->pos.x * fontwidth, terrain->pos.y * fontheight );
+            changed = edge_camera.update( fp3d_compositor::modern_2d_input() &&
+                                          SDL_GetMouseFocus() == window.get() && g->get_zoom() > 4,
+                                          mouse, point( TERRAIN_WINDOW_TERM_WIDTH * fontwidth,
+                                                  TERRAIN_WINDOW_TERM_HEIGHT * fontheight ),
+                                          ( edge_now - last_edge_frame ) / 1000.0f );
+        } else {
+            changed = edge_camera.update( false, point::zero, point::zero, 0 );
+        }
+        last_edge_frame = edge_now;
+        if( changed ) {
+            ui_manager::invalidate_all_ui_adaptors();
+            ui_manager::redraw_invalidated();
+            refresh_display();
+        }
+    }
     if( fp3d_compositor::requested() ) {
         if( fp3d_compositor::captures_game_input() || fp3d_compositor::modern_2d_input() ||
             ( !fp3d_preferred_text_input && !fp3d_compositor::menu_text_input() ) ) {
@@ -4515,7 +4605,12 @@ std::optional<tripoint_bub_ms> input_context::get_coordinates( const catacurses:
         return std::nullopt;
     }
 
-    const point screen_pos = coordinate - win_min;
+    point screen_pos = coordinate - win_min;
+#if defined(ENABLE_FP3D)
+    if( capture_win == g->w_terrain ) {
+        screen_pos += modern_2d_pan() * scaling_factor;
+    }
+#endif
     const bool use_isometric = g->w_overmap &&
                                capture_win == g->w_overmap ? false : g->is_tileset_isometric();
 

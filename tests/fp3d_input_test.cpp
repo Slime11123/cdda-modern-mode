@@ -23,6 +23,10 @@ TEST_CASE( "fp3d_three_modes_keep_2d_movement_independent", "[fp3d][input]" )
     CHECK( fp3d_input::next_mode( mode::first_person_3d ) == mode::original_2d );
     auto original = get_default_mode_input_context();
     const auto original_w = original.input_to_action( input_event( 'w', input_event_t::keyboard_code ) );
+    const input_event tab( SDLK_TAB, input_event_t::keyboard_code );
+    CHECK( fp3d_input::resolve( mode::modern_2d, tab, 0 ) == "FP3D_PANEL" );
+    CHECK( fp3d_input::resolve( mode::first_person_3d, tab, 0 ) == "FP3D_PANEL" );
+    CHECK( fp3d_input::resolve( mode::original_2d, tab, 0 ).empty() );
     for( const auto &entry : {
              std::pair{ 'w', tripoint_rel_ms::north },
              std::pair{ 's', tripoint_rel_ms::south },
@@ -103,7 +107,9 @@ TEST_CASE( "fp3d_control_profiles_are_independent_and_rebindable", "[fp3d][input
     std::ofstream( preferences ) << R"([{"id":"FP3D_FORWARD","category":"FP3D","version":3,
         "bindings":[{"input_method":"keyboard_code","key":"r"}]},
         {"id":"MODERN_2D_NORTH","category":"MODERN_2D","version":3,
-        "bindings":[{"input_method":"keyboard_code","key":"z"}]}])";
+        "bindings":[{"input_method":"keyboard_code","key":"z"}]},
+        {"id":"FP3D_PANEL","category":"MODERN_2D","version":3,
+        "bindings":[{"input_method":"keyboard_code","key":"p"}]}])";
     inp_mngr = input_manager();
     inp_mngr.init();
     CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, w, 0 ).empty() );
@@ -115,6 +121,12 @@ TEST_CASE( "fp3d_control_profiles_are_independent_and_rebindable", "[fp3d][input
     CHECK( original.input_to_action( w ) == original_w );
     CHECK( inp_mngr.get_input_for_action( "wield", "DEFAULTMODE" ) == wield_keys );
     CHECK( fp3d_input::resolve( fp3d_input::mode::original_2d, r, 0 ).empty() );
+    const input_event tab( SDLK_TAB, input_event_t::keyboard_code );
+    const input_event panel_key( 'p', input_event_t::keyboard_code );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, panel_key, 0 ) == "FP3D_PANEL" );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::modern_2d, tab, 0 ).empty() );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d, tab, 0 ) == "FP3D_PANEL" );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::original_2d, panel_key, 0 ).empty() );
 }
 
 TEST_CASE( "fp3d_gestures_classify_once_and_cancel_without_world_ticks", "[fp3d][input]" )

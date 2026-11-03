@@ -51,6 +51,9 @@ input_event sdl_keysym_to_keycode_evt( const SDL_Keysym &keysym );
 void load_tileset();
 void rescale_tileset( int size );
 bool save_screenshot( const std::string &file_path );
+#if defined(ENABLE_FP3D)
+SDL_Texture_Ptr copy_2d_display_buffer();
+#endif
 void toggle_fullscreen_window();
 
 struct window_dimensions {

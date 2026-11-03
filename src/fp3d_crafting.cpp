@@ -127,7 +127,8 @@ std::string details( const recipe_id &id, const avatar &crafter, int batch_size 
     return remove_color_tags( result + "\n" + requirements );
 }
 
-bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error )
+bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error,
+            std::optional<tripoint_bub_ms> position )
 {
     error.clear();
     if( you.is_dead_state() || you.activity || !id.is_valid() || batch_size < 1 || batch_size > 50 ||
@@ -149,7 +150,7 @@ bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error
         }
     }
     uistate.read_recipes.insert( id );
-    you.make_craft( id, batch_size );
+    you.make_craft( id, batch_size, position );
     if( !you.activity ) {
         error = "制作未开始，材料选择或原版确认可能已取消。";
         return false;

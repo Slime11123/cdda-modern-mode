@@ -2086,6 +2086,13 @@ void options_manager::add_options_interface()
     add_option_group( "interface", Group( "sidb_opts", to_translation( "Sidebar interface options" ),
                                           to_translation( "Options regarding sidebar interface." ) ),
     [&]( const std::string & page_id ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        add( "FP3D_UI_STYLE", page_id, to_translation( "UI 栏样式" ),
+             to_translation( "独立于操作模式选择信息栏。跟随模式：2D 使用原版侧栏，3D 使用 HUD。只改变界面显示，不改变操作键位。" ),
+        { { "auto", to_translation( "跟随模式" ) },
+          { "classic", to_translation( "原版侧栏" ) },
+          { "hud", to_translation( "3D HUD" ) } }, "auto" );
+#endif
         add( "SIDEBAR_POSITION", page_id, to_translation( "Sidebar position" ),
              to_translation( "Switch between sidebar on the left or on the right side.  Requires restart." ),
              //~ sidebar position

@@ -24,6 +24,11 @@ namespace fp3d_compositor
 bool requested();
 fp3d_input::mode controls();
 bool modern_2d_input();
+// Shared survival panel, independent of 3D scene capture and movement controls.
+bool survival_menu_available();
+// UI style is independent of the selected control/view mode.
+bool uses_hud();
+void publish_hud( fp3d_hud::data hud );
 // True only while the 3D view is allowed to render, including its first frame.
 bool active();
 void attach( SDL_Renderer *renderer, SDL_Window *window );

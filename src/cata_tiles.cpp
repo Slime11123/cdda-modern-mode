@@ -1346,7 +1346,7 @@ static std::map<tripoint_bub_ms, int> display_npc_attack_potential()
 
 void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int width, int height,
                        std::multimap<point, formatted_text> &overlay_strings,
-                       color_block_overlay_container &color_blocks )
+                       color_block_overlay_container &color_blocks, const point &pixel_offset )
 {
     if( !g ) {
         return;
@@ -1383,7 +1383,11 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
 
     o = is_isometric() ? center.xy().raw() : center.xy().raw() - point( POSX, POSY );
 
-    op = dest;
+    const point previous_op = op;
+    op = dest - pixel_offset;
+    if( op != previous_op ) {
+        set_draw_cache_dirty();
+    }
     screentile_width = s.x;
     screentile_height = s.y;
 
@@ -1391,6 +1395,18 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     std::vector<half_open_rectangle<point>> z_any_tile_range( num_ranges );
     for( int z = 0; z < num_ranges; ++z ) {
         z_any_tile_range[z] = get_window_any_tile_range( { width, height }, -z );
+        if( pixel_offset != point::zero ) {
+            // Include partially exposed tiles at both ends of the shifted viewport.
+            const int col_scale = is_isometric() ? 2 : 1;
+            const int row_scale = is_isometric() ? 4 : 1;
+            const int row_size = is_isometric() ? tile_width : tile_height;
+            z_any_tile_range[z].p_min += point(
+                                            divide_round_down( pixel_offset.x * col_scale, tile_width ),
+                                            divide_round_down( pixel_offset.y * row_scale, row_size ) );
+            z_any_tile_range[z].p_max += point(
+                                            -divide_round_down( -pixel_offset.x * col_scale, tile_width ),
+                                            -divide_round_down( -pixel_offset.y * row_scale, row_size ) );
+        }
     }
     const half_open_rectangle<point> &top_any_tile_range = z_any_tile_range[0];
     const half_open_rectangle<point> &bottom_any_tile_range = z_any_tile_range[num_ranges - 1];

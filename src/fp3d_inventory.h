@@ -60,6 +60,7 @@ struct operation {
     action_id native_action = ACTION_NULL;
     recipe_id crafting_recipe;
     int crafting_batch = 1;
+    std::optional<tripoint_abs_ms> crafting_position;
     std::optional<int> tracking_mission;
     std::optional<int> talking_npc_id;
     std::optional<npc_orders::kind> follower_command;

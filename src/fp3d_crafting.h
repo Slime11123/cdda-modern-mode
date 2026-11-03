@@ -4,6 +4,8 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <string>
 #include <vector>
+#include <optional>
+#include "coordinates.h"
 #include "type_id.h"
 class avatar;
 namespace fp3d_crafting
@@ -23,7 +25,8 @@ bool is_favorite( const recipe_id &id );
 bool set_favorite( const avatar &you, const recipe_id &id, bool favorite );
 std::string details( const recipe_id &id );
 std::string details( const recipe_id &id, const avatar &crafter, int batch_size = 1 );
-bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error );
+bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error,
+            std::optional<tripoint_bub_ms> position = std::nullopt );
 }
 #endif
 #endif

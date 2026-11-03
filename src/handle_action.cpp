@@ -255,7 +255,7 @@ class user_turn
 input_context game::get_player_input( std::string &action )
 {
 #if defined(ENABLE_FP3D)
-    if( fp3d_compositor::turn_based() && !u.is_dead_state() && !u.activity &&
+    if( fp3d_compositor::survival_menu_available() && !u.is_dead_state() && !u.activity &&
         fp3d_modern_ui::take_resume() ) {
         action = "FP3D_PANEL";
         return get_default_mode_input_context();
@@ -3220,8 +3220,14 @@ bool game::handle_action()
     bool targeted_melee = false;
 #if defined(ENABLE_FP3D)
     if( action.compare( 0, 5, "FP3D_" ) == 0 ) {
-        if( !fp3d_compositor::turn_based() ) { return false; }
-        const auto intent = fp3d_interaction::resolve( action, fp3d_compositor::interaction_target(), player_character, here );
+        if( !fp3d_compositor::turn_based() &&
+            !( ( action == "FP3D_PANEL" || action == "FP3D_ACTIONS" ) &&
+               fp3d_compositor::survival_menu_available() ) ) {
+            return false;
+        }
+        const auto target = fp3d_compositor::turn_based() ?
+                            fp3d_compositor::interaction_target() : std::nullopt;
+        const auto intent = fp3d_interaction::resolve( action, target, player_character, here );
         if( !intent ) {
             return false;
         }
@@ -3247,7 +3253,7 @@ bool game::handle_action()
             // Native 2D already handles help inside its input context. The 3D
             // profile selector is dispatched below, after resolving the key.
 #if defined(ENABLE_FP3D)
-            if( !fp3d_compositor::turn_based() )
+            if( !fp3d_compositor::survival_menu_available() )
 #endif
             { return false; }
         }
@@ -3342,6 +3348,22 @@ bool game::handle_action()
                     return false;
                 }
             } else if( act == ACTION_SEC_SELECT ) {
+#if defined(ENABLE_FP3D)
+                if( fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
+                    const auto choices = fp3d_interaction::context_2d_entries( *mouse_target, player_character, here );
+                    const auto choice = fp3d_quick_menu::show_dropdown( choices, ctxt.get_raw_input().mouse_pos );
+                    if( !choice ) { return false; }
+                    player_character.clear_destination();
+                    destination_preview.clear();
+                    const auto intent = fp3d_interaction::resolve_2d_choice( *choice, *mouse_target, player_character, here );
+                    if( !intent ) { return false; }
+                    act = intent->action;
+                    mouse_target = intent->position;
+                    quick_pickup = intent->quick_pickup;
+                    targeted_pickup = intent->targeted_pickup;
+                    targeted_melee = intent->targeted_melee;
+                } else
+#endif
                 if( !try_get_right_click_action( act, *mouse_target ) ) {
                     return false;
                 }

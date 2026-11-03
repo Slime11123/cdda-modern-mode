@@ -73,3 +73,8 @@ CDDA is the upstream project; this is an unofficial standalone repository. Prese
 
 
 同日补充：进一步核对并修正不死人木箱、椅子及柜架取图，避免在模型构件上重复完整伪3D图片；不改独立素材或RetroDays。最终图形5611断言及ON/测试构建通过，沿用同一非渲染逻辑的158用例13326功能断言，未重复CPU/OFF。当前启动器runtime/modern-controls-furniture-surfaces；证据qa/0i1/modern-furniture-surfaces-*。
+
+
+### 2026-11-02 双门储物柜 / 已授权柜内物品显示
+
+按用户标注将储物柜改为完整柜体和双门正面，修复窄边框拉伸条纹；橱柜/储物柜已授权物品图标可穿过柜体显示，墙/楼板及普通生物遮挡保留。159用例13352功能断言、两包6073图形断言/2用例及ON/测试构建通过，运行包帮助入口退出0；未重复OFF构建。启动器runtime/modern-controls-locker-doors，保存退出重开生效。报告FP3D_STORAGE_DOORS_AND_CONTENTS.md；柜门动画及正式游玩验收未标完成。

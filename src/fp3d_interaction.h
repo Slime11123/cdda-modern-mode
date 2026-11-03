@@ -25,6 +25,10 @@ std::optional<request> resolve( const std::string &command,
                                 const std::optional<fp3d_targeting::target> &target, avatar &you, map &here );
 bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &position,
                    bool targeted = false );
+std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &position,
+        const avatar &you, const map &here );
+std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
+        const tripoint_bub_ms &position, avatar &you, map &here );
 }
 #endif
 #endif

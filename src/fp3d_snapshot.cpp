@@ -266,15 +266,15 @@ bool exposed_surface( const avatar &you, const map &here, const tripoint_bub_ms 
                       bool beside_visible_air, bool blind )
 {
     return beside_visible_air && p.z() > you.posz() && !blind && !you.cant_see( p ) &&
-           you.Creature::sees( here, p, false, you.unimpaired_range() );
+           here.sees( you.pos_bub( here ), p, you.unimpaired_range() );
 }
 
 void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
                       const tripoint_bub_ms &p, const Creature *critter )
 {
     // Clear terrain visibility is necessary, but not sufficient for a creature.
-    // Reuse the native per-creature perception check before copying appearance.
-    if( critter && !critter->is_avatar() && you.sees( here, *critter ) ) {
+    // Keep native concealment checks, but ignore lighting for 3D presentation.
+    if( critter && !critter->is_avatar() && you.Creature::sees( here, *critter, true ) ) {
         sprite image = describe_creature( *critter );
         if( !image.id.empty() ) {
             scene.sprites.push_back( std::move( image ) );
@@ -364,12 +364,9 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
         return ( ( p.z() - result.min_z ) * side + p.y() - first_y ) * side + p.x() - first_x;
     };
     const auto perception_started = std::chrono::steady_clock::now();
-    if( fresh ) {
+    if( fresh && !blind ) {
         const int clairvoyance = you.clairvoyance();
         const int sight_range = you.unimpaired_range();
-        // Native pl_sees recalculates equipment/mutation vision threshold per
-        // tile. It is invariant throughout this synchronous read-only capture.
-        const float vision_threshold = you.get_vision_threshold( here.ambient_light_at( player ) );
         for( int z = result.min_z; z <= result.max_z; ++z ) {
             const auto &cache = here.access_cache( z );
             for( int y = first_y; y < first_y + side; ++y ) {
@@ -388,11 +385,10 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                         cache.camera_cache[x][y] == 0 ) {
                         continue;
                     }
-                    // Same native apparent light, obstruction and light-source
-                    // gates as map::pl_sees; no 2D mask or replacement LOS.
+                    // 3D keeps native obstruction and range, but dark cells
+                    // still contribute terrain, furniture, items and creatures.
                     const auto light = map::apparent_light_helper( cache, p );
-                    if( clairvoyant || ( !light.obstructed &&
-                                         ( light.apparent_light >= vision_threshold || cache.sm[x][y] > 0 ) ) ) {
+                    if( clairvoyant || !light.obstructed ) {
                         perception[index( p )] = visible_bit | ( here.is_open_air( p ) ? air_bit : 0 );
                     }
                 }
@@ -427,8 +423,8 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 }
                 cell tile;
                 tile.position = here.get_abs( p );
-                // Native avatar perception uses light and LOS, not the 2D tile
-                // visibility mask, viewport bounds or previously memorized terrain.
+                // 3D visibility uses LOS and range independently of lighting,
+                // the 2D visibility mask and previously memorized terrain.
                 const bool visible = perception[index( p )] & visible_bit;
                 if( visible && p.z() == player.z() && !result.sky.visible && player.z() >= 0 && !blind &&
                     here.is_outside( p ) ) {

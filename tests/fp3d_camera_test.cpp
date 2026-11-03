@@ -1,4 +1,5 @@
 #include "fp3d_camera.h"
+#include "modern_2d_camera.h"
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include "action.h"
@@ -10,6 +11,114 @@
 #include "map_helpers.h"
 #include "player_helpers.h"
 #include "type_id.h"
+
+TEST_CASE( "modern_2d_edge_camera_peeks_and_returns_without_grid_steps", "[fp3d][camera][edge_pan]" )
+{
+    modern_2d_camera camera;
+    const point size( 1000, 800 );
+    CHECK_FALSE( camera.update( true, size / 2, size, .016f ) );
+    camera.update( true, point( 999, 400 ), size, .016f );
+    const point first = camera.pixels();
+    CHECK( first.x > 0 );
+    CHECK( first.x < 100 );
+    CHECK( first.y == 0 );
+    for( int frame = 0; frame < 180; ++frame ) {
+        camera.update( true, point( 999, 400 ), size, .016f );
+    }
+    CHECK( camera.pixels().x > first.x );
+    CHECK( camera.pixels().x <= 450 );
+    for( int frame = 0; frame < 180; ++frame ) {
+        camera.update( true, size / 2, size, .016f );
+    }
+    CHECK( camera.pixels() == point::zero );
+
+    camera.update( true, point::zero, size, .016f );
+    CHECK( camera.pixels().x < 0 );
+    CHECK( camera.pixels().y < 0 );
+    // Mode/menu/focus changes and the widest zoom disable and clear the offset.
+    CHECK( camera.update( false, point::zero, size, .016f ) );
+    CHECK( camera.pixels() == point::zero );
+    CHECK_FALSE( camera.update( false, point::zero, size, .016f ) );
+    CHECK_FALSE( camera.update( true, point( 1100, 400 ), size, .016f ) );
+    CHECK_FALSE( camera.update( true, point::zero, point::zero, .016f ) );
+}
+
+TEST_CASE( "modern_2d_edge_camera_changes_direction_along_each_edge", "[fp3d][camera][edge_pan]" )
+{
+    const point size( 1000, 800 );
+    modern_2d_camera camera;
+    // Visit all sides/corners with the SAME camera, including direction reversals.
+    for( const point mouse : { point( 999, 400 ), point( 0, 400 ), point( 500, 0 ),
+                              point( 500, 799 ), point( 0, 0 ), point( 999, 799 ),
+                              point( 999, 0 ), point( 0, 799 ),
+                              // These diagonals used to lock to a single axis.
+                              point( 999, 200 ), point( 999, 600 ), point( 0, 200 ), point( 0, 600 ),
+                              point( 250, 0 ), point( 750, 0 ), point( 250, 799 ), point( 750, 799 ) } ) {
+        CAPTURE( mouse );
+        for( int frame = 0; frame < 180; ++frame ) {
+            camera.update( true, mouse, size, .016f );
+        }
+        const point pan = camera.pixels();
+        if( mouse.x == 500 ) {
+            CHECK( pan.x == 0 );
+        } else {
+            CHECK( ( pan.x > 0 ) == ( mouse.x > 500 ) );
+            CHECK( pan.x != 0 );
+        }
+        if( mouse.y == 400 ) {
+            CHECK( pan.y == 0 );
+        } else {
+            CHECK( ( pan.y > 0 ) == ( mouse.y > 400 ) );
+            CHECK( pan.y != 0 );
+        }
+        CHECK( std::abs( pan.x ) <= 450 );
+        CHECK( std::abs( pan.y ) <= 360 );
+    }
+    for( int frame = 0; frame < 180; ++frame ) {
+        camera.update( true, size / 2, size, .016f );
+    }
+    CHECK( camera.pixels() == point::zero );
+}
+
+TEST_CASE( "modern_2d_look_around_has_a_circular_limit_at_every_angle", "[fp3d][camera][edge_pan]" )
+{
+    for( const point size : { point( 1000, 800 ), point( 1600, 600 ), point( 600, 1000 ) } ) {
+        const float radius = ( std::min( size.x, size.y ) - 1 ) * .5f;
+        const float reach = std::min( size.x, size.y ) * .45f;
+        modern_2d_camera camera;
+        for( int degrees = 0; degrees < 360; ++degrees ) {
+            CAPTURE( size, degrees );
+            const float angle = degrees * 3.14159265f / 180;
+            const float vx = std::cos( angle );
+            const float vy = std::sin( angle );
+            // Sweep a circle inside the rectangular viewport, including points
+            // far from its edges. A rectangular trigger fails at these angles.
+            const point mouse( std::lround( ( size.x - 1 ) * .5f + radius * vx ),
+                               std::lround( ( size.y - 1 ) * .5f + radius * vy ) );
+            for( int frame = 0; frame < 160; ++frame ) {
+                camera.update( true, mouse, size, .016f );
+            }
+            const point pan = camera.pixels();
+            CHECK( std::hypot( pan.x, pan.y ) == Approx( reach ).margin( 2 ) );
+            CHECK( std::abs( pan.x * vy - pan.y * vx ) < 1.5f );
+            CHECK( pan.x * vx + pan.y * vy > 0 );
+        }
+        for( int frame = 0; frame < 180; ++frame ) {
+            camera.update( true, size / 2, size, .016f );
+        }
+        CHECK( camera.pixels() == point::zero );
+    }
+    // Distance increases reach gradually in the circular transition band.
+    modern_2d_camera near;
+    modern_2d_camera far;
+    const point size( 1000, 800 );
+    for( int frame = 0; frame < 180; ++frame ) {
+        near.update( true, point( 800, 400 ), size, .016f );
+        far.update( true, point( 890, 400 ), size, .016f );
+    }
+    CHECK( near.pixels().x > 0 );
+    CHECK( far.pixels().x > near.pixels().x );
+}
 
 TEST_CASE( "fp3d_camera_maps_eight_directions_to_native_actions", "[fp3d][input]" )
 {

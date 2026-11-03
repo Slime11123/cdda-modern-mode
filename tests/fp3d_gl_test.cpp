@@ -1521,12 +1521,13 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             const auto before_rng = rng_get_engine();
             const auto before_messages = Messages::size();
             const bool before_unread = Messages::has_undisplayed_messages();
-            for( int page = 0; page < 11; ++page ) {
+            for( int page = 0; page < 12; ++page ) {
                 const auto create_started = std::chrono::steady_clock::now();
                 auto menu = fp3d_modern_ui::create( you, here, layout[2], page == 1,
                                                     page >= 9 ? 0 : page == 8 ? 7 : page == 7 ? 4 : page == 6 ? 3 : page >= 4 ? page + 1 : page >= 2 ? page - 1 : 0,
                                                     page == 9 ? you.get_wielded_item() : item_location(),
-                                                    page == 10 ? std::make_optional( here.get_abs( center + tripoint_rel_ms::north ) ) : std::nullopt );
+                                                    page == 10 ? std::make_optional( here.get_abs( center + tripoint_rel_ms::north ) ) : std::nullopt,
+                                                    page == 11 ? std::make_optional( here.get_abs( center + tripoint_rel_ms::north ) ) : std::nullopt );
                 const double create_ms = std::chrono::duration<double, std::milli>(
                                              std::chrono::steady_clock::now() - create_started ).count();
                 const auto frame_started = std::chrono::steady_clock::now();
@@ -1683,11 +1684,11 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         CHECK_FALSE( actions );
                     }
                 }
-                if( page == 3 || page == 6 ) {
+                if( page == 3 || page == 6 || page == 11 ) {
                     CAPTURE( page, layout[0], layout[1], layout[2] );
-                    const std::string category_name = page == 3 ? "/配方分类_" : "/建造分类_";
-                    const std::string grid_name = page == 3 ? "/配方_" : "/建造项目_";
-                    const std::string details_name = page == 3 ? "/配方详情_" : "/建造说明_";
+                    const std::string category_name = page != 6 ? "/配方分类_" : "/建造分类_";
+                    const std::string grid_name = page != 6 ? "/配方_" : "/建造项目_";
+                    const std::string details_name = page != 6 ? "/配方详情_" : "/建造说明_";
                     ImGuiWindow *categories = nullptr;
                     ImGuiWindow *grid = nullptr;
                     ImGuiWindow *details = nullptr;
@@ -1743,7 +1744,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     const auto output = std::filesystem::path( directory ) /
                                         ( pack + ( page == 0 ? "-panel-" : page == 1 ? "-near-" : page == 2 ? "-health-" : page == 3 ?
                                                    "-craft-" : page == 4 ? "-missions-" : page == 5 ? "-people-" : page == 6 ? "-building-" : page == 7
-                                                   ? "-map-" : page == 8 ? "-more-" : page == 10 ? "-pickup-" : "-use-" )
+                                                   ? "-map-" : page == 8 ? "-more-" : page == 10 ? "-pickup-" : page == 11 ? "-workbench-" : "-use-" )
                                           +
                                           std::to_string(
                                               layout[0] ) + "-" + std::to_string( layout[2] ) + ".png" );
@@ -2232,6 +2233,47 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 CHECK_FALSE( context_cancel->get_is_open() );
                 CHECK_FALSE( context_cancel->has_button_action() );
+                {
+                    const auto stair_position = you.pos_bub( here );
+                    const ter_id previous_terrain = here.ter( stair_position );
+                    on_out_of_scope restore_stair( [&]() { here.ter_set( stair_position, previous_terrain ); } );
+                    here.ter_set( stair_position, ter_str_id( "t_stairs_up" ) );
+                    const fp3d_targeting::target stair_target{ you.pos_abs(), you.pos_abs(),
+                            fp3d_targeting::kind::terrain, "t_stairs_up" };
+                    const auto stair_choices = fp3d_interaction::context_entries( stair_target, you, here );
+                    REQUIRE( stair_choices[0].enabled );
+                    REQUIRE_FALSE( stair_choices[1].enabled );
+                    auto stair_wheel = fp3d_quick_menu::create( stair_choices, "楼梯", layout[2] );
+                    for( int frame = 0; frame < 5; ++frame ) {
+                        ImGui_ImplSDLRenderer2_NewFrame();
+                        ImGui_ImplSDL2_NewFrame();
+                        ImGui::GetIO().AddMousePosEvent( center.x, center.y - 160 );
+                        ImGui::GetIO().AddMouseButtonEvent( 0, frame == 3 );
+                        ImGui::NewFrame();
+                        stair_wheel->draw();
+                        ImGui::Render();
+                        SDL_SetRenderDrawColor( renderer.get(), 12, 16, 20, 255 );
+                        SDL_RenderClear( renderer.get() );
+                        ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+                        if( frame == 2 ) {
+                            REQUIRE( stair_wheel->get_is_open() );
+                            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                                std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
+                                REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                              pixels.data(), layout[0] * 4 ) == 0 );
+                                SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), layout[0],
+                                                         layout[1], 32, layout[0] * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                                const auto filename = std::filesystem::path( directory ) /
+                                                      ( pack + "-stairs-" + std::to_string( layout[0] ) + "-" +
+                                                        std::to_string( layout[2] ) + ".png" );
+                                REQUIRE( picture );
+                                CHECK( IMG_SavePNG( picture.get(), filename.u8string().c_str() ) == 0 );
+                            }
+                        }
+                    }
+                    CHECK_FALSE( stair_wheel->get_is_open() );
+                    CHECK( stair_wheel->get_button_action() == "FP3D_STAIRS_UP" );
+                }
                 auto cancelled = fp3d_quick_menu::create( layout[2] );
                 for( int frame = 0; frame < 3; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();

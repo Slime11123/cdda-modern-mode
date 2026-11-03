@@ -1,4 +1,9 @@
 #include "iexamine.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_compositor.h"
+#include "fp3d_modern_ui.h"
+#include "fp3d_quick_menu.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -7629,7 +7634,25 @@ void iexamine::workbench_internal( Character &you, const tripoint_bub_ms &examp,
         amenu.addentry( undeploy,     true,            't', _( "Take down the %s" ), name );
     }
 
-    amenu.query();
+#if defined(TILES) && defined(ENABLE_FP3D)
+    const bool modern_workbench = you.is_avatar() && fp3d_compositor::turn_based();
+    if( modern_workbench ) {
+        std::array<fp3d_quick_menu::entry, 8> choices{};
+        const char *commands[] = { "0", "1", "2", "3", "4", "5" };
+        for( auto &entry : choices ) {
+            entry.visible = false;
+        }
+        for( size_t i = 0; i < amenu.entries.size(); ++i ) {
+            const auto &entry = amenu.entries[i];
+            choices[i] = { entry.txt.c_str(), "", ACTION_NULL, commands[entry.retval], entry.enabled, true };
+        }
+        const auto selected = fp3d_quick_menu::show( choices, name );
+        amenu.ret = selected ? std::stoi( selected->command ) : UILIST_CANCEL;
+    } else
+#endif
+    {
+        amenu.query();
+    }
 
     const option choice = static_cast<option>( amenu.ret );
     bool in_shell = you.has_active_mutation( trait_SHELL2 ) ||
@@ -7641,6 +7664,12 @@ void iexamine::workbench_internal( Character &you, const tripoint_bub_ms &examp,
             } else if( you.has_effect( effect_incorporeal ) ) {
                 add_msg( m_info, _( "You lack the substance to affect anything." ) );
             } else {
+#if defined(TILES) && defined(ENABLE_FP3D)
+                if( modern_workbench ) {
+                    fp3d_modern_ui::show( get_avatar(), here, false, 2, std::nullopt, here.get_abs( examp ) );
+                    break;
+                }
+#endif
                 you.craft( examp );
             }
             break;

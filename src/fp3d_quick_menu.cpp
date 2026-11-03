@@ -155,7 +155,9 @@ class wheel : public cataimgui::window
             auto *draw = ImGui::GetBackgroundDrawList();
             const auto size = ImGui::GetIO().DisplaySize;
             const auto viewport = fp3d_compositor::viewport_pixels();
-            if( background && viewport[2] > 0 && viewport[3] > 0 ) {
+            if( background && fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
+                draw->AddImage( ( ImTextureID )( intptr_t )background.get(), ImVec2( 0, 0 ), size );
+            } else if( background && viewport[2] > 0 && viewport[3] > 0 ) {
                 draw->AddImage( ( ImTextureID )( intptr_t )background.get(),
                                 ImVec2( viewport[0], viewport[1] ),
                                 ImVec2( viewport[0] + viewport[2], viewport[1] + viewport[3] ),
@@ -172,7 +174,7 @@ class wheel : public cataimgui::window
                  } ) {
                 context.register_action( action );
             }
-            while( is_open && fp3d_compositor::turn_based() ) {
+            while( is_open && fp3d_compositor::survival_menu_available() ) {
                 ui_manager::redraw();
                 if( !is_open ) {
                     break;
@@ -180,12 +182,100 @@ class wheel : public cataimgui::window
                 const auto &action = context.handle_input( 16 );
                 if( action == "QUIT" ) {
                     is_open = false;
+                } else if( !fp3d_compositor::turn_based() &&
+                           fp3d_input::modern_2d_context().input_to_action( context.get_raw_input() ) == "FP3D_ACTIONS" ) {
+                    is_open = false;
                 } else if( action == "DOWN" || action == "RIGHT" ) {
                     move_selection( 1 );
                 } else if( action == "UP" || action == "LEFT" ) {
                     move_selection( -1 );
                 } else if( action == "CONFIRM" && selected >= 0 ) {
                     choose( selected );
+                }
+            }
+            return chosen ? std::optional<entry>( options[*chosen] ) : std::nullopt;
+        }
+};
+
+class dropdown : public cataimgui::window
+{
+        std::vector<entry> options;
+        point anchor;
+        float scale;
+        int selected = 0;
+        std::optional<int> chosen;
+        bool first_frame = true;
+        void choose( int index ) {
+            if( index < 0 || index >= static_cast<int>( options.size() ) || !options[index].enabled ) {
+                return;
+            }
+            chosen = index;
+            button_action = options[index].command ? options[index].command : action_ident( options[index].action );
+            is_open = false;
+        }
+        cataimgui::bounds get_bounds() override {
+            const auto size = ImGui::GetIO().DisplaySize;
+            const float width = std::min( 260 * scale, size.x );
+            const float height = std::min( ( 16 + options.size() * 32 ) * scale, size.y );
+            return { std::clamp( static_cast<float>( anchor.x ), 0.0f, size.x - width ),
+                     std::clamp( static_cast<float>( anchor.y ), 0.0f, size.y - height ), width, height };
+        }
+        void draw_controls() override {
+            ImGui::SetWindowFontScale( scale );
+            for( int index = 0; index < static_cast<int>( options.size() ); ++index ) {
+                const auto &option = options[index];
+                ImGui::PushID( index );
+                ImGui::BeginDisabled( !option.enabled );
+                if( ImGui::Selectable( option.label, selected == index, 0, ImVec2( 0, 28 * scale ) ) ) {
+                    choose( index );
+                }
+                if( ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) ) {
+                    selected = index;
+                    ImGui::SetTooltip( "%s", option.enabled ? option.description : "需要靠近目标或满足操作条件。" );
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            // Ignore the right press that opened this list.
+            if( !first_frame && ( ImGui::IsMouseClicked( ImGuiMouseButton_Right ) ||
+                                  ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) &&
+                                    !ImGui::IsWindowHovered( ImGuiHoveredFlags_ChildWindows ) ) ) ) {
+                is_open = false;
+            }
+            first_frame = false;
+        }
+    public:
+        dropdown( const std::vector<entry> &choices, const point &position, int percent ) :
+            cataimgui::window( "地块操作", ImGuiWindowFlags_NoTitleBar ), anchor( position ),
+            scale( std::clamp( percent, 100, 150 ) / 100.0f ) {
+            for( const auto &option : choices ) {
+                if( option.visible ) { options.push_back( option ); }
+            }
+        }
+        void draw() override {
+            if( !is_open ) { return; }
+            ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .045f, .043f, .038f, 1 ) );
+            cataimgui::window::draw();
+            ImGui::PopStyleColor();
+        }
+        std::optional<entry> run() {
+            input_context context( "MODERN_2D_CONTEXT", keyboard_mode::keycode );
+            for( const char *action : { "QUIT", "CONFIRM", "UP", "DOWN", "SELECT", "MOUSE_MOVE", "ANY_INPUT" } ) {
+                context.register_action( action );
+            }
+            while( is_open && fp3d_compositor::survival_menu_available() ) {
+                ui_manager::redraw();
+                if( !is_open ) { break; }
+                const auto &action = context.handle_input( 16 );
+                if( action == "QUIT" ) { is_open = false; }
+                if( action == "CONFIRM" ) { choose( selected ); }
+                if( action == "UP" || action == "DOWN" ) {
+                    const int count = options.size();
+                    const int step = action == "UP" ? -1 : 1;
+                    for( int i = 0; i < count; ++i ) {
+                        selected = ( selected + count + step ) % count;
+                        if( options[selected].enabled ) { break; }
+                    }
                 }
             }
             return chosen ? std::optional<entry>( options[*chosen] ) : std::nullopt;
@@ -232,7 +322,7 @@ std::optional<entry> show( const std::array<entry, 8> &choices, const std::strin
     const bool has_action = std::any_of( choices.begin(), choices.end(), []( const entry &choice ) {
         return choice.visible && choice.enabled && ( choice.action != ACTION_NULL || choice.command );
     } );
-    if( !fp3d_compositor::turn_based() || !has_action ) {
+    if( !fp3d_compositor::survival_menu_available() || !has_action ) {
         return std::nullopt;
     }
     fp3d_input::world_gestures().cancel();
@@ -251,6 +341,28 @@ std::optional<entry> show( const std::array<entry, 8> &choices, const std::strin
         }
     } );
     wheel menu( choices, heading, fp3d_modern_ui::scale_percent() );
+    return menu.run();
+}
+
+std::unique_ptr<cataimgui::window> create_dropdown( const std::vector<entry> &choices,
+        const point &anchor, int scale_percent )
+{
+    return std::make_unique<dropdown>( choices, anchor, scale_percent );
+}
+
+std::optional<entry> show_dropdown( const std::vector<entry> &choices, const point &anchor )
+{
+    if( !fp3d_compositor::survival_menu_available() || choices.empty() ) { return std::nullopt; }
+    fp3d_compositor::set_input_context( "MODERN_2D_CONTEXT" );
+    auto &io = ImGui::GetIO();
+    const bool no_mouse = io.ConfigFlags & ImGuiConfigFlags_NoMouse;
+    io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    on_out_of_scope restore( [&]() {
+        if( no_mouse ) { io.ConfigFlags |= ImGuiConfigFlags_NoMouse; }
+        fp3d_compositor::set_input_context( "DEFAULTMODE" );
+        if( g ) { g->invalidate_main_ui_adaptor(); }
+    } );
+    dropdown menu( choices, anchor, fp3d_modern_ui::scale_percent() );
     return menu.run();
 }
 }

@@ -430,7 +430,16 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
     }
     if( action.kind == operation_kind::craft ) {
         std::string crafting_error;
-        if( !fp3d_crafting::start( you, action.crafting_recipe, action.crafting_batch, crafting_error ) ) {
+        std::optional<tripoint_bub_ms> position;
+        if( action.crafting_position ) {
+            position = here.get_bub( *action.crafting_position );
+            if( position->z() != you.pos_bub( here ).z() ||
+                rl_dist( *position, you.pos_bub( here ) ) > 1 ) {
+                return fail( "制作位置已无法触及，请重新打开工作台。" );
+            }
+        }
+        if( !fp3d_crafting::start( you, action.crafting_recipe, action.crafting_batch, crafting_error,
+                                 position ) ) {
             return fail( crafting_error );
         }
         return true;

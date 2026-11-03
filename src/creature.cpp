@@ -480,6 +480,11 @@ static bool majority_rule( const bool a_vote, const bool b_vote, const bool c_vo
 
 bool Creature::sees( const map &here, const Creature &critter ) const
 {
+    return sees( here, critter, false );
+}
+
+bool Creature::sees( const map &here, const Creature &critter, bool ignore_light ) const
+{
     const Character *ch = critter.as_character();
 
     const tripoint_bub_ms pos = pos_bub( here );
@@ -547,7 +552,8 @@ bool Creature::sees( const map &here, const Creature &critter ) const
     }
 
     // If we cannot see without any of the penalties below, bail now.
-    if( !sees( here, critter_pos, critter.is_avatar() ) ) {
+    if( ignore_light ? !here.sees( pos, critter_pos, MAX_VIEW_DISTANCE ) :
+        !sees( here, critter_pos, critter.is_avatar() ) ) {
         return false;
     }
 

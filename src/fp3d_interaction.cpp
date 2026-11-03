@@ -117,6 +117,24 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
                           you.sees( here, *critter );
     const auto *person = creature ? get_creature_tracker().creature_at<npc>( p ) : nullptr;
     const bool object = reachable && !creature;
+    const bool up = object && here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p );
+    const bool down = object && here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p );
+    if( up || down ) {
+        const bool standing = p == you.pos_bub( here );
+        std::array<fp3d_quick_menu::entry, 8> choices{};
+        for( auto &choice : choices ) {
+            choice.visible = false;
+        }
+        choices[0] = { "上楼", standing ? "沿楼梯上楼。" : "请先走到楼梯上。",
+                       ACTION_MOVE_UP, "FP3D_STAIRS_UP", standing && up, true };
+        choices[1] = { "下楼", standing ? "沿楼梯下楼。" : "请先走到楼梯上。",
+                       ACTION_MOVE_DOWN, "FP3D_STAIRS_DOWN", standing && down, true };
+        choices[2] = { "走到楼梯上", "走到这格楼梯，再按 E 选择上下楼。",
+                       standing ? ACTION_NULL : get_movement_action_from_delta( p - you.pos_bub( here ), iso_rotate::yes ),
+                       nullptr, !standing && here.passable( p ), !standing };
+        choices[7] = { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true, true };
+        return choices;
+    }
     const bool opens = object && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
     const bool closes = object && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
     const bool items = object && here.could_see_items( p, you ) &&
@@ -168,12 +186,113 @@ bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p, bool target
     return false;
 }
 
-std::optional<request> resolve( const std::string &command,
-                                const std::optional<fp3d_targeting::target> &candidate, avatar &you, map &here )
+std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p,
+        const avatar &you, const map &here )
 {
+    if( you.is_dead_state() || you.is_blind() || !here.inbounds( p ) || p.z() != you.posz() || !you.sees( here, p ) ) {
+        return {};
+    }
+    const bool near = square_dist( you.pos_bub( here ), p ) <= 1;
+    const bool self = p == you.pos_bub( here );
+    const auto *critter = get_creature_tracker().creature_at( p );
+    const bool creature = critter && !critter->is_avatar() && !critter->is_dead_state() && you.sees( here, *critter );
+    const auto *person = creature ? critter->as_npc() : nullptr;
+    const bool opens = here.ter( p ).obj().open || here.furn( p ).obj().open;
+    const bool closes = here.ter( p ).obj().close || here.furn( p ).obj().close;
+    const bool items = here.could_see_items( p, you ) && here.maptile_at( p ).get_item_count() > 0;
+    std::vector<fp3d_quick_menu::entry> result{
+        { "前往此处", "沿原版安全路线前往此格，危险或障碍仍会中断移动。", ACTION_NULL,
+          "MODERN_2D_TRAVEL", !self && !creature && ( here.passable( p ) || opens ) },
+    };
+    if( opens ) { result.push_back( { "打开", "打开这个门窗或容器。", ACTION_OPEN, nullptr, near } ); }
+    if( closes ) { result.push_back( { "关闭", "关闭这个门窗或容器。", ACTION_CLOSE, nullptr, near } ); }
+    if( items ) { result.push_back( { "拾取物品", "查看并拾取这格物品。", ACTION_PICKUP, nullptr,
+                                     near && here.accessible_items( p ) } ); }
+    if( person ) {
+        result.push_back( { "交谈", "与点中的人物交谈。", ACTION_CHAT, nullptr, near } );
+        if( npc_orders::can_issue( you, *person, npc_orders::kind::guard ) ) {
+            result.push_back( { "原地守卫", "让这个队友守卫当前位置。", ACTION_NULL, "FP3D_GUARD", near } );
+        }
+        if( npc_orders::can_issue( you, *person, npc_orders::kind::follow ) ) {
+            result.push_back( { "继续跟随", "让这个队友继续跟随。", ACTION_NULL, "FP3D_FOLLOW", near } );
+        }
+    }
+    if( creature ) {
+        result.push_back( { "近战攻击", "攻击点中的相邻目标；非敌对目标仍需确认。", ACTION_NULL, "FP3D_ATTACK", near } );
+    } else {
+        result.push_back( { "查看 / 搜索", "检查这个地块、家具或车辆。", ACTION_EXAMINE_AND_PICKUP, nullptr, near } );
+        if( here.is_bashable( p ) ) {
+            result.push_back( { "砸毁", "按原版规则砸击这个物体。", ACTION_SMASH, nullptr, near && !self } );
+        }
+    }
+    if( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ) {
+        result.push_back( { "上楼", "先站到这格楼梯上，再上楼。", ACTION_MOVE_UP, nullptr, self } );
+    }
+    if( here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) ) {
+        result.push_back( { "下楼", "先站到这格楼梯上，再下楼。", ACTION_MOVE_DOWN, nullptr, self } );
+    }
+    return result;
+}
+
+std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
+        const tripoint_bub_ms &p, avatar &you, map &here )
+{
+    const auto current = context_2d_entries( p, you, here );
+    const auto matching = std::find_if( current.begin(), current.end(), [&]( const auto &entry ) {
+        return entry.enabled && entry.action == choice.action &&
+               std::string( entry.command ? entry.command : "" ) == ( choice.command ? choice.command : "" );
+    } );
+    if( matching == current.end() ) { return std::nullopt; }
+    const std::string command = choice.command ? choice.command : "";
+    if( command == "MODERN_2D_TRAVEL" ) {
+        if( !g || fp3d_input::vehicle_controls() ) { return std::nullopt; }
+        const auto route = g->safe_route_to( you, p, 0, []( const std::string &message ) { add_msg( message ); } );
+        if( !route || route->empty() ) { return std::nullopt; }
+        you.set_destination( *route );
+        const auto action = you.get_next_auto_move_direction();
+        if( action == ACTION_NULL ) { you.clear_destination(); return std::nullopt; }
+        return request{ action };
+    }
+    if( command == "FP3D_ATTACK" ) {
+        return resolve( command, fp3d_targeting::target{ you.pos_abs(), here.get_abs( p ),
+                        fp3d_targeting::kind::creature, "" }, you, here );
+    }
+    if( command == "FP3D_GUARD" || command == "FP3D_FOLLOW" ) {
+        const auto *person = get_creature_tracker().creature_at<npc>( p );
+        if( !person ) { return std::nullopt; }
+        fp3d_inventory::operation operation;
+        operation.kind = fp3d_inventory::operation_kind::follower_order;
+        operation.talking_npc_id = person->getID().get_value();
+        operation.destination_tile = here.get_abs( p );
+        operation.follower_command = command == "FP3D_GUARD" ? npc_orders::kind::guard : npc_orders::kind::follow;
+        fp3d_inventory::stage( std::move( operation ) );
+        return request{ ACTION_ITEMACTION };
+    }
+    return request{ choice.action, p, choice.action == ACTION_PICKUP, choice.action == ACTION_PICKUP };
+}
+
+std::optional<request> resolve( const std::string &command,
+                                const std::optional<fp3d_targeting::target> &selected_target, avatar &you, map &here )
+{
+    auto candidate = selected_target;
+    if( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) {
+        const auto standing = you.pos_bub( here );
+        if( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, standing ) ||
+            here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, standing ) ) {
+            const auto choices = candidate ? context_entries( *candidate, you, here ) :
+                                 std::array<fp3d_quick_menu::entry, 8>{};
+            const bool actionable = std::any_of( choices.begin(), choices.end(), []( const auto &choice ) {
+                return choice.visible && choice.enabled && ( choice.action != ACTION_NULL || choice.command );
+            } );
+            if( !actionable ) {
+                candidate = fp3d_targeting::target{ you.pos_abs(), you.pos_abs(),
+                            fp3d_targeting::kind::terrain, here.ter( standing ).id().str() };
+            }
+        }
+    }
     if( command == "FP3D_ACTIONS" ) {
         const auto choice = fp3d_quick_menu::show();
-        if( !choice || !fp3d_compositor::turn_based() ) {
+        if( !choice || !fp3d_compositor::survival_menu_available() ) {
             return std::nullopt;
         }
         if( choice->command ) {
@@ -246,6 +365,14 @@ std::optional<request> resolve( const std::string &command,
         return std::nullopt;
     }
     const auto p = here.get_bub( candidate->position );
+    if( command == "FP3D_STAIRS_UP" || command == "FP3D_STAIRS_DOWN" ) {
+        const bool up = command == "FP3D_STAIRS_UP";
+        if( p != you.pos_bub( here ) || fp3d_input::vehicle_controls() ||
+            !here.has_flag( up ? ter_furn_flag::TFLAG_GOES_UP : ter_furn_flag::TFLAG_GOES_DOWN, p ) ) {
+            return std::nullopt;
+        }
+        return request{ up ? ACTION_MOVE_UP : ACTION_MOVE_DOWN, std::nullopt, false };
+    }
     if( command == "FP3D_ATTACK" ) {
         if( fp3d_input::vehicle_controls() ) {
             fp3d_input::world_gestures().cancel();
@@ -282,14 +409,20 @@ std::optional<request> resolve( const std::string &command,
         const int npc_id = can_chat ? npc->getID().get_value() : -1;
         action_id action = can_chat ? ACTION_CHAT :
                            opens ? ACTION_OPEN : items ? ACTION_PICKUP : closes ? ACTION_CLOSE : ACTION_EXAMINE_AND_PICKUP;
-        if( command == "FP3D_INTERACT_LONG" ) {
+        const bool stairs = !can_chat && ( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ||
+                                           here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) );
+        if( command == "FP3D_INTERACT_LONG" || stairs ) {
             const auto choice = fp3d_quick_menu::show( context_entries( *candidate, you, here ),
-                                "目标操作" );
+                                stairs ? "楼梯" : "目标操作" );
             if( !choice || !choice->enabled || !valid( *candidate, you, here ) ||
                 !fp3d_compositor::turn_based() ) {
                 return std::nullopt;
             }
             if( choice->command ) {
+                if( stairs && ( std::string( choice->command ) == "FP3D_STAIRS_UP" ||
+                                std::string( choice->command ) == "FP3D_STAIRS_DOWN" ) ) {
+                    return resolve( choice->command, candidate, you, here );
+                }
                 const std::string order_command = choice->command;
                 if( order_command != "FP3D_GUARD" && order_command != "FP3D_FOLLOW" ) {
                     return std::nullopt;
@@ -304,6 +437,12 @@ std::optional<request> resolve( const std::string &command,
                 return request{ ACTION_ITEMACTION, std::nullopt, false };
             }
             action = choice->action;
+            const auto current_choices = context_entries( *candidate, you, here );
+            if( stairs && std::none_of( current_choices.begin(), current_choices.end(), [&]( const auto &entry ) {
+                return entry.visible && entry.enabled && entry.action == action && action != ACTION_NULL;
+            } ) ) {
+                return std::nullopt;
+            }
             if( action == ACTION_NULL ) {
                 return std::nullopt;
             }

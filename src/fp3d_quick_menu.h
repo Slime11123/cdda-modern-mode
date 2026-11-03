@@ -6,6 +6,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
+#include "point.h"
 #include "action.h"
 namespace cataimgui
 {
@@ -30,6 +32,10 @@ std::unique_ptr<cataimgui::window> create( const std::array<entry, 8> &choices,
 // Drawing/selection only; the caller dispatches the returned native request.
 std::optional<entry> show();
 std::optional<entry> show( const std::array<entry, 8> &choices, const std::string &heading );
+// Cursor-anchored list; all actions are returned to the native dispatcher.
+std::unique_ptr<cataimgui::window> create_dropdown( const std::vector<entry> &choices,
+        const point &anchor, int scale_percent = 100 );
+std::optional<entry> show_dropdown( const std::vector<entry> &choices, const point &anchor );
 }
 #endif
 #endif
