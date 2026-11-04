@@ -400,7 +400,7 @@ draw_statistics statistics()
 
 void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
            float aspect, fp3d_camera::offset camera_offset, const std::optional<blueprint> &preview,
-           bool interactable, float swing )
+           bool interactable, float swing, const std::optional<fp3d_targeting::target> &aim )
 {
     const auto started = std::chrono::steady_clock::now();
     glMatrixMode( GL_PROJECTION );
@@ -792,16 +792,52 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         const float z = offset.y();
         glPushMatrix();
         glTranslatef( 0, offset.z() * fp3d_camera::floor_height + image.elevation, 0 );
-        glBegin( GL_QUADS );
-        glTexCoord2f( uv.left, uv.bottom );
-        glVertex3f( x - dx, .04f, z - dz );
-        glTexCoord2f( uv.right, uv.bottom );
-        glVertex3f( x + dx, .04f, z + dz );
-        glTexCoord2f( uv.right, uv.top );
-        glVertex3f( x + dx, image.height, z + dz );
-        glTexCoord2f( uv.left, uv.top );
-        glVertex3f( x - dx, image.height, z - dz );
-        glEnd();
+        const auto quad = [&]( float sideways, float up ) {
+            const float cx = x + right_x * sideways;
+            const float cz = z + right_z * sideways;
+            glBegin( GL_QUADS );
+            glTexCoord2f( uv.left, uv.bottom );
+            glVertex3f( cx - dx, .04f + up, cz - dz );
+            glTexCoord2f( uv.right, uv.bottom );
+            glVertex3f( cx + dx, .04f + up, cz + dz );
+            glTexCoord2f( uv.right, uv.top );
+            glVertex3f( cx + dx, image.height + up, cz + dz );
+            glTexCoord2f( uv.left, uv.top );
+            glVertex3f( cx - dx, image.height + up, cz - dz );
+            glEnd();
+        };
+        using kind = fp3d_targeting::kind;
+        const auto target_kind = image.kind == fp3d_snapshot::sprite_kind::item ? kind::item : kind::creature;
+        if( aim && image.kind != fp3d_snapshot::sprite_kind::held_item &&
+            aim->type == target_kind && aim->position == image.position && aim->id == image.id ) {
+            GLint viewport[4];
+            glGetIntegerv( GL_VIEWPORT, viewport );
+            const float distance = right_z * ( x - camera_offset.x ) - right_x * ( z - camera_offset.y );
+            const float edge = 3 * fp3d_camera::horizontal_tangent() * distance / std::max( 1, viewport[2] );
+            // Preserve the tileset's alpha while painting white, then draw the
+            // unshifted sprite over the interior. Opaque world depth still clips it.
+            glColor3f( 1, 1, 1 );
+            glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE );
+            glTexEnvi( GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_REPLACE );
+            glTexEnvi( GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PRIMARY_COLOR );
+            glTexEnvi( GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR );
+            glTexEnvi( GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE );
+            glTexEnvi( GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_TEXTURE );
+            glTexEnvi( GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, GL_SRC_ALPHA );
+            glDepthMask( GL_FALSE );
+            quad( -edge, 0 );
+            quad( edge, 0 );
+            quad( 0, -edge );
+            quad( 0, edge );
+            glDepthMask( GL_TRUE );
+            glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+            if( material ) {
+                glColor3f( .9f, .9f, .9f );
+            } else {
+                glColor3f( .8f, .25f, .7f );
+            }
+        }
+        quad( 0, 0 );
         glPopMatrix();
     };
     const auto storage_item = [&]( const fp3d_snapshot::sprite &image ) {
@@ -941,6 +977,37 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     glDisable( GL_COLOR_MATERIAL );
     glDisable( GL_TEXTURE_2D );
     glDisable( GL_LIGHTING );
+    if( aim && aim->outline ) {
+        const auto &outline = *aim->outline;
+        const auto vertex = [&]( const std::array<float, 3> &corner, float height ) {
+            const float x = corner[0] - camera_offset.x;
+            const float y = corner[1] + height - fp3d_camera::eye_height;
+            const float z = corner[2] - camera_offset.y;
+            // Move a few millimetres along the view ray to clear coplanar depth
+            // without expanding the outline or drawing through other surfaces.
+            const float bias = .006f / std::max( .05f, std::hypot( x, y, z ) );
+            glVertex3f( corner[0] - x * bias, corner[1] + height - y * bias, corner[2] - z * bias );
+        };
+        glDepthMask( GL_FALSE );
+        glLineWidth( 2 );
+        glColor3f( 1, 1, 1 );
+        glBegin( GL_LINES );
+        for( size_t i = 0; i < outline.corners.size(); ++i ) {
+            const auto &corner = outline.corners[i];
+            const auto &next = outline.corners[( i + 1 ) % outline.corners.size()];
+            vertex( corner, 0 );
+            vertex( next, 0 );
+            if( outline.height > 0 ) {
+                vertex( corner, outline.height );
+                vertex( next, outline.height );
+                vertex( corner, 0 );
+                vertex( corner, outline.height );
+            }
+        }
+        glEnd();
+        glLineWidth( 1 );
+        glDepthMask( GL_TRUE );
+    }
     glDisable( GL_DEPTH_TEST );
     glMatrixMode( GL_PROJECTION );
     glLoadIdentity();

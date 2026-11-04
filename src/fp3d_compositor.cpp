@@ -487,15 +487,20 @@ fp3d_hud::data hud_data()
            latest_2d_hud.value_or( fp3d_hud::data{} );
 }
 
-bool interaction_available()
+static bool interaction_available( const std::optional<fp3d_targeting::target> &target )
 {
     if( !turn_based() || !draw_permitted || construction_preview ) { return false; }
-    const auto target = interaction_target();
     if( !target || target->position.z() != latest_scene->origin.z() ||
         square_dist( target->position, latest_scene->origin ) > 1 ) { return false; }
     return std::find( latest_scene->interactable.begin(), latest_scene->interactable.end(),
                       target->position ) != latest_scene->interactable.end();
 }
+bool interaction_available()
+{
+    return turn_based() && draw_permitted && !construction_preview &&
+           interaction_available( interaction_target() );
+}
+
 std::string interaction_prompt()
 {
     if( !interaction_available() ) { return {}; }
@@ -564,10 +569,8 @@ SDL_Texture_Ptr copy_view()
     return image; // GPU-to-GPU snapshot; never reads pixels back to the CPU.
 }
 
-std::optional<fp3d_targeting::target> interaction_target()
+static std::optional<fp3d_targeting::target> interaction_target( fp3d_camera::offset offset )
 {
-    if( !latest_scene ) { return std::nullopt; }
-    const auto offset = camera.relative_to( latest_scene->origin, SDL_GetTicks() );
     // The reticle, prompt and HUD share the same pure snapshot query. Avoid
     // scanning all scene cells again while the camera and snapshot are unchanged.
     static unsigned generation = 0;
@@ -584,6 +587,12 @@ std::optional<fp3d_targeting::target> interaction_target()
         previous_offset = offset;
     }
     return cached;
+}
+
+std::optional<fp3d_targeting::target> interaction_target()
+{
+    return latest_scene ? interaction_target( camera.relative_to( latest_scene->origin,
+                          SDL_GetTicks() ) ) : std::nullopt;
 }
 
 float heading()
@@ -845,10 +854,12 @@ void compose()
                 held_swing.start( SDL_GetTicks() );
                 swing_pending = false;
             }
+            const auto offset = camera.relative_to( latest_scene->origin, SDL_GetTicks() );
+            const auto aim = draw_permitted ? interaction_target( offset ) : std::nullopt;
             fp3d_scene::draw( *latest_scene, yaw, pitch,
                               static_cast<float>( texture_width ) / texture_height,
-                              camera.relative_to( latest_scene->origin, SDL_GetTicks() ), construction_preview,
-                              interaction_available(), held_swing.amount( SDL_GetTicks() ) );
+                              offset, construction_preview, interaction_available( aim ),
+                              held_swing.amount( SDL_GetTicks() ), aim );
             fp3d_materials::unbind();
         } else {
             draw_cube();

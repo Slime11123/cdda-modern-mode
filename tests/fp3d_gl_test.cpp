@@ -136,6 +136,31 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             return pixels;
         };
         const auto baseline = render();
+        {
+            const auto white_pixels = []( const auto &pixels ) {
+                return std::count( pixels.begin(), pixels.end(), 0xffffffffu );
+            };
+            const auto wall = fp3d_compositor::interaction_target();
+            REQUIRE( wall );
+            CHECK( wall->id == "t_wall" );
+            CHECK( white_pixels( baseline ) > 20 );
+
+            fp3d_snapshot::sprite item;
+            item.kind = fp3d_snapshot::sprite_kind::item;
+            item.id = "rock";
+            item.height = 1.8f;
+            item.position = tripoint_abs_ms( 0, -3, 0 );
+            scene.sprites.push_back( item );
+            CHECK( render() == baseline );
+
+            scene.sprites.back().position = tripoint_abs_ms( 0, -1, 0 );
+            CHECK( white_pixels( render() ) > 20 );
+            const auto sprite = fp3d_compositor::interaction_target();
+            REQUIRE( sprite );
+            CHECK( sprite->type == fp3d_targeting::kind::item );
+            CHECK( sprite->id == "rock" );
+            scene.sprites.clear();
+        }
         if( pack == "UNDEAD_PEOPLE_BASE" ) {
             // Exercise the actual SDL text/opacity path and renderer state,
             // including expiry, against a rendered world in a hidden window.

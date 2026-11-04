@@ -2,6 +2,7 @@
 #ifndef CATA_SRC_FP3D_TARGETING_H
 #define CATA_SRC_FP3D_TARGETING_H
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <array>
 #include <optional>
 #include <string>
 #include "coordinates.h"
@@ -13,11 +14,17 @@ struct scene_snapshot;
 namespace fp3d_targeting
 {
 enum class kind { terrain, creature, item, furniture };
+struct edge_outline {
+    // Vertices in renderer order (east, height, south), relative to the scene origin.
+    std::array<std::array<float, 3>, 4> corners;
+    float height = 0;
+};
 struct target {
     tripoint_abs_ms origin;
     tripoint_abs_ms position;
     kind type = kind::terrain;
     std::string id;
+    std::optional<edge_outline> outline = std::nullopt;
 };
 // Snapshot-only selection along the camera ray, at most six map tiles.
 // Remembered/enclosing surfaces block selection but cannot become targets.

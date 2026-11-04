@@ -86,19 +86,27 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         const float x = p.x();
         const float y = p.y();
         const float z = p.z() * fp3d_camera::floor_height;
-        const auto accept = [&]( const std::optional<float> &hit ) {
+        const auto accept = [&]( const std::optional<float> &hit, const edge_outline &outline,
+                                 kind type = kind::terrain ) {
             if( hit && *hit >= fp3d_camera::near_clip && *hit <= reach && *hit < nearest ) {
                 nearest = *hit;
                 result.reset();
                 if( tile->known == fp3d_snapshot::knowledge::visible && !tile->exterior_only ) {
-                    result = target{ scene.origin, tile->position, kind::terrain, tile->terrain };
+                    result = target{ scene.origin, tile->position, type,
+                                     type == kind::furniture ? tile->furniture->id : tile->terrain, outline };
                 }
             }
         };
-        const auto box = [&]( float dx, float dy, float width, float depth, float bottom, float top ) {
-            accept( intersect( eye, direction,
-            { x + dx - width / 2, y + dy - depth / 2, z + bottom },
-            { x + dx + width / 2, y + dy + depth / 2, z + top } ) );
+        const auto box = [&]( float dx, float dy, float width, float depth, float bottom, float top,
+                              kind type = kind::terrain, bool flat = false ) {
+            const float left = x + dx - width / 2;
+            const float right = x + dx + width / 2;
+            const float north = y + dy - depth / 2;
+            const float south = y + dy + depth / 2;
+            const float base = z + ( flat ? top : bottom );
+            accept( intersect( eye, direction, { left, north, z + bottom }, { right, south, z + top } ),
+            { {{ { left, base, north }, { right, base, north }, { right, base, south },
+                    { left, base, south } }}, flat ? 0 : top - bottom }, type );
         };
         if( tile->furniture ) {
             const unsigned facing = fp3d_furniture::facing( tile->furniture->shape, {
@@ -109,16 +117,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             } );
             for( const auto &original : fp3d_furniture::parts( tile->furniture->shape ) ) {
                 const auto part = fp3d_furniture::rotated( original, facing );
-                const auto hit = intersect( eye, direction,
-                { x + part.x - part.width / 2, y + part.z - part.depth / 2, z + part.bottom },
-                { x + part.x + part.width / 2, y + part.z + part.depth / 2, z + part.top } );
-                if( hit && *hit >= fp3d_camera::near_clip && *hit <= reach && *hit < nearest ) {
-                    nearest = *hit;
-                    result.reset();
-                    if( tile->known == fp3d_snapshot::knowledge::visible && !tile->exterior_only ) {
-                        result = target{ scene.origin, tile->position, kind::furniture, tile->furniture->id };
-                    }
-                }
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, kind::furniture );
             }
         }
         if( tile->vegetation_height > 0 ) {
@@ -135,7 +134,11 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 const float across = eye[0] + distance * direction[0] - x;
                 const float up = eye[2] + distance * direction[2] - z;
                 if( std::abs( across ) <= width / 2 && up >= .015f && up <= height + .015f ) {
-                    accept( distance );
+                    const float half = width / 2;
+                    accept( distance, { {{ { x - half, z + .015f, y - diagonal * half },
+                            { x + half, z + .015f, y + diagonal * half },
+                            { x + half, z + height + .015f, y + diagonal * half },
+                            { x - half, z + height + .015f, y - diagonal * half } }} } );
                 }
             }
         }
@@ -149,14 +152,16 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 const float distance = ( z + slope * ( .5f - eye[1] + y ) - eye[2] ) / denominator;
                 if( std::abs( eye[0] + distance * direction[0] - x ) <= .5f &&
                     std::abs( eye[1] + distance * direction[1] - y ) <= .5f ) {
-                    accept( distance );
+                    accept( distance, { {{ { x - .5f, z + slope, y - .5f },
+                            { x + .5f, z + slope, y - .5f }, { x + .5f, z, y + .5f },
+                            { x - .5f, z, y + .5f } }} } );
                 }
             }
         }
         if( tile->floor_present && !tile->is_ramp ) {
             const auto *below = tile->goes_down ? cell_at( tile->position + tripoint_rel_ms::below ) : nullptr;
             const bool opening = below && below->goes_up;
-            box( opening ? -.25f : 0, 0, opening ? .5f : 1, 1, -.08f, 0 );
+            box( opening ? -.25f : 0, 0, opening ? .5f : 1, 1, -.08f, 0, kind::terrain, true );
         }
         const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
         if( tile->ceiling_present && !upper_floor_surface ) {

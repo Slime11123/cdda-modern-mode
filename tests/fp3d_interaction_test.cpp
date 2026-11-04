@@ -197,6 +197,9 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         const auto ground = fp3d_targeting::ray( scene, 0, 45 );
         REQUIRE( ground );
         CHECK( ground->position == scene.origin + tripoint_rel_ms( 0, -2, 0 ) );
+        REQUIRE( ground->outline );
+        CHECK( ground->outline->height == 0 );
+        CHECK( ground->outline->corners.front() == std::array<float, 3>{ -.5f, 0, -2.5f } );
         const auto feet = fp3d_targeting::ray( scene, 0, 80 );
         REQUIRE( feet );
         CHECK( feet->position == scene.origin );
@@ -314,6 +317,9 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         const auto surface = fp3d_targeting::ray( scene, 0, 0 );
         REQUIRE( surface );
         CHECK( surface->position == scene.origin + tripoint_rel_ms::north );
+        REQUIRE( surface->outline );
+        CHECK( surface->outline->corners.front()[1] == fp3d_camera::floor_height );
+        CHECK( surface->outline->corners.back()[1] == 0 );
         CHECK_FALSE( fp3d_targeting::ray( scene, 0, 0, { .8f, 0 } ) );
         scene.cells.front().is_ramp = false;
         const auto beyond = fp3d_targeting::ray( scene, 0, 0 );
