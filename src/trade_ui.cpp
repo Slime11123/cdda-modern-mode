@@ -177,7 +177,7 @@ void trade_ui::pushevent( event const &ev )
 trade_ui::trade_result_t trade_ui::perform_trade()
 {
 #if defined(TILES) && defined(ENABLE_FP3D)
-    if( fp3d_compositor::turn_based() ) {
+    if( fp3d_compositor::survival_menu_available() ) {
         _header_ui.on_redraw( []( const ui_adaptor & ) {} );
         for( auto &pane : _panes ) {
             pane->get_ui()->on_redraw( []( const ui_adaptor & ) {} );

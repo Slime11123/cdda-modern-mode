@@ -776,7 +776,8 @@ bool avatar_action::can_fire_weapon( avatar &you, const map &m, const item &weap
     return false;
 }
 
-void avatar_action::fire_wielded_weapon( avatar &you )
+void avatar_action::fire_wielded_weapon( avatar &you,
+                                        const std::optional<tripoint_abs_ms> &initial_target )
 {
     const item_location weapon = you.get_wielded_item();
 
@@ -798,7 +799,9 @@ void avatar_action::fire_wielded_weapon( avatar &you )
         return;
     }
 
-    you.assign_activity( aim_activity_actor::use_wielded() );
+    aim_activity_actor aim = aim_activity_actor::use_wielded();
+    aim.initial_target = initial_target;
+    you.assign_activity( aim );
 }
 
 void avatar_action::fire_ranged_mutation( Character &you, const item &fake_gun )

@@ -7635,7 +7635,7 @@ void iexamine::workbench_internal( Character &you, const tripoint_bub_ms &examp,
     }
 
 #if defined(TILES) && defined(ENABLE_FP3D)
-    const bool modern_workbench = you.is_avatar() && fp3d_compositor::turn_based();
+    const bool modern_workbench = you.is_avatar() && fp3d_compositor::survival_menu_available();
     if( modern_workbench ) {
         std::array<fp3d_quick_menu::entry, 8> choices{};
         const char *commands[] = { "0", "1", "2", "3", "4", "5" };

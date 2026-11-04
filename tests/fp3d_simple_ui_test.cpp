@@ -223,6 +223,8 @@ TEST_CASE( "fp3d_ability_controls_use_character_state_and_reject_unavailable_req
 
 TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_simple_ui]" )
 {
+    const bool two_d = GENERATE( false, true );
+    CAPTURE( two_d );
     REQUIRE( fp3d_compositor::requested() );
     REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
     on_out_of_scope quit_video( []() {
@@ -257,10 +259,16 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     REQUIRE( ImGui::GetIO().Fonts->AddFontFromFileTTF( "data/font/unifont.ttf", 18, nullptr,
              ImGui::GetIO().Fonts->GetGlyphRangesChineseFull() ) );
     fp3d_compositor::attach( renderer.get(), window.get() );
+    fp3d_compositor::set_input_context( "MAIN_MENU" );
+    fp3d_compositor::apply_modes( !two_d, true );
+    CHECK_FALSE( fp3d_simple_ui::active() );
     fp3d_compositor::set_input_context( "DEFAULTMODE" );
-    fp3d_compositor::publish( fp3d_snapshot::scene_snapshot{} );
-    fp3d_compositor::apply_modes( true, true );
+    if( !two_d ) {
+        fp3d_compositor::publish( fp3d_snapshot::scene_snapshot{} );
+    }
+    fp3d_compositor::set_input_context( "TEST_MODAL" );
     REQUIRE( fp3d_simple_ui::active() );
+    CHECK( fp3d_compositor::turn_based() == !two_d );
     clear_map();
     clear_avatar();
     avatar &you = get_avatar();
@@ -305,8 +313,9 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
             REQUIRE( picture );
             REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, picture->format->format,
                                            picture->pixels, picture->pitch ) == 0 );
+            const std::string filename = ( two_d ? "2d-" : "" ) + name + ".png";
             CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
-                                                 ( name + ".png" ) ).u8string().c_str() ) == 0 );
+                                                 filename ).u8string().c_str() ) == 0 );
         }
     };
 
@@ -583,7 +592,7 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         auto adapted = fp3d_simple_ui::create_panel( "适配窗口", [&]( cataimgui::window & panel ) {
             ++draws;
             CHECK( ImGui::GetStyleColorVec4( ImGuiCol_Text ).x == 1.f );
-            CHECK( ImGui::GetStyleColorVec4( ImGuiCol_WindowBg ).w < 1.f );
+            CHECK( ImGui::GetStyleColorVec4( ImGuiCol_WindowBg ).w == Approx( two_d ? 1.f : .72f ) );
             panel.action_button( "CONFIRM", "执行原版操作" );
         }, [&]() {
             return visible;
@@ -621,22 +630,74 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         }
         SDL_SetWindowSize( window.get(), 1280, 720 );
     }
-    for( const bool modern : {
-             false, true
-         } ) {
-        fp3d_compositor::apply_modes( true, modern );
-        CHECK( fp3d_simple_ui::active() );
-        CHECK( fp3d_simple_ui::text_color( c_black ).x == Approx( .88f ) );
-        nc_color white = c_white;
-        nc_color red = c_red;
-        CHECK( fp3d_simple_ui::text_color( c_white ).x == cataimgui::imvec4_from_color( white ).x );
-        CHECK( fp3d_simple_ui::text_color( c_red ).y == cataimgui::imvec4_from_color( red ).y );
-        fp3d_compositor::apply_modes( false, modern );
-        CHECK_FALSE( fp3d_simple_ui::active() );
-        nc_color black = c_black;
-        CHECK( fp3d_simple_ui::text_color( c_black ).x == cataimgui::imvec4_from_color( black ).x );
+    CHECK( fp3d_simple_ui::text_color( c_black ).x == Approx( .88f ) );
+    nc_color white = c_white;
+    nc_color red = c_red;
+    CHECK( fp3d_simple_ui::text_color( c_white ).x == cataimgui::imvec4_from_color( white ).x );
+    CHECK( fp3d_simple_ui::text_color( c_red ).y == cataimgui::imvec4_from_color( red ).y );
+    fp3d_compositor::apply_modes( !two_d, false );
+    CHECK( fp3d_simple_ui::active() == !two_d );
+    fp3d_compositor::apply_modes( false, false );
+    CHECK_FALSE( fp3d_simple_ui::active() );
+    nc_color black = c_black;
+    CHECK( fp3d_simple_ui::text_color( c_black ).x == cataimgui::imvec4_from_color( black ).x );
+    {
         const fp3d_simple_ui::scoped_theme unchanged;
         CHECK( GImGui->ColorStack.Size == colors );
+    }
+    fp3d_compositor::apply_modes( false, true );
+    CHECK( fp3d_simple_ui::active() );
+    fp3d_compositor::set_input_context( "MAIN_MENU" );
+    fp3d_compositor::set_input_context( "TEST_MODAL" );
+    CHECK_FALSE( fp3d_simple_ui::active() );
+    {
+        fp3d_compositor::apply_modes( true, true );
+        fp3d_compositor::set_input_context( "UILIST" );
+        REQUIRE( fp3d_compositor::turn_based() );
+        SDL_Texture_Ptr background_layer( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
+                                          SDL_TEXTUREACCESS_TARGET, 1280, 720 ) );
+        REQUIRE( background_layer );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), background_layer.get() ) == 0 );
+        REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 40, 80, 120, 255 ) == 0 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        int marker_x = 24;
+        auto menu = fp3d_simple_ui::create_panel( "主菜单", [&]( cataimgui::window & ) {
+            const float x = marker_x;
+            ImGui::GetForegroundDrawList()->AddRectFilled( ImVec2( x, 12 ), ImVec2( x + 20, 32 ),
+                    IM_COL32( 240, 20, 20, 128 ) );
+            ImGui::TextUnformatted( "菜单项" );
+        } );
+        const auto present = [&]() {
+            REQUIRE( SDL_SetRenderTarget( renderer.get(), nullptr ) == 0 );
+            REQUIRE( SDL_RenderCopy( renderer.get(), background_layer.get(), nullptr, nullptr ) == 0 );
+            imclient->present_overlay();
+        };
+        const auto pixel = [&]( int x ) {
+            const SDL_Rect point{ x, 20, 1, 1 };
+            std::uint32_t value = 0;
+            REQUIRE( SDL_RenderReadPixels( renderer.get(), &point, SDL_PIXELFORMAT_RGBA8888,
+                                          &value, sizeof( value ) ) == 0 );
+            return value;
+        };
+        constexpr std::uint32_t backdrop = 0x285078ffu;
+        ui_manager::redraw();
+        ui_manager::redraw();
+        REQUIRE( SDL_GetRenderTarget( renderer.get() ) == background_layer.get() );
+        CHECK( pixel( 30 ) == backdrop );
+        present();
+        CHECK( ( pixel( 30 ) >> 24 ) == Approx( 140 ).margin( 2 ) );
+
+        marker_x = 104;
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), background_layer.get() ) == 0 );
+        ui_manager::redraw();
+        present();
+        CHECK( pixel( 30 ) == backdrop );
+        CHECK( pixel( 110 ) != backdrop );
+
+        menu.reset();
+        present();
+        CHECK( pixel( 110 ) == backdrop );
+        fp3d_compositor::set_input_context( "DEFAULTMODE" );
     }
     CHECK( calendar::turn == before_time );
     CHECK( rng_get_engine() == before_rng );

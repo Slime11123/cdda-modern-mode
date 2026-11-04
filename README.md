@@ -1,83 +1,68 @@
 # CDDA Modern Mode
 
-[简体中文](README.zh-CN.md) · [Development status](docs/DEVELOPMENT_STATUS.md) · [Upstream CDDA](https://github.com/CleverRaven/Cataclysm-DDA)
+[简体中文](README.zh-CN.md) · [Releases & downloads](https://github.com/Slime11123/cdda-modern-mode/releases) · [Development status](docs/DEVELOPMENT_STATUS.md) · [Upstream CDDA](https://github.com/CleverRaven/Cataclysm-DDA)
 
-**CDDA Modern Mode** is an unofficial modernization project based on **Cataclysm: Dark Days Ahead (CDDA) 0.I-1 / Ito-1**. It explores first-person 3D presentation, an independent modern 2D control mode, and mouse-friendly interfaces while retaining CDDA's original turn-based survival systems, action-point accounting, combat, world simulation, and saves.
+**CDDA Modern Mode** is an unofficial modernization project based on **Cataclysm: Dark Days Ahead (CDDA) 0.I-1 / Ito-1**. It adds experimental first-person 3D presentation, modern 2D controls, and mouse-friendly interfaces while preserving the original game's turn-based world, action-point costs, combat, and save mechanics.
 
-> **Status: development preview | Updated November 3, 2026.** This repository primarily provides source code and technical notes. There is no fully validated standalone Windows release yet. The project is not affiliated with or endorsed by the upstream CDDA team.
+> **Status: experimental Windows preview (November 4, 2026).** Development builds may have crashes, compatibility issues, and inconsistent performance. This is not an official CDDA product, and full manual gameplay validation is still in progress.
 
-## Features in development
+## Download and play
 
-| Area | Current implementation |
+Visit the [Releases page](https://github.com/Slime11123/cdda-modern-mode/releases) to see whether a Windows ZIP preview is available. Choose an asset labeled **Windows-x64**. GitHub's automatically generated **Source code** archives are *not* ready-to-play Windows builds.
+
+1. **Extract the entire ZIP** to a writable folder outside `Program Files`. Do not launch the executable from inside the ZIP.
+2. Double-click `Play-CDDA-Modern-Mode.cmd`. Keep the executable, DLLs, `data/`, and `gfx/` folders together.
+3. Create a new world and character in-game. Saves and settings are stored under the extracted `user/` folder; back them up before upgrading.
+4. Press **F5 or F6** to open the unified settings menu. Select the 2D/3D view, classic/modern controls, and classic sidebar/modern HUD independently, then apply and save.
+
+The first public ZIP uses the licensed assets included with the upstream-derived source tree; it does not bundle separately downloaded third-party tilesets. Please report issues in [GitHub Issues](https://github.com/Slime11123/cdda-modern-mode/issues).
+
+## Features
+
+| Area | Development implementation |
 | --- | --- |
-| **Three modes** | Switch between classic 2D, modern-controls 2D, and first-person 3D. Classic 2D retains native controls, while the other two modes use distinct keybinding profiles. |
-| **Modern 2D** | WASD world movement and the integrated Tab survival panel; 360° smooth mouse-directed map panning outside a circular dead zone, automatically returning to center and disabled at the widest zoom level. |
-| **First-person 3D** | Terrain, multi-floor buildings, stairs, ramps, doors/windows, sky, vegetation, and visible entities, combining world geometry with the selected tileset's materials. |
-| **Furniture and storage** | Basic 3D tables, chairs, beds, bed frames, crates, cupboards, lockers, bookcases, and shelving; selected furniture uses face-specific textures and native item-visibility rules. |
-| **Interaction** | Target reticle and hints, short/hold-E actions and context wheel, Q action wheel, aimed melee and smashing, plus native stairs movement entries. |
-| **Survival interface** | Equipment, inventory/pockets, character status, crafting, construction, map, missions, nearby visible people, and more; relevant modern panels are shared by modern 2D and 3D. |
-| **Crafting and building** | Recipe categories/search/favorites, batch crafting, material/tool information; workbench-specific crafting panel and previews for selected furniture, stairs, and ramps. |
-| **NPCs** | Mouse dialogue with tileset portraits, two-column trade interface, and selected native guard/follow commands. Native dialogue effects and trading rules remain in charge. |
-| **HUD and presentation** | 3D HUD, interaction reticle, held-item swing, introductory character overlay; independently selectable classic sidebar or modern HUD. |
-| **Native mechanics** | 3D rendering does not replace native damage, AP, turn processing, or save rules. Actions are delegated to original game logic wherever applicable. |
+| **Independent view, controls, and HUD** | Unified F5/F6 settings for 2D/3D presentation, classic/modern bindings, and sidebar/modern HUD |
+| **Modern 2D** | WASD, smooth 360° circular camera panning, integrated Tab survival menu, map right-click context menu, and Q action wheel; shared workbench and NPC interfaces |
+| **First-person 3D** | Terrain, multi-floor buildings, stairs/ramps, sky and distant scenery, furniture, visible entities, and materials from the selected tileset |
+| **Interaction and combat** | Target reticle/outline, E context wheel, Q action wheel, aimed melee/smash, and native confirmations and safety checks |
+| **Survival interface** | Inventory/pockets, equipment, health, crafting, construction, map, missions, NPCs, mutations, bionics, and martial-arts entry points |
+| **Crafting and building** | Recipe search/favorites/batches, workbench crafting, native material commitment and activities, stairs/ramps/furniture previews |
+| **Furniture and vehicles** | Basic 3D tables, beds, chairs, cupboards, crates, shelves, per-face textures and partial wall-aware orientation; vehicle work interface is evolving |
+| **NPC interaction** | Mouse dialogue, portraits, two-column trade, selected guard/follow commands, and native resolution |
 
-These are features present in the development code, **not a claim of complete real-world gameplay acceptance**. Some specialized confirmations still use original CDDA dialogs.
+These features exist in the development code; not all workflows have passed full real-player or cross-device acceptance tests. Complex operations may still use original CDDA dialogs.
 
 ## Controls
 
-| Input | Description |
+| Action | Default input |
 | --- | --- |
-| **F5** | Cycle classic 2D → modern 2D → first-person 3D |
-| **F6** | Configure mode keybindings and select the sidebar/HUD style |
-| **WASD** | Camera-relative movement in 3D; planar movement in modern 2D |
-| **Mouse movement** | Look around in 3D; smooth map panning outside the central dead zone in modern 2D |
-| **Left click** | Native melee or smashing against a valid aimed target in 3D; friendly/neutral attack confirmation remains |
-| **Right click** | Native aiming/shooting flow in 3D, depending on context |
-| **E** | Interact; hold to open a target-specific wheel, including relevant stair actions |
-| **Q** | Quick action wheel in 3D |
-| **Tab** | Integrated survival panel in modern 2D or 3D |
-| **M** | Modern map in 3D |
+| Unified mode, controls, HUD settings | **F5 / F6** |
+| Movement | **WASD** in modern modes (camera-relative in 3D, planar in 2D) |
+| Look / pan | Mouse movement (behavior depends on mode) |
+| Integrated survival panel | **Tab** |
+| 3D interact / hold for context wheel | **E** |
+| Quick action wheel | **Q** |
+| Modern 2D map context menu | **Right click** on the map |
+| 3D aimed melee or smash | **Left click**, subject to native target checks |
 
-Bindings are customizable. HUD style is independent of the F5 mode: choose **Follow mode** (default), **Classic sidebar**, or **3D HUD**. Changing the display style does not alter the native 2D keybindings.
+Binding overrides are supported. Display and control modes do not replace native combat and turn rules.
 
-## Recent milestones
+## Status and source build
 
-- **Modern 2D:** The survival panel opens without requiring any 3D scene capture. Mouse-directed map viewing uses a circular dead zone and smooth 360° panning across aspect ratios.
-- **World rendering:** Additional multi-floor, stair, ramp, and furniture geometry; revised per-face materials for selected cupboards, crates, chairs, and lockers.
-- **Interactions and crafting:** E-key stair wheel and workbench crafting panel connected to native actions, with appropriate native item visibility for cabinets and furniture.
-- **Scene visibility:** Certain in-line-of-sight 3D world objects remain drawn under low lighting, while occlusion, hidden entities, blindness, and interaction rules retain their restrictions. This does **not** grant native night vision.
+Ongoing work includes complex-scene performance, detailed vehicles/furniture, end-to-end manual input checks, Chinese IME behavior, and broad hardware/mod compatibility. Automated test passes in reports should not be read as full release certification.
 
-Technical notes and test boundaries:
+- [Development status](docs/DEVELOPMENT_STATUS.md) · [Progress log](docs/FP3D_PROGRESS.md) · [Modern controls](docs/FP3D_0I1_MODERN_CONTROLS.md)
+- [Unified mode settings](docs/FP3D_MODE_SETTINGS.md) · [Modern 2D context menu](docs/MODERN_2D_CONTEXT_MENU.md) · [Shared modern interfaces](docs/MODERN_2D_SIMPLE_INTERACTIONS.md)
+- [Native construction](docs/FP3D_CONSTRUCTION_START.md) · [Furniture orientation](docs/FP3D_FURNITURE_FACING.md) · [Vehicle design notes](docs/FP3D_VEHICLE_VISUAL_DESIGN.md)
 
-- [Development status](docs/DEVELOPMENT_STATUS.md) · [Progress log](docs/FP3D_PROGRESS.md) · [Modern controls report](docs/FP3D_0I1_MODERN_CONTROLS.md)
-- [Three modes](docs/FP3D_THREE_CONTROL_MODES.md) · [Modern 2D survival panel](docs/MODERN_2D_SURVIVAL_MENU.md) · [Modern 2D camera](docs/MODERN_2D_EDGE_PAN.md) · [HUD style](docs/FP3D_UI_STYLE.md)
-- [Stair interaction](docs/FP3D_STAIR_WHEEL.md) · [Workbench crafting](docs/FP3D_WORKBENCH_UI.md) · [Storage visuals](docs/FP3D_STORAGE_DOORS_AND_CONTENTS.md) · [Dark-scene behavior](docs/FP3D_DARK_VISIBILITY.md)
-- [NPC dialogue](docs/FP3D_NPC_DIALOGUE.md) · [NPC trade](docs/FP3D_NPC_TRADE.md) · [Reticle melee](docs/FP3D_RETICLE_MELEE.md)
+Development platform: **Windows / CMake / SDL2 Tiles / OpenGL**. See the [upstream CMake build instructions](doc/c++/COMPILING-CMAKE.md) and enable `TILES=ON`, `ENABLE_FP3D=ON`. The local `tools/run-fp3d.ps1` depends on a prebuilt runtime outside the source repository and is **not** a public installer.
 
-## Limitations
+## Licensing and attribution
 
-**Experimental software, not a stable release.** Remaining work includes complete gameplay playthroughs, real saved-game and mod compatibility, physical mouse/keyboard and Chinese IME testing, detailed vehicle/furniture geometry, multi-cell ramps and full construction workflows, performance across varied hardware and dense city maps, and an authorized redistributable Windows package.
+This is an independent GitHub repository, **not an official CDDA release**. Upstream authors and contributors remain credited.
 
-Functional and rendering test results in the linked reports apply to particular test scenarios; they do not imply that every manual interaction or long-duration play session has been validated.
+- Upstream: [CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA), based on official `0.I-1` (`7b2efa5cea38e4d4d97dd0e63b28b9148623da59`).
+- Main upstream code/content is **CC BY-SA 3.0**. Fonts, libraries, and certain assets carry separate licenses; see [LICENSE.txt](LICENSE.txt), [attribution notes](docs/ATTRIBUTION.md), and [upstream README](docs/UPSTREAM_README.md).
+- Redistributable packages must retain the relevant notices and exclude personal saves, test artifacts, and separately obtained assets whose rights are not confirmed.
 
-## Build from source
-
-**Development target:** Windows, CDDA 0.I-1, SDL2 Tiles, CMake, and experimental OpenGL 3D.
-
-1. Clone the repository and prepare dependencies using the upstream [build guide](doc/c++/COMPILING.md) and [CMake guide](doc/c++/COMPILING-CMAKE.md).
-2. Enable `TILES` for the Windows graphics build and `ENABLE_FP3D=ON` for the experimental 3D path (requires a Windows Tiles build).
-3. Supply appropriately licensed game data and tilesets; test with an isolated profile/save directory.
-4. `tools/run-fp3d.ps1` is a local developer launcher depending on a prebuilt sibling `runtime/` directory **outside the source repository**. It is not a one-click public installer. Cloning alone does not yield a ready-to-run game.
-
-A player-facing Windows Release requires separate packaging, dependency checks, redistribution-rights review, and clean-install validation.
-
-## Attribution, licenses, and contributions
-
-This is a standalone GitHub repository, not a GitHub Fork. **Standalone hosting does not remove upstream attribution obligations.**
-
-- Upstream: [CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA)
-- Base: official `0.I-1` tag, commit `7b2efa5cea38e4d4d97dd0e63b28b9148623da59`
-- CDDA's primary code and content use **CC BY-SA 3.0**, while some dependencies, fonts, and other assets have separate licenses. See [LICENSE.txt](LICENSE.txt), [attribution notes](docs/ATTRIBUTION.md), and the [upstream README](docs/UPSTREAM_README.md).
-- Local third-party tilesets are not automatically approved for redistribution. Verify their rights before packaging.
-
-Issues and suggestions are welcome in the [project issue tracker](https://github.com/Slime11123/cdda-modern-mode/issues).
+Please report bugs and suggestions via [Issues](https://github.com/Slime11123/cdda-modern-mode/issues).

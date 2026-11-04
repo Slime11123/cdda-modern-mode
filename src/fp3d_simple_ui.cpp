@@ -45,7 +45,8 @@ std::unique_ptr<cataimgui::window> create_panel( const std::string &title,
 
 bool active()
 {
-    return fp3d_compositor::view_3d() && fp3d_compositor::turn_based();
+    return ( fp3d_compositor::view_3d() && fp3d_compositor::turn_based() ) ||
+           fp3d_compositor::modern_2d_world();
 }
 
 std::vector<iteminfo> item_information( const item &object )
@@ -75,8 +76,9 @@ scoped_theme::scoped_theme() : enabled( active() )
     if( !enabled ) {
         return;
     }
-    // Same warm translucent surfaces as the survival inventory. Body text stays white.
-    ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f, .72f ) );
+    // The retained 2D buffer can contain earlier frames of this window.
+    const float opacity = fp3d_compositor::modern_2d_world() ? 1.f : .72f;
+    ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f, opacity ) );
     ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .045f, .043f, .038f, .48f ) );
     ImGui::PushStyleColor( ImGuiCol_PopupBg, ImVec4( .045f, .04f, .03f, .97f ) );
     ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );

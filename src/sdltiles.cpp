@@ -93,7 +93,8 @@ std::unique_ptr<cataimgui::client> imclient;
 static modern_2d_camera edge_camera;
 static point modern_2d_pan()
 {
-    return g && g->get_zoom() > 4 && fp3d_compositor::modern_2d_input() ?
+    return g && g->get_zoom() > 4 && ( fp3d_compositor::modern_2d_input() ||
+                                    fp3d_compositor::modern_2d_overlay_open() ) ?
            edge_camera.pixels() : point::zero;
 }
 #endif
@@ -647,6 +648,9 @@ void refresh_display()
                           fp3d_compositor::captures_game_input() );
     }
     display_probe.stage( "display_present" );
+    if( imclient ) {
+        imclient->present_overlay();
+    }
 #endif
     SDL_RenderPresent( renderer.get() );
 #if defined(ENABLE_FP3D)
@@ -3128,7 +3132,10 @@ static void CheckMessages()
         point mouse;
         SDL_GetMouseState( &mouse.x, &mouse.y );
         bool changed = false;
-        if( g && g->w_terrain && use_tiles ) {
+        if( fp3d_compositor::modern_2d_overlay_open() ) {
+            // Keep the clicked tile under its cursor menu; moving through menu
+            // rows must not scroll or recenter the map underneath it.
+        } else if( g && g->w_terrain && use_tiles ) {
             const auto *terrain = g->w_terrain.get<cata_cursesport::WINDOW>();
             // Mouse state is in window coordinates, while the map is drawn in
             // renderer coordinates (which can also include DPI/logical scaling).
@@ -3481,6 +3488,7 @@ static void CheckMessages()
     using cata::options::mouse;
 
     while( SDL_PollEvent( &ev ) ) {
+        bool modern_single_press = false;
 #if defined(ENABLE_FP3D)
         if( fp3d_compositor::process_event( ev ) ) {
             needupdate = true;
@@ -3618,7 +3626,25 @@ static void CheckMessages()
 #endif
                     }
                 } else {
-                    last_input = sdl_keysym_to_keycode_evt( ev.key.keysym );
+                    input_event key = sdl_keysym_to_keycode_evt( ev.key.keysym );
+#if defined(ENABLE_FP3D)
+                    if( fp3d_compositor::modern_2d_input() ) {
+                        const SDL_Keysym &keysym = ev.key.keysym;
+                        const bool shift_key = keysym.sym == SDLK_LSHIFT || keysym.sym == SDLK_RSHIFT;
+                        if( shift_key ) {
+                            if( keysym.mod & ( KMOD_CTRL | KMOD_ALT | KMOD_GUI ) ) {
+                                continue;
+                            }
+                            key = input_event( keysym.sym, input_event_t::keyboard_code );
+                        }
+                        const auto command = fp3d_input::modern_2d_context().input_to_action( key );
+                        modern_single_press = command == "MODERN_2D_WAIT" || command == "MODERN_2D_RUN";
+                        if( ( shift_key && command == "ERROR" ) || ( modern_single_press && is_repeat ) ) {
+                            continue;
+                        }
+                    }
+#endif
+                    last_input = std::move( key );
                 }
             }
             break;
@@ -4059,7 +4085,8 @@ static void CheckMessages()
                 quit = true;
                 break;
         }
-        if( text_refresh && !is_repeat ) {
+        // Deliver a wait or toggle before later events can replace it.
+        if( modern_single_press || ( text_refresh && !is_repeat ) ) {
             break;
         }
     }

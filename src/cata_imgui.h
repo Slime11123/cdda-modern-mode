@@ -25,6 +25,7 @@ using ImGuiInputTextFlags = int;
 struct point;
 struct ImVec2;
 struct ImVec4;
+struct ImDrawData;
 class Font;
 class input_context;
 
@@ -67,6 +68,11 @@ class client
         std::vector<int> cata_input_trail;
 #ifndef TUI
         std::unordered_map<uint32_t, unsigned char> sdlColorsToCata;
+#if defined(TILES) && defined(ENABLE_FP3D)
+        SDL_Texture_Ptr overlay;
+        bool overlay_ready = false;
+        bool render_overlay( ImDrawData *draw_data, SDL_Texture *background );
+#endif
 #endif
     public:
 #ifdef TUI
@@ -77,6 +83,9 @@ class client
         void load_fonts( const std::unique_ptr<Font> &gui_font, const std::unique_ptr<Font> &mono_font,
                          const std::array<SDL_Color, color_loader<SDL_Color>::COLOR_NAMES_COUNT> &windowsPalette,
                          const std::vector<font_config> &gui_typeface, const std::vector<font_config> &mono_typeface );
+#if defined(TILES) && defined(ENABLE_FP3D)
+        void present_overlay();
+#endif
 #endif
         ~client();
 

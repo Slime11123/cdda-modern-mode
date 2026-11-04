@@ -2087,6 +2087,14 @@ void options_manager::add_options_interface()
                                           to_translation( "Options regarding sidebar interface." ) ),
     [&]( const std::string & page_id ) {
 #if defined(TILES) && defined(ENABLE_FP3D)
+        add( "FP3D_VIEW", page_id, to_translation( "画面模式" ),
+             to_translation( "选择 2D 或 3D 画面，独立于键位和 UI。" ),
+        { { "auto", to_translation( "启动器默认" ) }, { "2d", to_translation( "2D" ) },
+          { "3d", to_translation( "3D" ) } }, "auto" );
+        add( "FP3D_CONTROLS", page_id, to_translation( "操作键位" ),
+             to_translation( "经典使用原版键位，现代使用独立 WASD 键位。" ),
+        { { "auto", to_translation( "启动器默认" ) }, { "classic", to_translation( "经典" ) },
+          { "modern", to_translation( "现代" ) } }, "auto" );
         add( "FP3D_UI_STYLE", page_id, to_translation( "UI 栏样式" ),
              to_translation( "独立于操作模式选择信息栏。跟随模式：2D 使用原版侧栏，3D 使用 HUD。只改变界面显示，不改变操作键位。" ),
         { { "auto", to_translation( "跟随模式" ) },

@@ -3045,7 +3045,7 @@ talk_topic dialogue::opt( dialogue_window &d_win, const talk_topic &topic )
     generate_response_lines();
 
 #if defined(TILES) && defined(ENABLE_FP3D)
-    if( fp3d_compositor::turn_based() && !debug_mode && !d_win.is_computer &&
+    if( fp3d_compositor::survival_menu_available() && !debug_mode && !d_win.is_computer &&
         !d_win.is_not_conversation && actor( true )->get_npc() ) {
         modern = std::make_unique<fp3d_dialogue::window>( *actor( true )->get_npc(),
                  d_win.history_text(), d_win.sel_response, get_best_quit_response() <

@@ -671,6 +671,11 @@ bool main_menu::opening_screen()
     }
 
     world_generator->set_active_world( nullptr );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_compositor::modern_2d_world() ) {
+        fp3d_compositor::set_input_context( "MAIN_MENU" );
+    }
+#endif
     world_generator->init();
 
     init_strings();

@@ -217,6 +217,13 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
         { "前往此处", "沿原版安全路线前往此格，危险或障碍仍会中断移动。", ACTION_NULL,
           "MODERN_2D_TRAVEL", !self && !creature && ( here.passable( p ) || opens ) },
     };
+    const auto weapon = you.get_wielded_item();
+    if( !self && weapon && weapon->is_gun() && !weapon->is_gunmod() ) {
+        const gun_mode mode = weapon->gun_current_mode();
+        if( mode && !mode.melee() ) {
+            result.push_back( { "瞄准", "朝此处进入瞄准，射击需要在瞄准界面确认。", ACTION_FIRE, nullptr, true } );
+        }
+    }
     if( opens ) { result.push_back( { "打开", "打开这个门窗或容器。", ACTION_OPEN, nullptr, near } ); }
     if( closes ) { result.push_back( { "关闭", "关闭这个门窗或容器。", ACTION_CLOSE, nullptr, near } ); }
     if( items ) { result.push_back( { "拾取物品", "查看并拾取这格物品。", ACTION_PICKUP, nullptr,
@@ -264,7 +271,7 @@ std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
         you.set_destination( *route );
         const auto action = you.get_next_auto_move_direction();
         if( action == ACTION_NULL ) { you.clear_destination(); return std::nullopt; }
-        return request{ action };
+        return request{ action, std::nullopt, false };
     }
     if( command == "FP3D_ATTACK" ) {
         return resolve( command, fp3d_targeting::target{ you.pos_abs(), here.get_abs( p ),
@@ -279,7 +286,7 @@ std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
         operation.destination_tile = here.get_abs( p );
         operation.follower_command = command == "FP3D_GUARD" ? npc_orders::kind::guard : npc_orders::kind::follow;
         fp3d_inventory::stage( std::move( operation ) );
-        return request{ ACTION_ITEMACTION };
+        return request{ ACTION_ITEMACTION, std::nullopt, false };
     }
     return request{ choice.action, p, choice.action == ACTION_PICKUP, choice.action == ACTION_PICKUP };
 }

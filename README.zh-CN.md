@@ -1,83 +1,68 @@
 # CDDA Modern Mode
 
-[English](README.md) · [开发状态](docs/DEVELOPMENT_STATUS.md) · [CDDA 官方仓库](https://github.com/CleverRaven/Cataclysm-DDA)
+[English](README.md) · [发布与下载](https://github.com/Slime11123/cdda-modern-mode/releases) · [开发进度](docs/DEVELOPMENT_STATUS.md) · [CDDA 原版](https://github.com/CleverRaven/Cataclysm-DDA)
 
-**CDDA Modern Mode** 是基于 **Cataclysm: Dark Days Ahead（CDDA，大灾变：浩劫余生）0.I-1 / Ito-1** 的非官方现代化改造项目。它在保留原版回合制生存、世界模拟、行动点、战斗及存档机制的同时，提供实验性的第一人称 3D 视角、独立的现代 2D 操作，以及更方便使用鼠标键盘的界面。
+**CDDA Modern Mode** 是基于 **Cataclysm: Dark Days Ahead（CDDA）0.I-1 / Ito-1** 的非官方现代化改造项目，在保留原版回合制、行动点、战斗、世界模拟和存档机制的基础上，加入第一人称 3D 画面、现代 2D 操作与鼠标友好的综合界面。
 
-> **当前状态：开发预览版｜更新于 2026-11-03。** GitHub 提供游戏源码与技术记录；暂未发布经过完整安装、素材授权和游玩验收的 Windows 正式下载包。项目不属于 CDDA 官方，也未获得官方背书。
+> **状态：Windows 实验性预览版（2026-11-04）**。当前开发版本仍可能存在崩溃、输入兼容及性能问题；不是 CDDA 官方产品，也不保证全部玩法已通过完整人工验收。
 
-## 功能概览
+## 下载安装
 
-| 模块 | 当前实现 |
+Windows 玩家可前往 [Releases 页面](https://github.com/Slime11123/cdda-modern-mode/releases) 查看是否提供 Windows ZIP 预览包。下载时优先选择名称含 **Windows-x64** 的压缩包；GitHub 自动生成的「Source code」仅包含源代码，不能直接运行。
+
+1. 将 Windows ZIP **完整解压**至有写入权限的英文路径（建议非 `Program Files`），不要直接在压缩包内双击。
+2. 双击 `Play-CDDA-Modern-Mode.cmd`；游戏文件和 DLL 必须保持在原有目录结构。
+3. 新玩家从游戏主菜单新建世界、创建角色；个人设置及存档位于解压目录的 `user/`，**请自行备份**。
+4. 在游戏中按 **F5 或 F6** 打开统一模式设置，分别选择 2D/3D 画面、经典/现代键位、原版侧栏/现代 HUD。点击「完成」保存并应用。
+
+若 ZIP 内缺少 `cataclysm-tiles.exe`、`data/`、`gfx/` 或 DLL，它不是完整玩家包。首版采用仓库随附的原版图块资源，不捆绑外部下载的素材。Windows 版本仍属于测试预览，遇到问题请反馈到 [Issues](https://github.com/Slime11123/cdda-modern-mode/issues)。
+
+## 主要功能
+
+| 类别 | 实现情况 |
 | --- | --- |
-| **三种游戏模式** | 在经典 2D、现代 2D 与第一人称 3D 间切换。经典模式保留原版操作；现代 2D 与 3D 使用各自的键位配置 |
-| **现代 2D** | WASD 世界移动、Tab 综合生存菜单；鼠标在地图中心静止区以外可触发 360° 平滑视角偏移，回到中心后自动复位，最远缩放档禁用 |
-| **第一人称 3D** | 地形、建筑、楼层、楼梯、坡道、门窗、天空、植被和可见实体；场景几何与当前图块包材质相结合 |
-| **家具和储物** | 桌椅、床、床架、木箱、橱柜、储物柜、书架和货架等基础 3D 模型；部分家具采用分面贴图，并按原版规则显示允许看到的物品 |
-| **现代交互** | 准星目标识别、短按/长按 E、目标交互轮盘、Q 快捷轮盘、定点近战与砸击，以及楼梯上下层操作入口 |
-| **生存综合菜单** | 装备、背包与口袋、人物状态、制作、建造、地图、任务、可见人物和更多操作；2D 现代及 3D 共用相关面板 |
-| **制作与建造** | 配方分类、搜索、收藏、批量制作、材料与工具提示；工作台可打开专用制作页，部分家具、楼梯及坡道可预览完成外形 |
-| **NPC 系统** | 使用鼠标的对话界面、图块头像、双栏物品交易、部分队友守卫/跟随命令；对话效果和交易结算仍由原版执行 |
-| **HUD 与外观** | 3D HUD、准星提示、手持物品挥击、角色进入 3D 场景时的资料面板；UI 样式可单独选择原版侧栏或现代 HUD |
-| **原版规则复用** | 不以 3D 显示逻辑重新计算伤害、行动点、世界时间或存档；核心操作尽量交回原版执行 |
+| **独立画面 / 键位 / HUD** | F5/F6 统一设置：2D/3D 画面、经典/现代操作、原版侧栏/现代 HUD 分别选择并保存 |
+| **现代 2D** | WASD、360° 圆形平滑移镜、Tab 综合生存菜单、右键地图情境菜单与 Q 行动轮盘；可共用现代工作台、NPC 对话和交易页面 |
+| **第一人称 3D** | 地形、建筑与多层楼板/楼梯、坡道、天空及远景、家具、可见实体和当前图块包贴图 |
+| **交互与战斗** | 准星/目标轮廓、E 情境轮盘、Q 快捷轮盘、定点近战、砸击、原版确认与安全检查 |
+| **综合生存界面** | 背包/口袋、装备、健康、制作、建造、地图、任务、NPC、变异、仿生装置和武术入口 |
+| **制作与建筑** | 配方搜索/收藏/批量、工作台简易制作、原版材料消耗和活动、楼梯/坡道/家具建造预览 |
+| **家具与车辆** | 桌椅床、柜体、木箱、书架等 3D 基础几何，部分材质分面与邻墙朝向；车辆操作窗口仍在完善 |
+| **NPC** | 鼠标对话、头像、双栏交易、队友守卫/跟随；结算和任务仍由原版规则处理 |
 
-以上描述的是已经接入当前开发源码的功能，不表示每项都完成了长期实际游玩验证。某些高级选项和确认窗口仍继续使用原版 CDDA 界面。
+这些功能已进入开发源码，不代表所有界面均完成实际游玩或多设备兼容验收。部分复杂操作仍会调用原版界面。
 
-## 操作方式
+## 常用操作
 
-| 输入 | 说明 |
+| 操作 | 按键 |
 | --- | --- |
-| **F5** | 经典 2D → 现代 2D → 第一人称 3D，循环切换 |
-| **F6** | 进入模式键位设置；可选择「UI 栏样式」 |
-| **WASD** | 3D 按镜头方向移动；现代 2D 按平面方向移动 |
-| **鼠标移动** | 3D 转动镜头；现代 2D 在中心静止区以外平滑探看地图 |
-| **鼠标左键** | 3D 对有效目标近战或砸击；友好及中立目标保留确认 |
-| **鼠标右键** | 3D 进入原版瞄准/射击流程（视上下文而定） |
-| **E** | 3D 交互；按住可打开当前目标的操作轮盘，楼梯可提供上下楼操作 |
-| **Q** | 3D 快捷行动轮盘 |
-| **Tab** | 现代 2D 或 3D 的综合生存菜单 |
-| **M** | 3D 现代地图 |
+| 统一模式/按键/HUD 设置 | **F5 / F6** |
+| 现代模式移动 | **WASD**（3D 相对视角，2D 平面方向） |
+| 3D 视角 / 2D 现代探看 | 鼠标移动（行为因模式而异） |
+| 综合生存菜单 | **Tab** |
+| 3D 交互 / 长按目标轮盘 | **E** |
+| 快捷行动轮盘 | **Q** |
+| 现代 2D 地图情境菜单 | 地图上**鼠标右键** |
+| 3D 准星攻击 / 砸击 | **鼠标左键**（符合原版目标检查） |
 
-键位可自定义。UI 栏样式与 F5 操作模式分别设置：可选择「跟随模式」（默认）、「原版侧栏」或「3D HUD」。切换 UI 样式并不会把原版 2D 键位改成 3D 键位。
+所有按键均应以游戏中当前配置为准；模式选择不会改变原版战斗/时间结算。
 
-## 近期进展
+## 开发进度、局限及源码编译
 
-- **现代 2D：** 综合生存菜单可在完全没有 3D 场景快照时打开；鼠标观察采用圆形静止区与 360° 平滑偏移，支持不同窗口比例。
-- **画面与材质：** 追加多层建筑、楼梯与坡道基础几何，优化橱柜、木箱、椅子、储物柜等家具的不同表面贴图。
-- **互动与制作：** 楼梯 E 轮盘与工作台专用制作页面接入原版动作；柜内物品和家具上的物品按各自规则显示。
-- **显示规则：** 3D 中同层视线范围内的场景物体可在低亮度下继续绘制，但墙体遮挡、隐藏实体、失明和交互条件仍受约束；这不代表原版角色获得夜视能力。
+目前仍在开发复杂场景性能、车辆与家具精细表现、各类操作的端到端人工验证、中文输入法与不同硬件兼容。开发测试中的「自动回归通过」不代表玩家版本已完整验收。
 
-更多实现细节与测试边界：
+- [开发状态](docs/DEVELOPMENT_STATUS.md) · [详细日志](docs/FP3D_PROGRESS.md) · [现代控制](docs/FP3D_0I1_MODERN_CONTROLS.md)
+- [统一模式设置](docs/FP3D_MODE_SETTINGS.md) · [现代 2D 右键菜单](docs/MODERN_2D_CONTEXT_MENU.md) · [共享简单交互](docs/MODERN_2D_SIMPLE_INTERACTIONS.md)
+- [建造流程](docs/FP3D_CONSTRUCTION_START.md) · [家具朝向](docs/FP3D_FURNITURE_FACING.md) · [车辆方案](docs/FP3D_VEHICLE_VISUAL_DESIGN.md)
 
-- [最新开发状态](docs/DEVELOPMENT_STATUS.md) · [持续开发日志](docs/FP3D_PROGRESS.md) · [现代操作专项](docs/FP3D_0I1_MODERN_CONTROLS.md)
-- [三种模式](docs/FP3D_THREE_CONTROL_MODES.md) · [2D 综合菜单](docs/MODERN_2D_SURVIVAL_MENU.md) · [2D 平滑探看](docs/MODERN_2D_EDGE_PAN.md) · [UI 栏样式](docs/FP3D_UI_STYLE.md)
-- [楼梯轮盘](docs/FP3D_STAIR_WHEEL.md) · [工作台界面](docs/FP3D_WORKBENCH_UI.md) · [储物柜与物品显示](docs/FP3D_STORAGE_DOORS_AND_CONTENTS.md) · [暗处场景显示](docs/FP3D_DARK_VISIBILITY.md)
-- [NPC 对话](docs/FP3D_NPC_DIALOGUE.md) · [NPC 交易](docs/FP3D_NPC_TRADE.md) · [准星近战](docs/FP3D_RETICLE_MELEE.md)
+开发环境为 **Windows / CMake / SDL2 Tiles / OpenGL**。编译源码请先参照[官方 CMake 编译指南](doc/c++/COMPILING-CMAKE.md)，并启用 `TILES=ON`、`ENABLE_FP3D=ON`。本地 `tools/run-fp3d.ps1` 是开发脚本，依赖仓库外的编译输出，不能作为玩家安装器。
 
-## 当前限制
+## 许可、署名与项目关系
 
-**仍处于开发中，尚不建议视为稳定发行版。** 需要进一步验证完整的玩家生存流程、正式存档与复杂模组兼容、真实键鼠和中文输入法、全部家具及车辆的精确 3D 表现、多格坡道和建造完整链、不同硬件上的大城市性能，以及完整安装包的可再分发素材。
+此项目为独立 GitHub 仓库，**并非官方 CDDA 项目**；原版来源及作者贡献不会因独立托管而消失。
 
-技术文档中的功能/图形回归结果属于特定测试环境，不等于已完成所有实体交互或长期游玩验收。
+- CDDA 原版：[CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA)，基于官方 `0.I-1`（`7b2efa5cea38e4d4d97dd0e63b28b9148623da59`）。
+- 原版主要代码和游戏内容采用 **CC BY-SA 3.0**；字体、依赖等有各自许可。参阅 [LICENSE.txt](LICENSE.txt)、[版权和素材说明](docs/ATTRIBUTION.md)、[原版 README](docs/UPSTREAM_README.md)。
+- 分发包仅应包含明确允许再分发的内容，并保留相应声明；不包含用户个人存档、开发测试记录或未经确认授权的外部图块素材。
 
-## 源码构建
-
-开发目标：**Windows、CDDA 0.I-1、SDL2 Tiles、CMake、实验性 OpenGL 3D**。
-
-1. 克隆本仓库，参照原版 [编译文档](doc/c++/COMPILING.md)与 [CMake 文档](doc/c++/COMPILING-CMAKE.md)配置依赖。
-2. 编译图形版时启用 `TILES`；编译实验性 3D 时启用 `ENABLE_FP3D=ON`（需要 Windows Tiles 构建）。
-3. 提供符合授权要求的游戏数据和图块包，在隔离的用户配置/存档目录中进行验证。
-4. `tools/run-fp3d.ps1` 是本地开发脚本，依赖源码仓库外的预编译 `runtime/` 目录，**不是面向玩家的一键安装器**。克隆本仓库不会自动得到可执行游戏。
-
-正式 Windows Release 将在独立打包、依赖与第三方素材核查和安装测试后再发布。
-
-## 来源、许可与贡献
-
-本项目独立托管于 GitHub，并非 GitHub Fork；**独立仓库不改变对原版作者的署名义务**。
-
-- CDDA 官方源码：[CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA)
-- 源码基线：官方 `0.I-1`，提交 `7b2efa5cea38e4d4d97dd0e63b28b9148623da59`
-- CDDA 主体主要采用 **CC BY-SA 3.0**；部分字体、依赖和资源拥有各自许可证，请参阅 [LICENSE.txt](LICENSE.txt)、[版权与素材说明](docs/ATTRIBUTION.md)和[原版 README](docs/UPSTREAM_README.md)
-- 本地使用的第三方图块素材不代表已获得公开再分发许可；打包前应逐项核查
-
-欢迎在 [Issues](https://github.com/Slime11123/cdda-modern-mode/issues) 提交问题与建议。
+欢迎提交 [Issue](https://github.com/Slime11123/cdda-modern-mode/issues) 帮助完善项目。

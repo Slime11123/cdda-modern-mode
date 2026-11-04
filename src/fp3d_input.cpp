@@ -11,7 +11,9 @@
 #include "veh_type.h"
 #include "input_context.h"
 #include "translations.h"
-#include "uilist.h"
+#include "cata_imgui.h"
+#include "imgui/imgui.h"
+#include "ui_manager.h"
 #include "options.h"
 #include "sdl_wrappers.h"
 
@@ -42,6 +44,8 @@ input_context modern_2d_context()
     result.register_action( "MODERN_2D_SOUTH", to_translation( "2D现代 向南移动" ) );
     result.register_action( "MODERN_2D_WEST", to_translation( "2D现代 向西移动" ) );
     result.register_action( "MODERN_2D_EAST", to_translation( "2D现代 向东移动" ) );
+    result.register_action( "MODERN_2D_WAIT", to_translation( "2D现代 等待一回合" ) );
+    result.register_action( "MODERN_2D_RUN", to_translation( "2D现代 切换奔跑 / 行走" ) );
     result.register_action( "FP3D_PANEL", to_translation( "2D现代 综合生存面板" ) );
     result.register_action( "FP3D_ACTIONS", to_translation( "2D现代 快捷行动菜单" ) );
     return result;
@@ -86,6 +90,12 @@ std::string resolve( mode controls, const input_event &event, float yaw, bool dr
         const auto command = modern_2d_context().input_to_action( event );
         if( command == "FP3D_PANEL" || command == "FP3D_ACTIONS" ) {
             return command;
+        }
+        if( command == "MODERN_2D_WAIT" ) {
+            return action_ident( ACTION_PAUSE );
+        }
+        if( command == "MODERN_2D_RUN" ) {
+            return action_ident( ACTION_TOGGLE_RUN );
         }
         for( const auto &entry : {
                  std::pair{ "MODERN_2D_NORTH", tripoint_rel_ms::north },
@@ -298,47 +308,123 @@ void gestures::set_hold_delay( int milliseconds )
     }
 }
 
+namespace
+{
+class mode_settings : public cataimgui::window
+{
+        int &view;
+        int &keys;
+        int &style;
+        int column = 0;
+        int result = -1;
+        cataimgui::bounds get_bounds() override {
+            const auto size = ImGui::GetIO().DisplaySize;
+            const float width = std::min( size.x * .9f, 820.0f );
+            const float height = std::min( size.y * .85f, 480.0f );
+            return { ( size.x - width ) / 2, ( size.y - height ) / 2, width, height };
+        }
+        void draw_controls() override {
+            const float width = ImGui::GetContentRegionAvail().x;
+            const float height = ImGui::GetContentRegionAvail().y;
+            const float font = ImGui::GetFontSize();
+            const float top = ImGui::GetCursorPosY();
+            const char *titles[] = { "画面", "键位", "UI" };
+            const char *choices[][2] = { { "2D", "3D" }, { "经典", "现代" }, { "原版", "现代" } };
+            int *values[] = { &view, &keys, &style };
+            for( int col = 0; col < 3; ++col ) {
+                ImGui::PushID( col );
+                const float left = font + width * col / 3;
+                ImGui::SetCursorPos( ImVec2( left, top + font ) );
+                ImGui::Text( "%s%s", titles[col], column == col ? " <" : "" );
+                for( int row = 0; row < 2; ++row ) {
+                    ImGui::SetCursorPos( ImVec2( left, top + height * ( row == 0 ? .28f : .6f ) ) );
+                    if( ImGui::RadioButton( choices[col][row], values[col], row ) ) {
+                        column = col;
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::SetCursorPos( ImVec2( font, top + height - font * 4.5f ) );
+            if( ImGui::Button( "编辑按键…" ) ) {
+                result = 2;
+                is_open = false;
+            }
+            ImGui::SetCursorPos( ImVec2( width - font * 6, top + height - font * 4.5f ) );
+            if( ImGui::Button( "完成", ImVec2( font * 5, font * 2 ) ) ) {
+                result = 1;
+                is_open = false;
+            }
+            ImGui::SetCursorPos( ImVec2( font, top + height - font * 1.5f ) );
+            ImGui::TextDisabled( "左右选列 / 上下选择 / Enter 完成 / Esc 取消" );
+        }
+    public:
+        mode_settings( int &v, int &k, int &s ) : cataimgui::window( "模式设置",
+                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar ),
+            view( v ), keys( k ), style( s ) {}
+        int run() {
+            input_context input( "FP3D_MODE_SETTINGS", keyboard_mode::keycode );
+            for( const char *action : { "QUIT", "CONFIRM", "UP", "DOWN", "LEFT", "RIGHT",
+                                       "SELECT", "MOUSE_MOVE", "ANY_INPUT" } ) {
+                input.register_action( action );
+            }
+            while( is_open ) {
+                ui_manager::redraw();
+                if( !is_open ) {
+                    break;
+                }
+                const auto action = input.handle_input( 16 );
+                if( action == "QUIT" ) {
+                    is_open = false;
+                } else if( action == "CONFIRM" ) {
+                    result = 1;
+                    is_open = false;
+                } else if( action == "LEFT" || action == "RIGHT" ) {
+                    column = ( column + ( action == "LEFT" ? 2 : 1 ) ) % 3;
+                } else if( action == "UP" || action == "DOWN" ) {
+                    int *values[] = { &view, &keys, &style };
+                    *values[column] = action == "UP" ? 0 : 1;
+                }
+            }
+            return result;
+        }
+};
+}
+
+std::unique_ptr<cataimgui::window> create_mode_settings( int &view, int &keys, int &style )
+{
+    return std::make_unique<mode_settings>( view, keys, style );
+}
+
 action_id display_bindings( input_context &original )
 {
-    uilist menu;
-    menu.title = "操作与 UI 设置（F5：2D经典 → 2D现代 → 3D）";
-    menu.text =
-        "2D经典：原版界面与键位。2D现代：框架阶段，WASD 移动，其余暂沿用原版。\n"
-        "3D：现有第一人称操作。修改现代键位请使用局部绑定（+），三套配置互不覆盖。";
-    menu.addentry( 0, true, '1', "1. 2D经典模式：原版按键" );
-    menu.addentry( 1, true, '2', "2. 2D现代模式：独立移动按键（框架）" );
-    menu.addentry( 2, true, '3', "3. 3D模式：第一人称按键" );
-    menu.addentry( 3, true, '4', "4. UI 栏样式（独立选择）" );
-    menu.selected = static_cast<int>( fp3d_compositor::controls() );
-    menu.query();
-    if( menu.ret == 3 ) {
-        uilist styles;
-        styles.title = "UI 栏样式";
-        styles.text = "只改变信息栏显示，不改变视角和操作键位。选择后自动保存。";
-        styles.addentry( 0, true, '1', "跟随模式（2D 原版侧栏 / 3D HUD）" );
-        styles.addentry( 1, true, '2', "原版侧栏（所有模式）" );
-        styles.addentry( 2, true, '3', "3D HUD（所有模式）" );
-        const auto current = get_option<std::string>( "FP3D_UI_STYLE" );
-        styles.selected = current == "classic" ? 1 : current == "hud" ? 2 : 0;
-        styles.query();
-        if( styles.ret >= 0 && styles.ret <= 2 ) {
-            get_options().get_option( "FP3D_UI_STYLE" ).setValue(
-                std::string( styles.ret == 1 ? "classic" : styles.ret == 2 ? "hud" : "auto" ) );
-            get_options().save();
-            g->mark_main_ui_adaptor_resize();
+    int view = fp3d_compositor::view_3d() ? 1 : 0;
+    int keys = fp3d_compositor::controls() == mode::original_2d ? 0 : 1;
+    int style = fp3d_compositor::uses_hud() ? 1 : 0;
+    while( true ) {
+        int result;
+        {
+            mode_settings settings( view, keys, style );
+            result = settings.run();
         }
-        return ACTION_NULL;
+        if( result == 1 ) {
+            get_options().get_option( "FP3D_VIEW" ).setValue( std::string( view ? "3d" : "2d" ) );
+            get_options().get_option( "FP3D_CONTROLS" ).setValue( std::string( keys ? "modern" : "classic" ) );
+            get_options().get_option( "FP3D_UI_STYLE" ).setValue( std::string( style ? "hud" : "classic" ) );
+            get_options().save();
+            fp3d_compositor::apply_modes( view != 0, keys != 0 );
+        }
+        if( result != 2 ) {
+            return ACTION_NULL;
+        }
+        if( keys == 0 ) {
+            original.display_menu();
+        } else {
+            restore_on_out_of_scope restore_editor( editing_modifiers );
+            editing_modifiers = true;
+            auto profile = view ? context() : modern_2d_context();
+            profile.display_menu();
+        }
     }
-    if( menu.ret == 0 ) {
-        return original.display_menu( true );
-    }
-    if( menu.ret == 1 || menu.ret == 2 ) {
-        restore_on_out_of_scope restore_editor( editing_modifiers );
-        editing_modifiers = true;
-        auto profile = menu.ret == 1 ? modern_2d_context() : context();
-        profile.display_menu();
-    }
-    return ACTION_NULL;
 }
 }
 #endif

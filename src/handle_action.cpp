@@ -1793,7 +1793,7 @@ static void reach_attack( avatar &you )
     g->reenter_fullscreen();
 }
 
-static void fire()
+static void fire( const std::optional<tripoint_abs_ms> &initial_target = std::nullopt )
 {
     avatar &you = get_avatar();
     map &here = get_map();
@@ -1830,7 +1830,7 @@ static void fire()
     }
     // try firing gun
     if( weapon && weapon->is_gun() && !weapon->gun_current_mode().melee() ) {
-        avatar_action::fire_wielded_weapon( you );
+        avatar_action::fire_wielded_weapon( you, initial_target );
         return;
     }
     // try firing turrets
@@ -2723,6 +2723,12 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
         }
 
         case ACTION_FIRE:
+#if defined(ENABLE_FP3D)
+            if( mouse_target && fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
+                fire( here.get_abs( *mouse_target ) );
+                break;
+            }
+#endif
             fire();
             break;
 
@@ -3253,7 +3259,7 @@ bool game::handle_action()
             // Native 2D already handles help inside its input context. The 3D
             // profile selector is dispatched below, after resolving the key.
 #if defined(ENABLE_FP3D)
-            if( !fp3d_compositor::survival_menu_available() )
+            if( !fp3d_compositor::requested() )
 #endif
             { return false; }
         }
@@ -3295,7 +3301,8 @@ bool game::handle_action()
 #if defined(ENABLE_FP3D)
             if( fp3d_compositor::requested() &&
                 ( fp3d_compositor::controls() != fp3d_input::mode::original_2d ||
-                  ctxt.get_raw_input().get_first_input() == static_cast<int>( keycode::f6 ) ) ) {
+                  ctxt.get_raw_input().get_first_input() == static_cast<int>( keycode::f6 ) ||
+                  ctxt.get_raw_input().get_first_input() == static_cast<int>( keycode::f5 ) ) ) {
                 act = fp3d_input::display_bindings( ctxt );
             } else
 #endif

@@ -491,7 +491,8 @@ const std::string &input_context::handle_input( const int timeout )
 #if defined(ENABLE_FP3D)
         if( category == "DEFAULTMODE" && fp3d_compositor::requested() &&
             ( next_action.type == input_event_t::keyboard_code || next_action.type == input_event_t::keyboard_char ) &&
-            next_action.get_first_input() == static_cast<int>( keycode::f6 ) ) {
+            ( next_action.get_first_input() == static_cast<int>( keycode::f5 ) ||
+              next_action.get_first_input() == static_cast<int>( keycode::f6 ) ) ) {
             next_action.text = action_ident( ACTION_KEYBINDINGS );
             result = &next_action.text;
             break;
@@ -506,7 +507,7 @@ const std::string &input_context::handle_input( const int timeout )
             }
         }
         if( ( category == "DEFAULTMODE" || category == "FP3D_BUILD" ) && fp3d_compositor::captures_game_input() ) {
-            const auto mapped = fp3d_input::resolve( fp3d_input::mode::first_person_3d,
+            const auto mapped = fp3d_input::resolve( fp3d_compositor::controls(),
                                 next_action, fp3d_compositor::heading(), fp3d_input::vehicle_controls() );
             if( !mapped.empty() && is_registered_action( mapped ) ) {
                 next_action.text = mapped;

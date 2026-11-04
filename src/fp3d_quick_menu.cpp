@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <utility>
 #include "cata_imgui.h"
 #include "cata_scope_helpers.h"
 #include "fp3d_compositor.h"
@@ -199,6 +200,7 @@ class wheel : public cataimgui::window
 
 class dropdown : public cataimgui::window
 {
+        SDL_Texture_Ptr background;
         std::vector<entry> options;
         point anchor;
         float scale;
@@ -216,7 +218,7 @@ class dropdown : public cataimgui::window
         cataimgui::bounds get_bounds() override {
             const auto size = ImGui::GetIO().DisplaySize;
             const float width = std::min( 260 * scale, size.x );
-            const float height = std::min( ( 16 + options.size() * 32 ) * scale, size.y );
+            const float height = std::min( ( 96 + options.size() * 32 ) * scale, size.y );
             return { std::clamp( static_cast<float>( anchor.x ), 0.0f, size.x - width ),
                      std::clamp( static_cast<float>( anchor.y ), 0.0f, size.y - height ), width, height };
         }
@@ -231,22 +233,45 @@ class dropdown : public cataimgui::window
                 }
                 if( ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) ) {
                     selected = index;
-                    ImGui::SetTooltip( "%s", option.enabled ? option.description : "需要靠近目标或满足操作条件。" );
+                    // The aiming screen uses left release to move its cursor.
+                    if( option.enabled && option.action != ACTION_FIRE &&
+                        ImGui::IsMouseClicked( ImGuiMouseButton_Left ) ) {
+                        choose( index );
+                    }
                 }
                 ImGui::EndDisabled();
                 ImGui::PopID();
             }
+            if( selected >= 0 && selected < static_cast<int>( options.size() ) ) {
+                const auto &option = options[selected];
+                const char *hint = option.description;
+                if( !option.enabled ) {
+                    hint = option.command && std::string( option.command ) == "MODERN_2D_TRAVEL" ?
+                           "此格当前无法前往。" : "请靠近目标，并确认当前满足操作条件。";
+                }
+                ImGui::Separator();
+                ImGui::PushTextWrapPos( 0 );
+                ImGui::TextDisabled( "%s", hint );
+                ImGui::PopTextWrapPos();
+            }
             // Ignore the right press that opened this list.
+            const auto mouse = ImGui::GetMousePos();
+            const auto pos = ImGui::GetWindowPos();
+            const auto size = ImGui::GetWindowSize();
+            const bool inside = mouse.x >= pos.x && mouse.y >= pos.y &&
+                                mouse.x < pos.x + size.x && mouse.y < pos.y + size.y;
             if( !first_frame && ( ImGui::IsMouseClicked( ImGuiMouseButton_Right ) ||
                                   ( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) &&
-                                    !ImGui::IsWindowHovered( ImGuiHoveredFlags_ChildWindows ) ) ) ) {
+                                    !inside ) ) ) {
                 is_open = false;
             }
             first_frame = false;
         }
     public:
-        dropdown( const std::vector<entry> &choices, const point &position, int percent ) :
-            cataimgui::window( "地块操作", ImGuiWindowFlags_NoTitleBar ), anchor( position ),
+        dropdown( const std::vector<entry> &choices, const point &position, int percent,
+                  SDL_Texture_Ptr image = {} ) :
+            cataimgui::window( "地块操作", ImGuiWindowFlags_NoTitleBar ),
+            background( image ? std::move( image ) : fp3d_compositor::copy_view() ), anchor( position ),
             scale( std::clamp( percent, 100, 150 ) / 100.0f ) {
             for( const auto &option : choices ) {
                 if( option.visible ) { options.push_back( option ); }
@@ -254,6 +279,10 @@ class dropdown : public cataimgui::window
         }
         void draw() override {
             if( !is_open ) { return; }
+            if( background ) {
+                ImGui::GetBackgroundDrawList()->AddImage( ( ImTextureID )( intptr_t )background.get(),
+                        ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize );
+            }
             ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .045f, .043f, .038f, 1 ) );
             cataimgui::window::draw();
             ImGui::PopStyleColor();
@@ -264,6 +293,7 @@ class dropdown : public cataimgui::window
                 context.register_action( action );
             }
             while( is_open && fp3d_compositor::survival_menu_available() ) {
+                if( !background && g ) { g->invalidate_main_ui_adaptor(); }
                 ui_manager::redraw();
                 if( !is_open ) { break; }
                 const auto &action = context.handle_input( 16 );
@@ -345,9 +375,9 @@ std::optional<entry> show( const std::array<entry, 8> &choices, const std::strin
 }
 
 std::unique_ptr<cataimgui::window> create_dropdown( const std::vector<entry> &choices,
-        const point &anchor, int scale_percent )
+        const point &anchor, int scale_percent, SDL_Texture_Ptr background )
 {
-    return std::make_unique<dropdown>( choices, anchor, scale_percent );
+    return std::make_unique<dropdown>( choices, anchor, scale_percent, std::move( background ) );
 }
 
 std::optional<entry> show_dropdown( const std::vector<entry> &choices, const point &anchor )
@@ -357,6 +387,8 @@ std::optional<entry> show_dropdown( const std::vector<entry> &choices, const poi
     auto &io = ImGui::GetIO();
     const bool no_mouse = io.ConfigFlags & ImGuiConfigFlags_NoMouse;
     io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    io.ClearInputMouse();
+    io.AddMousePosEvent( anchor.x, anchor.y );
     on_out_of_scope restore( [&]() {
         if( no_mouse ) { io.ConfigFlags |= ImGuiConfigFlags_NoMouse; }
         fp3d_compositor::set_input_context( "DEFAULTMODE" );

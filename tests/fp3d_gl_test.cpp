@@ -1120,20 +1120,17 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         room_below_ramp->ceiling_present = true;
         scene.cells.pop_back();
         const auto before_toggle = render();
-        SDL_Event toggle{};
-        toggle.type = SDL_KEYDOWN;
-        toggle.key.keysym.sym = SDLK_F5;
-        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        fp3d_compositor::cycle_mode();
         CHECK( fp3d_compositor::controls() == fp3d_input::mode::original_2d );
         CHECK_FALSE( fp3d_compositor::active() );
         const auto original_2d = render();
         CHECK( original_2d != before_toggle );
-        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        fp3d_compositor::cycle_mode();
         CHECK( fp3d_compositor::controls() == fp3d_input::mode::modern_2d );
         CHECK_FALSE( fp3d_compositor::active() );
         CHECK_FALSE( fp3d_compositor::covers_map( scene.origin ) );
         CHECK( render() == original_2d );
-        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        fp3d_compositor::cycle_mode();
         CHECK( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d );
         CHECK( fp3d_compositor::active() );
         CHECK( render() == before_toggle );
@@ -1368,15 +1365,15 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         CHECK( blocks.second.empty() );
         CHECK( you.get_memorized_tile( here.get_abs( wall_pos ) ).get_ter_id() == wall_memory );
         CHECK( you.get_memorized_tile( here.get_abs( furniture_pos ) ).get_dec_id() == furniture_memory );
-        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        fp3d_compositor::cycle_mode();
         CHECK_FALSE( fp3d_compositor::active() );
         native_tiles.draw( point::zero, center, width, height, text, blocks );
         REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
                                       covered_after.data(), width * 4 ) == 0 );
         CHECK( covered_after != covered_before );
         CHECK_FALSE( here.draw_points_cache_dirty );
-        REQUIRE( fp3d_compositor::process_event( toggle ) );
-        REQUIRE( fp3d_compositor::process_event( toggle ) );
+        fp3d_compositor::cycle_mode();
+        fp3d_compositor::cycle_mode();
         CHECK( fp3d_compositor::active() );
 
         // Draw the same production panel in its native ImGui/SDL backend.

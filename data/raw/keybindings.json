@@ -4957,6 +4957,23 @@
   },
   {
     "type": "keybinding",
+    "id": "MODERN_2D_WAIT",
+    "category": "MODERN_2D",
+    "name": "2D modern wait one turn",
+    "bindings": [ { "input_method": "keyboard_code", "key": "SPACE" } ]
+  },
+  {
+    "type": "keybinding",
+    "id": "MODERN_2D_RUN",
+    "category": "MODERN_2D",
+    "name": "2D modern toggle running",
+    "bindings": [
+      { "input_method": "keyboard_code", "key": "LEFT_SHIFT" },
+      { "input_method": "keyboard_code", "key": "RIGHT_SHIFT" }
+    ]
+  },
+  {
+    "type": "keybinding",
     "id": "FP3D_FORWARD",
     "category": "FP3D",
     "name": "3D move forward",

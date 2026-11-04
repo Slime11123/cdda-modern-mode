@@ -2755,6 +2755,7 @@ target_handler::trajectory target_ui::run()
         return traj;
     }
     tripoint_bub_ms initial_dst = src;
+    const bool opening_at_click = mode == TargetMode::Fire && activity->initial_target.has_value();
     if( reentered ) {
         if( !try_reacquire_target( resume_critter, initial_dst ) ) {
             // Target lost
@@ -2764,7 +2765,12 @@ target_handler::trajectory target_ui::run()
     } else {
         initial_dst = choose_initial_target();
     }
-    set_cursor_pos( initial_dst );
+    const bool cursor_moved = set_cursor_pos( initial_dst );
+    // A tile reached via edge panning may be outside the unpanned view.
+    if( opening_at_click && !reentered && cursor_moved && dst != src &&
+        !g->is_in_viewport( dst, 1 ) ) {
+        set_view_offset( dst - src );
+    }
     if( dst != initial_dst ) {
         // Our target moved out of range
         action.clear();
@@ -3281,6 +3287,14 @@ void target_ui::update_target_list()
 tripoint_bub_ms target_ui::choose_initial_target()
 {
     map &here = get_map();
+
+    if( mode == TargetMode::Fire && activity->initial_target ) {
+        const auto p = here.get_bub( *activity->initial_target );
+        activity->initial_target.reset();
+        if( p != src && p.z() == src.z() && here.inbounds( p ) && you->sees( here, p ) ) {
+            return p;
+        }
+    }
 
     // Try previously targeted creature
     shared_ptr_fast<Creature> cr = you->last_target.lock();

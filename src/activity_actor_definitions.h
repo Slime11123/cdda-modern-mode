@@ -60,6 +60,8 @@ class aim_activity_actor : public activity_actor
         item_location reload_loc;
         bool shifting_view = false;
         tripoint_rel_ms initial_view_offset;
+        // Requested cursor position for the first opening of the aiming UI.
+        std::optional<tripoint_abs_ms> initial_target;
         /** Target UI requested to abort aiming */
         bool aborted = false;
         /** if true abort if no targets are available when re-entering aiming ui after shooting */

@@ -17,6 +17,8 @@
 #include "ui_manager.h"
 #include "input_context.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include "cata_scope_helpers.h"
+#include "fp3d_compositor.h"
 #include "fp3d_simple_ui.h"
 #endif
 
@@ -580,10 +582,85 @@ void cataimgui::client::new_frame()
 #endif
 }
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+bool cataimgui::client::render_overlay( ImDrawData *draw_data, SDL_Texture *background )
+{
+    if( !draw_data || draw_data->TotalVtxCount == 0 ) {
+        return true;
+    }
+    SDL_Renderer *renderer = sdl_renderer.get();
+    int width = 0;
+    int height = 0;
+    if( SDL_QueryTexture( background, nullptr, nullptr, &width, &height ) != 0 ) {
+        return false;
+    }
+    int overlay_width = 0;
+    int overlay_height = 0;
+    if( overlay ) {
+        SDL_QueryTexture( overlay.get(), nullptr, nullptr, &overlay_width, &overlay_height );
+    }
+    if( width != overlay_width || height != overlay_height ) {
+        overlay.reset( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_ARGB8888,
+                                          SDL_TEXTUREACCESS_TARGET, width, height ) );
+        // ImGui's blend over transparent black produces premultiplied pixels.
+        const SDL_BlendMode blend = SDL_ComposeCustomBlendMode(
+                                        SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+                                        SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD );
+        if( !overlay || SDL_SetTextureBlendMode( overlay.get(), blend ) != 0 ) {
+            overlay.reset();
+            return false;
+        }
+    }
+    SDL_Rect viewport;
+    SDL_Rect clip;
+    SDL_RenderGetViewport( renderer, &viewport );
+    SDL_RenderGetClipRect( renderer, &clip );
+    const bool clipped = SDL_RenderIsClipEnabled( renderer );
+    float scale_x;
+    float scale_y;
+    SDL_RenderGetScale( renderer, &scale_x, &scale_y );
+    Uint8 r, g, b, a;
+    SDL_GetRenderDrawColor( renderer, &r, &g, &b, &a );
+    if( SDL_SetRenderTarget( renderer, overlay.get() ) != 0 ) {
+        return false;
+    }
+    on_out_of_scope restore( [&]() {
+        SDL_SetRenderTarget( renderer, background );
+        SDL_RenderSetScale( renderer, scale_x, scale_y );
+        SDL_RenderSetViewport( renderer, &viewport );
+        SDL_RenderSetClipRect( renderer, clipped ? &clip : nullptr );
+        SDL_SetRenderDrawColor( renderer, r, g, b, a );
+    } );
+    SDL_RenderSetScale( renderer, scale_x, scale_y );
+    SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
+    if( SDL_RenderClear( renderer ) != 0 ) {
+        return false;
+    }
+    ImGui_ImplSDLRenderer2_RenderDrawData( draw_data, renderer );
+    overlay_ready = true;
+    return true;
+}
+
+void cataimgui::client::present_overlay()
+{
+    if( overlay_ready && fp3d_compositor::turn_based() && ui_adaptor::has_imgui() ) {
+        SDL_RenderCopy( sdl_renderer.get(), overlay.get(), nullptr, nullptr );
+    }
+}
+#endif
+
 void cataimgui::client::end_frame()
 {
     ImGui::Render();
-    ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), sdl_renderer.get() );
+    ImDrawData *draw_data = ImGui::GetDrawData();
+#if defined(TILES) && defined(ENABLE_FP3D)
+    overlay_ready = false;
+    SDL_Texture *background = SDL_GetRenderTarget( sdl_renderer.get() );
+    if( !background || !fp3d_compositor::turn_based() || !render_overlay( draw_data, background ) )
+#endif
+    {
+        ImGui_ImplSDLRenderer2_RenderDrawData( draw_data, sdl_renderer.get() );
+    }
     ImGuiIO &io = ImGui::GetIO();
     for( const int &code : cata_input_trail ) {
         io.AddKeyEvent( cata_key_to_imgui( code ), false );
@@ -593,10 +670,13 @@ void cataimgui::client::end_frame()
 
 void cataimgui::client::process_input( void *input )
 {
-    if( any_window_shown() ) {
-        const SDL_Event *evt = static_cast<const SDL_Event *>( input );
+    const SDL_Event *evt = static_cast<const SDL_Event *>( input );
+    // Menus may close on press. Still deliver the later release so both ImGui
+    // and SDL's backend drop held-button/capture state before the next menu.
+    const bool releasing_mouse = evt->type == SDL_MOUSEBUTTONUP;
+    if( any_window_shown() || releasing_mouse ) {
         bool no_mouse = ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouse;
-        if( no_mouse ) {
+        if( no_mouse && !releasing_mouse ) {
             switch( evt->type ) {
                 case SDL_MOUSEMOTION:
                 case SDL_MOUSEWHEEL:

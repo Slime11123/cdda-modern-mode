@@ -3,11 +3,16 @@
 #define CATA_SRC_FP3D_INPUT_H
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <string>
+#include <memory>
 #include <deque>
 #include <map>
 #include "input_enums.h"
 #include "action.h"
 
+namespace cataimgui
+{
+class window;
+}
 class input_context;
 struct input_event;
 namespace fp3d_input
@@ -46,6 +51,7 @@ gestures &world_gestures();
 // Translate profile commands into native actions; never change world state.
 std::string resolve( mode controls, const input_event &event, float yaw, bool driving = false );
 bool vehicle_controls();
+std::unique_ptr<cataimgui::window> create_mode_settings( int &view, int &keys, int &style );
 action_id display_bindings( input_context &original );
 }
 #endif

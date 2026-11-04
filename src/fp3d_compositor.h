@@ -22,9 +22,15 @@ struct scene_snapshot;
 namespace fp3d_compositor
 {
 bool requested();
+bool view_3d();
+void apply_modes( bool three_d, bool modern );
+// Exercise the legacy three presets in renderer regression checks.
+void cycle_mode();
 fp3d_input::mode controls();
 bool modern_2d_input();
-// Shared survival panel, independent of 3D scene capture and movement controls.
+bool modern_2d_world();
+bool modern_2d_overlay_open();
+// Shared modern interfaces, independent of 3D scene capture and movement controls.
 bool survival_menu_available();
 // UI style is independent of the selected control/view mode.
 bool uses_hud();

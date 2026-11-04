@@ -1,11 +1,15 @@
 #include "fp3d_interaction.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <sstream>
 #include "avatar.h"
+#include "avatar_action.h"
 #include "calendar.h"
 #include "cata_catch.h"
 #include "fp3d_snapshot.h"
 #include "game.h"
+#include "json.h"
+#include "json_loader.h"
 #include "map.h"
 #include "map_helpers.h"
 #include "npc.h"
@@ -305,5 +309,66 @@ TEST_CASE( "modern_2d_context_travel_schedules_native_path_without_teleporting",
     REQUIRE_FALSE( wall.empty() );
     CHECK_FALSE( wall.front().enabled );
     CHECK_FALSE( fp3d_interaction::resolve_2d_choice( wall.front(), destination, you, here ) );
+}
+
+TEST_CASE( "modern_2d_context_aim_passes_clicked_tile_to_native_aiming", "[fp3d][context_2d]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto target = you.pos_bub( here ) + tripoint_rel_ms( 4, 0, 0 );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto is_aim = []( const auto &entry ) { return entry.action == ACTION_FIRE; };
+
+    REQUIRE_FALSE( you.is_armed() );
+    auto options = fp3d_interaction::context_2d_entries( target, you, here );
+    REQUIRE_FALSE( options.empty() );
+    CHECK( std::none_of( options.begin(), options.end(), is_aim ) );
+
+    you.set_wielded_item( item( itype_id( "shortbow" ) ) );
+    options = fp3d_interaction::context_2d_entries( target, you, here );
+    CHECK( std::any_of( options.begin(), options.end(), is_aim ) );
+
+    item gun( itype_id( "glock_19" ) );
+    gun.ammo_set( itype_id( "9mm" ), 10 );
+    you.set_wielded_item( gun );
+    options = fp3d_interaction::context_2d_entries( target, you, here );
+    const auto aim = std::find_if( options.begin(), options.end(), is_aim );
+    REQUIRE( aim != options.end() );
+    CHECK( std::string( options.front().label ) == "前往此处" );
+    const auto intent = fp3d_interaction::resolve_2d_choice( *aim, target, you, here );
+    REQUIRE( intent );
+    REQUIRE( intent->position == target );
+    CHECK_FALSE( fp3d_interaction::resolve_2d_choice( *aim, you.pos_bub( here ), you, here ) );
+    const auto moves = you.get_moves();
+    const auto clock = calendar::turn;
+    const auto last_target = you.last_target_pos;
+    const auto clicked = here.get_abs( *intent->position );
+    avatar_action::fire_wielded_weapon( you, clicked );
+    REQUIRE( you.has_activity( activity_id( "ACT_AIM" ) ) );
+    std::ostringstream saved;
+    JsonOut json( saved );
+    you.activity.serialize( json );
+    const auto data = json_loader::from_string( saved.str() ).get_object();
+    data.allow_omitted_members();
+    const auto wrapper = data.get_object( "actor" );
+    wrapper.allow_omitted_members();
+    const auto actor = wrapper.get_object( "actor_data" );
+    actor.allow_omitted_members();
+    tripoint_abs_ms initial_target;
+    REQUIRE( actor.read( "initial_target", initial_target ) );
+    CHECK( initial_target == clicked );
+    CHECK( you.last_target_pos == last_target );
+    CHECK( you.get_wielded_item()->ammo_remaining() == 10 );
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == clock );
+
+    you.cancel_activity();
+    you.remove_weapon();
+    CHECK_FALSE( fp3d_interaction::resolve_2d_choice( *aim, target, you, here ) );
 }
 #endif

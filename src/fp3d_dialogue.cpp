@@ -129,11 +129,14 @@ cataimgui::bounds window::get_bounds()
 void window::draw()
 {
     ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    const bool modern_2d = fp3d_compositor::controls() == fp3d_input::mode::modern_2d;
     if( background ) {
         ImGui::GetBackgroundDrawList()->AddImage( ( ImTextureID )( intptr_t )background.get(),
-                ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize, ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
+                ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize,
+                ImVec2( 0, modern_2d ? 0 : 1 ), ImVec2( 1, modern_2d ? 1 : 0 ) );
     }
-    ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f, .78f ) );
+    ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f,
+                          modern_2d ? 1.0f : .78f ) );
     ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .045f, .043f, .038f, .35f ) );
     ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
     ImGui::PushStyleColor( ImGuiCol_TextDisabled, ImVec4( .70f, .64f, .48f, 1 ) );
