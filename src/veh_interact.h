@@ -48,6 +48,10 @@ enum class task_reason : int {
 class ui_adaptor;
 class vehicle;
 struct vehicle_part;
+namespace cataimgui
+{
+class window;
+}
 
 // For marking 'leaking' tanks/reactors/batteries
 const std::string leak_marker = "<color_red>*</color>";
@@ -117,6 +121,18 @@ class veh_interact
         std::optional<std::string> msg;
 
         bool ui_hidden = false;
+
+        std::weak_ptr<cataimgui::window> simple_window;
+        bool simple_legacy = false;
+        int *simple_part_selection = nullptr;
+        bool simple_can_confirm = false;
+        bool simple_reveal_selection = true;
+        std::optional<int> simple_requested_row;
+        std::optional<point_rel_ms> simple_requested_move;
+        int simple_detail_scroll = 0;
+
+        void draw_simple_vehicle( map &here, cataimgui::window &panel );
+        std::string read_vehicle_action();
 
         int highlight_part = -1;
 

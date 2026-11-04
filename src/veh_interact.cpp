@@ -65,7 +65,9 @@
 #include "translations.h"
 #include "uilist.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include "cata_imgui.h"
 #include "fp3d_simple_ui.h"
+#include "input_popup.h"
 #endif
 #include "ui_manager.h"
 #include "units.h"
@@ -423,7 +425,25 @@ shared_ptr_fast<ui_adaptor> veh_interact::create_or_get_ui_adaptor( map &here )
             current_ui.position_from_window( catacurses::stdscr );
         } );
         current_ui->mark_resize();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        std::shared_ptr<cataimgui::window> panel;
+        if( fp3d_simple_ui::active() ) {
+            panel = fp3d_simple_ui::create_panel( "车辆工作台",
+            [this, &here]( cataimgui::window & window ) {
+                draw_simple_vehicle( here, window );
+            }, [this]() {
+                return !ui_hidden && !simple_legacy;
+            } );
+            simple_window = panel;
+            main_context.set_timeout( 50 );
+        }
+        current_ui->on_redraw( [&here, this, panel]( const ui_adaptor & ) {
+            if( panel && !simple_legacy ) {
+                return;
+            }
+#else
         current_ui->on_redraw( [&here, this]( const ui_adaptor & ) {
+#endif
             if( ui_hidden ) {
                 return;
             }
@@ -496,6 +516,191 @@ void veh_interact::hide_ui( map &here, const bool hide )
     }
 }
 
+std::string veh_interact::read_vehicle_action()
+{
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( const auto window = simple_window.lock(); window && !simple_legacy && !ui_hidden ) {
+        if( !window->get_is_open() ) {
+            return "QUIT";
+        }
+        if( simple_requested_row && simple_part_selection ) {
+            *simple_part_selection = *simple_requested_row;
+            simple_requested_row.reset();
+            simple_detail_scroll = 0;
+            return "FP3D_PART_SELECTION";
+        }
+        if( simple_requested_move ) {
+            return "FP3D_MOUNT_SELECTION";
+        }
+        if( window->has_button_action() ) {
+            return window->get_button_action();
+        }
+    }
+#endif
+    const std::string action = main_context.handle_input();
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !simple_window.expired() && !simple_legacy && simple_part_selection ) {
+        if( action == "DESC_LIST_DOWN" || action == "DESC_LIST_UP" ) {
+            simple_detail_scroll = action == "DESC_LIST_DOWN" ? 1 : -1;
+        } else if( action != "TIMEOUT" && action != "MOUSE_MOVE" && action != "ANY_INPUT" ) {
+            simple_reveal_selection = true;
+        }
+    }
+#endif
+    return action;
+}
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+void veh_interact::draw_simple_vehicle( map &here, cataimgui::window &panel )
+{
+    const bool choosing_part = simple_part_selection != nullptr;
+    fp3d_simple_ui::accent_text( veh->name );
+    if( title ) {
+        cataimgui::draw_colored_text( *title, c_white, ImGui::GetContentRegionAvail().x );
+    }
+    ImGui::Text( "安装位置 (%d, %d)", -dd.x(), -dd.y() );
+    ImGui::Separator();
+
+    const float footer = ImGui::GetFrameHeightWithSpacing() * ( choosing_part ? 2.f : 4.f );
+    const float height = std::max( 80.f, ImGui::GetContentRegionAvail().y - footer );
+    const float left_width = ImGui::GetContentRegionAvail().x * .43f;
+    ImGui::BeginChild( "车辆选取", ImVec2( left_width, height ), true );
+    if( choosing_part ) {
+        if( install_info ) {
+            ImGui::TextWrapped( "%s", install_info->tab_list[install_info->tab].name().c_str() );
+            panel.action_button( "PREV_TAB", "上一分类" );
+            ImGui::SameLine();
+            panel.action_button( "NEXT_TAB", "下一分类" );
+            panel.action_button( "FILTER", "搜索零件" );
+            ImGui::SameLine();
+            panel.action_button( "REPAIR", "清除筛选" );
+        }
+        const size_t count = install_info ? install_info->tab_vparts.size() :
+                             remove_info ? parts_here.size() : need_repair.size();
+        if( count == 0 ) {
+            ImGui::TextDisabled( "没有符合条件的零件。" );
+        }
+        const int selected = *simple_part_selection;
+        ImGuiListClipper clipper;
+        clipper.Begin( static_cast<int>( count ) );
+        if( selected >= 0 && static_cast<size_t>( selected ) < count && simple_reveal_selection ) {
+            clipper.IncludeItemsByIndex( selected, selected + 1 );
+        }
+        while( clipper.Step() ) {
+            for( int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row ) {
+                ImGui::PushID( row );
+                const std::string name = install_info ? install_info->tab_vparts[row]->name() :
+                                         veh->part( parts_here[remove_info ? row : need_repair[row]] ).name();
+                if( ImGui::Selectable( name.c_str(), selected == row ) ) {
+                    simple_requested_row = row;
+                }
+                if( selected == row && simple_reveal_selection ) {
+                    ImGui::SetScrollHereY( .5f );
+                }
+                ImGui::PopID();
+            }
+        }
+        simple_reveal_selection = false;
+    } else {
+        ImGui::TextWrapped( "点选车辆格或相邻空格。方向键也可移动选点。" );
+        const float cell = ImGui::GetFrameHeight();
+        const float spacing = 2.f;
+        const int radius = std::clamp( ( static_cast<int>( ImGui::GetContentRegionAvail().x /
+                                        ( cell + spacing ) ) - 1 ) / 2, 1, 6 );
+        std::set<point> occupied;
+        for( const int index : veh->all_parts_at_location( "structure" ) ) {
+            occupied.insert( ( veh->part( index ).mount + dd ).rotate( 3 ).raw() );
+        }
+        ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( spacing, spacing ) );
+        for( int y = -4; y <= 4; ++y ) {
+            for( int x = -radius; x <= radius; ++x ) {
+                if( x > -radius ) {
+                    ImGui::SameLine();
+                }
+                const point cell_position( x, y );
+                ImGui::PushID( ( y + 4 ) * ( radius * 2 + 1 ) + x + radius );
+                const bool current = cell_position == point::zero;
+                if( current ) {
+                    ImGui::PushStyleColor( ImGuiCol_Button, ImGui::GetStyleColorVec4( ImGuiCol_HeaderActive ) );
+                }
+                const char *symbol = occupied.count( cell_position ) ? "+" : ".";
+                if( ImGui::Button( symbol, ImVec2( cell, cell ) ) && !current ) {
+                    simple_requested_move = point_rel_ms( cell_position );
+                }
+                if( current ) {
+                    ImGui::PopStyleColor();
+                }
+                ImGui::PopID();
+            }
+        }
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    ImGui::BeginChild( "车辆详情", ImVec2( 0, height ), true );
+    if( simple_detail_scroll ) {
+        ImGui::SetScrollY( ImGui::GetScrollY() + simple_detail_scroll * ImGui::GetWindowHeight() );
+        simple_detail_scroll = 0;
+    }
+    const float width = ImGui::GetContentRegionAvail().x;
+    if( msg ) {
+        cataimgui::draw_colored_text( *msg, c_white, width );
+    }
+    if( !choosing_part ) {
+        cataimgui::draw_colored_text( "车况：" + total_durability_text, total_durability_color, width );
+        ImGui::Text( "重量 %.0f %s", convert_weight( veh->total_mass( here ) ), weight_units() );
+        ImGui::Separator();
+        fp3d_simple_ui::accent_text( "当前位置的零件" );
+        if( parts_here.empty() ) {
+            ImGui::TextDisabled( "当前格没有零件。" );
+        }
+        for( const int index : parts_here ) {
+            const vehicle_part &part = veh->part( index );
+            ImGui::TextWrapped( "%s  %d/%d", part.name().c_str(), part.hp(), part.info().durability );
+        }
+        ImGui::Separator();
+        fp3d_simple_ui::accent_text( "车辆主要设备" );
+        for( const part_option &option : overview_opts ) {
+            const vehicle_part &part = *option.part;
+            if( part.ammo_current().is_null() ) {
+                ImGui::TextWrapped( "%s", part.name().c_str() );
+            } else {
+                ImGui::TextWrapped( "%s · %s × %d", part.name().c_str(),
+                                    item::nname( part.ammo_current() ).c_str(), part.ammo_remaining() );
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    if( choosing_part ) {
+        ImGui::BeginDisabled( !simple_can_confirm );
+        panel.action_button( "CONFIRM", "确认" );
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        panel.action_button( "QUIT", "返回" );
+        return;
+    }
+    static constexpr std::pair<const char *, const char *> buttons[] = {
+        { "INSTALL", "安装" }, { "REPAIR", "修理" }, { "MEND", "排除故障" },
+        { "REMOVE", "拆除" }, { "REFILL", "补充" }, { "SIPHON", "抽取液体" },
+        { "UNLOAD", "卸载" }, { "ASSIGN_CREW", "分配乘员" }, { "CHANGE_SHAPE", "更换形状" },
+        { "RENAME", "重命名" }, { "RELABEL", "格子标签" }, { "FP3D_FULL_VEHICLE", "完整面板" },
+        { "QUIT", "返回" }
+    };
+    const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    bool first = true;
+    for( const auto &[action, label] : buttons ) {
+        const float button_width = ImGui::CalcTextSize( label ).x + 2 * ImGui::GetStyle().FramePadding.x;
+        if( !first && ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + button_width <= right ) {
+            ImGui::SameLine();
+        }
+        panel.action_button( action, label );
+        first = false;
+    }
+}
+#endif
+
 void veh_interact::do_main_loop( map &here )
 {
     bool finish = false;
@@ -514,9 +719,16 @@ void veh_interact::do_main_loop( map &here )
         calc_overview( here );
         ui_manager::redraw();
         const int description_scroll_lines = catacurses::getmaxy( w_parts ) - 4;
-        const std::string action = main_context.handle_input();
+        const std::string action = read_vehicle_action();
         msg.reset();
-        if( const std::optional<tripoint_rel_ms> vec = main_context.get_direction_rel_ms( action ) ) {
+        if( action == "FP3D_MOUNT_SELECTION" && simple_requested_move ) {
+            const point_rel_ms direction = *simple_requested_move;
+            simple_requested_move.reset();
+            move_cursor( here, direction );
+        } else if( action == "FP3D_FULL_VEHICLE" ) {
+            simple_legacy = true;
+            current_ui->mark_resize();
+        } else if( const std::optional<tripoint_rel_ms> vec = main_context.get_direction_rel_ms( action ) ) {
             move_cursor( here, vec->xy() );
         } else if( action == "QUIT" ) {
             finish = true;
@@ -1009,6 +1221,9 @@ void veh_interact::do_install( map &here )
     shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
 
     int &pos = install_info->pos = 0;
+    restore_on_out_of_scope previous_selection( simple_part_selection );
+    simple_part_selection = &pos;
+    simple_reveal_selection = true;
     size_t &tab = install_info->tab = 0;
     avatar &player_character = get_avatar();
 
@@ -1024,17 +1239,31 @@ void veh_interact::do_install( map &here )
                          ? tab_vparts[pos] : nullptr;
 
         const bool can_install = update_part_requirements( here );
+        simple_can_confirm = can_install && sel_vpart_info != nullptr;
         ui_manager::redraw();
 
-        const std::string action = main_context.handle_input();
+        const std::string action = read_vehicle_action();
         msg.reset();
         if( action == "FILTER" ) {
-            string_input_popup()
-            .title( _( "Search for part" ) )
-            .width( 50 )
-            .description( _( "Filter" ) )
-            .max_length( 100 )
-            .edit( filter );
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( !simple_window.expired() && !simple_legacy ) {
+                string_input_popup_imgui search( 50, filter, _( "Search for part" ) );
+                search.set_max_input_length( 100 );
+                const std::string value = search.query();
+                if( search.cancelled() ) {
+                    continue;
+                }
+                filter = value;
+            } else
+#endif
+            {
+                string_input_popup()
+                .title( _( "Search for part" ) )
+                .width( 50 )
+                .description( _( "Filter" ) )
+                .max_length( 100 )
+                .edit( filter );
+            }
             tab = tab_filters.size() - 1; // Move to the user filter tab.
             pos = 0;
         } else if( action == "REPAIR" ) {
@@ -1166,6 +1395,9 @@ void veh_interact::do_repair( map &here )
     int pos = 0;
 
     restore_on_out_of_scope prev_hilight_part( highlight_part );
+    restore_on_out_of_scope previous_selection( simple_part_selection );
+    simple_part_selection = &pos;
+    simple_reveal_selection = true;
 
     avatar &player_character = get_avatar();
     while( true ) {
@@ -1224,9 +1456,10 @@ void veh_interact::do_repair( map &here )
 
         highlight_part = need_repair[pos];
 
+        simple_can_confirm = ok;
         ui_manager::redraw();
 
-        const std::string action = main_context.handle_input();
+        const std::string action = read_vehicle_action();
         msg.reset();
         if( ( action == "REPAIR" || action == "CONFIRM" ) && ok ) {
             // Modifying a vehicle with rotors will make in not flightworthy (until we've got a better model)
@@ -1700,6 +1933,9 @@ void veh_interact::overview( map &here,
     }
 #endif
 
+    restore_on_out_of_scope restore_legacy( simple_legacy );
+    simple_legacy = true;
+    current_ui->mark_resize();
     while( true ) {
         calc_overview( here );
 
@@ -1896,6 +2132,9 @@ void veh_interact::do_remove( map &here )
     restore_on_out_of_scope prev_overview_enable( overview_enable );
 
     restore_on_out_of_scope prev_hilight_part( highlight_part );
+    restore_on_out_of_scope previous_selection( simple_part_selection );
+    simple_part_selection = &pos;
+    simple_reveal_selection = true;
 
     while( true ) {
         int part = parts_here[ pos ];
@@ -1909,10 +2148,11 @@ void veh_interact::do_remove( map &here )
         highlight_part = pos;
 
         calc_overview( here );
+        simple_can_confirm = can_remove;
         ui_manager::redraw();
 
         //read input
-        const std::string action = main_context.handle_input();
+        const std::string action = read_vehicle_action();
         msg.reset();
         if( can_remove && ( action == "REMOVE" || action == "CONFIRM" ) ) {
             switch( reason ) {
@@ -2098,10 +2338,19 @@ void veh_interact::do_assign_crew( map &here )
 
 void veh_interact::do_rename()
 {
-    std::string name = string_input_popup()
-                       .title( _( "Enter new vehicle name:" ) )
-                       .width( 20 )
-                       .query_string();
+    std::string name;
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !simple_window.expired() && !simple_legacy ) {
+        string_input_popup_imgui popup( 20, veh->name, _( "Enter new vehicle name:" ) );
+        name = popup.query();
+        if( popup.cancelled() ) {
+            return;
+        }
+    } else
+#endif
+    {
+        name = string_input_popup().title( _( "Enter new vehicle name:" ) ).width( 20 ).query_string();
+    }
     if( !name.empty() ) {
         veh->name = name;
         if( veh->tracking_on ) {
@@ -2120,6 +2369,16 @@ void veh_interact::do_relabel( const map &here )
     }
 
     const vpart_position vp( *veh, cpart );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !simple_window.expired() && !simple_legacy ) {
+        string_input_popup_imgui popup( 20, vp.get_label().value_or( "" ), _( "New label:" ) );
+        const std::string label = popup.query();
+        if( !popup.cancelled() ) {
+            vp.set_label( label );
+        }
+        return;
+    }
+#endif
     string_input_popup pop;
     std::string text = pop
                        .title( _( "New label:" ) )
