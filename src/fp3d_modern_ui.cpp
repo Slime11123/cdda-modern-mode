@@ -4,10 +4,14 @@
 #include <cstdint>
 #include <map>
 #include <set>
+#include <variant>
 #include "avatar.h"
+#include "bionics.h"
 #include "cata_imgui.h"
+#include "character_martial_arts.h"
 #include "fp3d_compositor.h"
 #include "fp3d_crafting.h"
+#include "fp3d_abilities.h"
 #include "fp3d_construction.h"
 #include "fp3d_journal.h"
 #include "fp3d_input.h"
@@ -32,7 +36,9 @@
 #include "effect.h"
 #include "skill.h"
 #include "map.h"
+#include "martialarts.h"
 #include "messages.h"
+#include "mutation.h"
 #include "ui_manager.h"
 #include "units.h"
 namespace fp3d_modern_ui
@@ -42,6 +48,14 @@ namespace
 bool resume_after_activity = false;
 int remembered_page = 0;
 int scale_choice = 0;
+constexpr int mutations_page = 9;
+constexpr int bionics_page = 10;
+constexpr int styles_page = 11;
+
+using fp3d_abilities::ability_request;
+using fp3d_abilities::bionic_control;
+using fp3d_abilities::bionic_request;
+
 class panel : public cataimgui::window
 {
         avatar &you;
@@ -109,6 +123,8 @@ class panel : public cataimgui::window
         bool confirm_note_delete = false;
         std::optional<std::pair<tripoint_abs_omt, std::string>> pending_note;
         int more_section = 0;
+        std::optional<ability_request> pending_ability;
+        bool ability_in_progress = false;
         bool messages_loaded = false;
         std::vector<std::pair<std::string, std::string>> messages;
         std::vector<std::string> message_previews;
@@ -1480,11 +1496,150 @@ class panel : public cataimgui::window
             ImGui::EndChild();
             compatible( ACTION_PL_INFO, "完整人物信息（原版兼容）" );
         }
+        void ability_pages() {
+            const float height = std::max( 80.f, ImGui::GetContentRegionAvail().y - 55 * scale );
+            ImGui::PushID( remembered_page );
+            ImGui::BeginChild( "能力操作", ImVec2( 0, height ), true );
+            if( remembered_page == mutations_page ) {
+                const auto traits = you.get_functioning_mutations( false, true );
+                if( traits.empty() ) {
+                    ImGui::TextDisabled( "没有可显示的变异。" );
+                }
+                for( const trait_id &id : traits ) {
+                    ImGui::PushID( id.str().c_str() );
+                    const bool active = you.has_active_mutation( id );
+                    ImGui::TextWrapped( "%s · %s", you.mutation_name( id ).c_str(),
+                                        active ? "已启用" : id->activated ? "未启用" : "被动" );
+                    if( id->activated ) {
+                        const bool ready = fp3d_abilities::mutation_ready( you, id );
+                        ImGui::BeginDisabled( !ready );
+                        if( ImGui::Button( active ? "停用" : "启用" ) ) {
+                            pending_ability = id;
+                        }
+                        ImGui::EndDisabled();
+                        if( !ready ) {
+                            ImGui::TextDisabled( "当前资源或状态不足以启用。" );
+                        }
+                    }
+                    if( ImGui::TreeNode( "变异说明" ) ) {
+                        cataimgui::draw_colored_text( you.mutation_desc( id ), c_white,
+                                                     ImGui::GetContentRegionAvail().x );
+                        ImGui::TreePop();
+                    }
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+            } else if( remembered_page == bionics_page ) {
+                ImGui::Text( "电量 %s / %s", units::display( you.get_power_level() ).c_str(),
+                             units::display( you.get_max_power_level() ).c_str() );
+                if( you.num_bionics() == 0 ) {
+                    ImGui::TextDisabled( "未安装仿生插件。" );
+                }
+                for( int i = 0; i < you.num_bionics(); ++i ) {
+                    const bionic &bio = you.bionic_at_index( i );
+                    const bionic_data &info = bio.info();
+                    ImGui::PushID( static_cast<int>( bio.get_uid() ) );
+                    ImGui::TextWrapped( "%s · %s", info.name.translated().c_str(),
+                                        bio.powered ? "已启用" : info.activated ? "未启用" : "被动" );
+                    if( info.activated ) {
+                        ImGui::Text( "启用消耗 %s", units::display( info.power_activate ).c_str() );
+                        const char *blocked = nullptr;
+                        if( !bio.powered ) {
+                            if( bio.can_install_weapon() && !bio.has_weapon() ) {
+                                blocked = "请先安装仿生武器。";
+                            } else if( !you.enough_power_for( bio.id ) ) {
+                                blocked = "电量不足。";
+                            }
+                        }
+                        ImGui::BeginDisabled( blocked != nullptr );
+                        if( ImGui::Button( bio.powered ? "停用" : "启用" ) ) {
+                            pending_ability = bionic_request{ bio.get_uid(), bionic_control::power };
+                        }
+                        ImGui::EndDisabled();
+                        if( blocked ) {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled( "%s", blocked );
+                        }
+                    }
+                    if( bio.can_install_weapon() && !bio.powered &&
+                        ImGui::Button( bio.has_weapon() ? "卸下武器" : "安装武器" ) ) {
+                        pending_ability = bionic_request{ bio.get_uid(), bionic_control::weapon };
+                    }
+                    if( !info.fuel_opts.empty() || info.is_remote_fueled ) {
+                        if( bio.is_safe_fuel_on() ) {
+                            ImGui::Text( "节能模式：%.0f%%", bio.get_safe_fuel_thresh() * 100 );
+                        } else {
+                            ImGui::TextUnformatted( "节能模式：关闭" );
+                        }
+                        if( ImGui::Button( "切换节能模式" ) ) {
+                            pending_ability = bionic_request{ bio.get_uid(), bionic_control::fuel };
+                        }
+                    }
+                    if( ImGui::TreeNode( "插件说明" ) ) {
+                        cataimgui::draw_colored_text( info.description.translated(), c_white,
+                                                     ImGui::GetContentRegionAvail().x );
+                        ImGui::TreePop();
+                    }
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+            } else {
+                const auto &martial = *you.martial_arts_data;
+                ImGui::TextWrapped( "当前战斗方式：%s", martial.selected_style()->name.translated().c_str() );
+                bool hands_free = martial.keep_hands_free;
+                if( ImGui::Checkbox( "保持双手空闲", &hands_free ) ) {
+                    pending_ability = hands_free;
+                }
+                ImGui::Separator();
+                for( const matype_id &id : fp3d_abilities::available_styles( you ) ) {
+                    ImGui::PushID( id.str().c_str() );
+                    ImGui::TextWrapped( "%s", id->name.translated().c_str() );
+                    const bool current = id == martial.selected_style();
+                    ImGui::BeginDisabled( current );
+                    if( ImGui::Button( current ? "当前使用" : "切换到此武术" ) ) {
+                        pending_ability = id;
+                    }
+                    ImGui::EndDisabled();
+                    if( ImGui::TreeNode( "武术说明" ) ) {
+                        cataimgui::draw_colored_text( id->description.translated(), c_white,
+                                                     ImGui::GetContentRegionAvail().x );
+                        ImGui::TreePop();
+                    }
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::PopID();
+        }
+
+        void execute_ability( const ability_request &request ) {
+            const int moves = you.get_moves();
+            const tripoint_abs_ms position = you.pos_abs();
+            const auto turn = calendar::turn;
+            bool close = false;
+            ability_in_progress = true;
+            const bool success = fp3d_abilities::execute( you, request, close );
+            ability_in_progress = false;
+            fp3d_compositor::set_input_context( "FP3D_PANEL" );
+            const bool acted_in_world = you.get_moves() != moves || you.pos_abs() != position ||
+                                        calendar::turn != turn || static_cast<bool>( you.activity );
+            direct_action_completed |= acted_in_world;
+            if( close || acted_in_world || you.is_dead_state() ) {
+                is_open = false;
+            }
+            action_message = success ? "" : "操作未执行，请查看插件或能力条件及游戏消息。";
+            if( is_open ) {
+                refresh_character();
+                refresh_items();
+            }
+        }
+
         void more() {
             const float width = ImGui::GetContentRegionAvail().x;
             const float height = std::max( 100.0f, ImGui::GetContentRegionAvail().y - 85 * scale );
             ImGui::BeginChild( "更多分类", ImVec2( width * .23f, height ), true );
-            const char *sections[] = { "消息日志", "能力与区域", "车辆与活动", "设置与规则", "侧栏信息" };
+            const char *sections[] = { "消息日志", "区域与阵营", "车辆与活动", "设置与规则", "侧栏信息" };
             for( int i = 0; i < 5; ++i ) {
                 if( ImGui::Selectable( sections[i], more_section == i ) ) {
                     more_section = i;
@@ -1577,9 +1732,6 @@ class panel : public cataimgui::window
                 ImGui::TextUnformatted( "本组功能使用原版兼容界面" );
                 ImGui::Separator();
                 if( more_section == 1 ) {
-                    compatible( ACTION_BIONICS, "仿生模块" );
-                    compatible( ACTION_MUTATIONS, "变异与能力" );
-                    compatible( ACTION_PICK_STYLE, "武术与战斗方式" );
                     compatible( ACTION_MORALE, "士气详情" );
                     compatible( ACTION_ZONES, "区域管理" );
                     compatible( ACTION_FACTIONS, "阵营信息" );
@@ -1661,19 +1813,20 @@ class panel : public cataimgui::window
             if( !action_message.empty() ) {
                 ImGui::TextColored( ImVec4( 1, .86f, .18f, 1 ), "%s", action_message.c_str() );
             }
-            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏" };
+            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏", "变异", "仿生插件", "武术" };
             if( pickup_target ) {
                 ImGui::TextUnformatted( "拾取物品" );
             }
             if( crafting_position ) {
                 ImGui::TextUnformatted( "简易制作" );
             }
-            for( int i = 0; !pickup_target && !crafting_position && i < 9; ++i ) {
-                if( i ) {
+            for( int i = 0; !pickup_target && !crafting_position && i <= styles_page; ++i ) {
+                const float tab_width = ( i == 1 ? 110 : i == bionics_page ? 95 : 65 ) * scale;
+                if( i && ImGui::GetItemRectMax().x + tab_width + 50 * scale <
+                    ImGui::GetWindowPos().x + ImGui::GetWindowWidth() ) {
                     ImGui::SameLine();
                 }
-                if( ImGui::Selectable( pages[i], remembered_page == i, 0, ImVec2( ( i == 1 ? 110 : 65 ) * scale,
-                                       0 ) ) ) {
+                if( ImGui::Selectable( pages[i], remembered_page == i, 0, ImVec2( tab_width, 0 ) ) ) {
                     remembered_page = i;
                 }
             }
@@ -1771,6 +1924,8 @@ class panel : public cataimgui::window
                 map_page();
             } else if( remembered_page == 7 ) {
                 more();
+            } else if( remembered_page >= mutations_page ) {
+                ability_pages();
             } else {
                 sidebar_page();
             }
@@ -1835,6 +1990,9 @@ class panel : public cataimgui::window
         }
     public:
         void draw() override {
+            if( ability_in_progress ) {
+                return;
+            }
             ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
             if( background && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
                 ImGui::GetBackgroundDrawList()->AddImage( ( ImTextureID )( intptr_t )background.get(),
@@ -1936,7 +2094,7 @@ class panel : public cataimgui::window
                 open_use = true;
             }
             if( initial_page >= 0 ) {
-                remembered_page = std::clamp( initial_page, 0, 8 );
+                remembered_page = std::clamp( initial_page, 0, styles_page );
             }
             refresh_character();
             if( nearby ) {
@@ -1981,6 +2139,12 @@ class panel : public cataimgui::window
                                  fp3d_input::modern_2d_context() : fp3d_input::context();
             while( is_open ) {
                 ui_manager::redraw();
+                if( pending_ability ) {
+                    const ability_request request = std::move( *pending_ability );
+                    pending_ability.reset();
+                    execute_ability( request );
+                    continue;
+                }
                 if( pending_recipe_favorite ) {
                     const auto request = *pending_recipe_favorite;
                     pending_recipe_favorite.reset();

@@ -13,6 +13,10 @@
 #include "cata_scope_helpers.h"
 #include "color_loader.h"
 #include "fp3d_simple_ui.h"
+#include "fp3d_abilities.h"
+#include "fp3d_modern_ui.h"
+#include "bionics.h"
+#include "character_martial_arts.h"
 #include "fp3d_snapshot.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
@@ -28,6 +32,7 @@
 #include "avatar.h"
 #include "inventory_ui.h"
 #include "item.h"
+#include "map.h"
 #include "map_helpers.h"
 #include "player_helpers.h"
 #include "ui_iteminfo.h"
@@ -171,6 +176,51 @@ TEST_CASE( "fp3d_simple_item_picker_preserves_native_filter_and_denials", "[fp3d
     CHECK( you.get_moves() == before_moves );
 }
 
+TEST_CASE( "fp3d_ability_controls_use_character_state_and_reject_unavailable_requests",
+           "[fp3d][fp3d_abilities]" )
+{
+    clear_map();
+    clear_avatar();
+    avatar &you = get_avatar();
+    bool close = false;
+    const trait_id web( "WEB_WEAVER" );
+    CHECK_FALSE( fp3d_abilities::execute( you, web, close ) );
+    you.set_mutation( web );
+    you.set_thirst( 450 );
+    CHECK_FALSE( fp3d_abilities::execute( you, web, close ) );
+    CHECK_FALSE( you.has_active_mutation( web ) );
+    you.set_thirst( 0 );
+    REQUIRE( fp3d_abilities::execute( you, web, close ) );
+    CHECK( you.has_active_mutation( web ) );
+    REQUIRE( fp3d_abilities::execute( you, web, close ) );
+    CHECK_FALSE( you.has_active_mutation( web ) );
+
+    const bionic_id light( "bio_flashlight" );
+    you.add_bionic( bionic_id( "bio_power_storage" ) );
+    you.add_bionic( light );
+    const auto installed = you.find_bionic_by_type( light );
+    REQUIRE( installed );
+    const fp3d_abilities::bionic_request toggle{ ( *installed )->get_uid(),
+            fp3d_abilities::bionic_control::power };
+    you.set_power_level( units::energy() );
+    CHECK_FALSE( fp3d_abilities::execute( you, toggle, close ) );
+    you.set_power_level( you.get_max_power_level() );
+    const auto charged = you.get_power_level();
+    REQUIRE( fp3d_abilities::execute( you, toggle, close ) );
+    CHECK( you.has_active_bionic( light ) );
+    CHECK( you.get_power_level() == charged - light->power_activate );
+    REQUIRE( fp3d_abilities::execute( you, toggle, close ) );
+    CHECK_FALSE( you.has_active_bionic( light ) );
+
+    const matype_id karate( "style_karate" );
+    CHECK_FALSE( fp3d_abilities::execute( you, karate, close ) );
+    you.martial_arts_data->add_martialart( karate );
+    REQUIRE( fp3d_abilities::execute( you, karate, close ) );
+    CHECK( you.martial_arts_data->selected_style() == karate );
+    REQUIRE( fp3d_abilities::execute( you, true, close ) );
+    CHECK( you.martial_arts_data->keep_hands_free );
+}
+
 TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_simple_ui]" )
 {
     REQUIRE( fp3d_compositor::requested() );
@@ -223,6 +273,9 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     const item_location magazine = you.i_add( item( itype_id( "glockmag" ), calendar::turn ) );
     REQUIRE( ammo );
     REQUIRE( magazine );
+    you.set_mutation( trait_id( "WEB_WEAVER" ) );
+    you.add_bionic( bionic_id( "bio_flashlight" ) );
+    you.martial_arts_data->add_martialart( matype_id( "style_karate" ) );
     restore_on_out_of_scope restore_test( test_mode );
     test_mode = false;
     const auto before_time = calendar::turn;
@@ -522,6 +575,27 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         visible = true;
         frame();
         CHECK( draws > previous_draws );
+    }
+    {
+        SDL_SetWindowSize( window.get(), 640, 480 );
+        std::vector<ImGuiID> page_ids;
+        for( int page = 9; page <= 11; ++page ) {
+            const auto panel = fp3d_modern_ui::create( you, get_map(), 150, false, page );
+            frame();
+            frame();
+            const ImGuiWindow *body = find_window( "/能力操作_" );
+            REQUIRE( body );
+            CHECK( body->Size.x > 0 );
+            CHECK( body->Size.y > 0 );
+            CHECK( body->Pos.x + body->Size.x <= ImGui::GetIO().DisplaySize.x );
+            CHECK( body->Pos.y + body->Size.y <= ImGui::GetIO().DisplaySize.y );
+            for( const ImGuiID previous : page_ids ) {
+                CHECK( body->ID != previous );
+            }
+            page_ids.push_back( body->ID );
+            save( "survival-ability-" + std::to_string( page ) );
+        }
+        SDL_SetWindowSize( window.get(), 1280, 720 );
     }
     for( const bool modern : {
              false, true
