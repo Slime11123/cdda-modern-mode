@@ -10,6 +10,7 @@
 #include "fp3d_modern_ui.h"
 #include "fp3d_compositor.h"
 #include "fp3d_quick_menu.h"
+#include "fp3d_snapshot.h"
 #include "game.h"
 #include "gun_mode.h"
 #include "item.h"
@@ -99,7 +100,8 @@ bool valid( const fp3d_targeting::target &target, const avatar &you, const map &
             return false;
         }
         const auto tile = here.maptile_at( p );
-        return tile.get_item_count() > 0 && tile.get_uppermost_item().typeId().str() == target.id;
+        return tile.get_item_count() > 0 && tile.get_field().displayed_field_type()->display_items &&
+               fp3d_snapshot::item_sprite_id( tile.get_uppermost_item() ) == target.id;
     }
     if( target.type == fp3d_targeting::kind::furniture ) {
         return here.furn( p ).id().str() == target.id;
@@ -117,8 +119,9 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
                           you.sees( here, *critter );
     const auto *person = creature ? get_creature_tracker().creature_at<npc>( p ) : nullptr;
     const bool object = reachable && !creature;
-    const bool up = object && here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p );
-    const bool down = object && here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p );
+    const bool stairs_target = object && target.type == fp3d_targeting::kind::terrain;
+    const bool up = stairs_target && here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p );
+    const bool down = stairs_target && here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p );
     if( up || down ) {
         const bool standing = p == you.pos_bub( here );
         std::array<fp3d_quick_menu::entry, 8> choices{};
@@ -135,26 +138,36 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
         choices[7] = { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true, true };
         return choices;
     }
-    const bool opens = object && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
-    const bool closes = object && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
-    const bool items = object && here.could_see_items( p, you ) &&
-                       here.maptile_at( p ).get_item_count() > 0;
-    const bool examine = object && ( here.has_furn( p ) || opens || closes || items ||
+    const bool surface = object && target.type != fp3d_targeting::kind::item;
+    const bool opens = surface && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
+    const bool closes = surface && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
+    const bool items = object && here.maptile_at( p ).get_item_count() > 0 &&
+                       here.field_at( p ).displayed_field_type()->display_items &&
+                       here.accessible_items( p ) && here.could_see_items( p, you );
+    const bool corpse = items && target.type != fp3d_targeting::kind::furniture &&
+                        !here.has_flag( ter_furn_flag::TFLAG_SEALED, p ) &&
+                        here.maptile_at( p ).get_uppermost_item().is_corpse();
+    const bool examine = surface && ( here.has_furn( p ) || opens || closes ||
                                      ( !here.ter( p ).obj().has_examine( iexamine::none ) &&
                                        !here.ter( p ).obj().has_examine( iexamine::invalid ) && here.ter( p ).obj().can_examine( p ) ) );
+    const bool guard = person && npc_orders::can_issue( you, *person, npc_orders::kind::guard );
+    const bool follow = person && npc_orders::can_issue( you, *person, npc_orders::kind::follow );
+    const bool attack = creature && !person && !fp3d_input::vehicle_controls();
     return {{
-            { "打开", "打开目标门窗或容器，沿用原版规则。", ACTION_OPEN, nullptr, opens, opens || closes },
-            { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes, opens || closes },
+            { "打开", "打开目标门窗或容器，沿用原版规则。", ACTION_OPEN, nullptr, opens, opens },
+            { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes, closes },
             { "交谈", "与此人物交谈；交易和招募仍由原版确认。", ACTION_CHAT, nullptr, person != nullptr, person != nullptr },
             { "查看 / 搜索", "查看目标或搜索容器，沿用原版检查。", ACTION_EXAMINE_AND_PICKUP, nullptr, examine, examine },
             { "拾取物品", "单件自动收纳，多件打开背包与目标容器两栏。", ACTION_PICKUP, nullptr, items, items },
-            {
+            corpse ? fp3d_quick_menu::entry{ "屠宰", "处理目标位置的尸体，沿用原版工具与耗时规则。",
+                                            ACTION_BUTCHER, nullptr } : fp3d_quick_menu::entry{
                 "原地守卫", "让队友守卫当前位置，按原版喊话和行动消耗结算。", ACTION_NULL, "FP3D_GUARD",
-                person && npc_orders::can_issue( you, *person, npc_orders::kind::guard ), person != nullptr
+                guard, guard
             },
-            {
+            attack ? fp3d_quick_menu::entry{ "近战攻击", "攻击准星对准的生物，非敌对目标仍需确认。",
+                                            ACTION_NULL, "FP3D_ATTACK" } : fp3d_quick_menu::entry{
                 "继续跟随", "让可听见的守卫队友继续跟随，保留原版营地限制。", ACTION_NULL, "FP3D_FOLLOW",
-                person && npc_orders::can_issue( you, *person, npc_orders::kind::follow ), person != nullptr
+                follow, follow
             },
             { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true, true }
         }};
@@ -409,7 +422,8 @@ std::optional<request> resolve( const std::string &command,
         const int npc_id = can_chat ? npc->getID().get_value() : -1;
         action_id action = can_chat ? ACTION_CHAT :
                            opens ? ACTION_OPEN : items ? ACTION_PICKUP : closes ? ACTION_CLOSE : ACTION_EXAMINE_AND_PICKUP;
-        const bool stairs = !can_chat && ( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ||
+        const bool stairs = candidate->type == fp3d_targeting::kind::terrain && !can_chat &&
+                            ( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ||
                                            here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) );
         if( command == "FP3D_INTERACT_LONG" || stairs ) {
             const auto choice = fp3d_quick_menu::show( context_entries( *candidate, you, here ),
@@ -418,31 +432,32 @@ std::optional<request> resolve( const std::string &command,
                 !fp3d_compositor::turn_based() ) {
                 return std::nullopt;
             }
+            const auto current_choices = context_entries( *candidate, you, here );
+            const std::string choice_command = choice->command ? choice->command : "";
+            if( std::none_of( current_choices.begin(), current_choices.end(), [&]( const auto &entry ) {
+                return entry.visible && entry.enabled && entry.action == choice->action &&
+                       choice_command == ( entry.command ? entry.command : "" );
+            } ) ) {
+                return std::nullopt;
+            }
             if( choice->command ) {
-                if( stairs && ( std::string( choice->command ) == "FP3D_STAIRS_UP" ||
-                                std::string( choice->command ) == "FP3D_STAIRS_DOWN" ) ) {
-                    return resolve( choice->command, candidate, you, here );
+                if( choice_command == "FP3D_STAIRS_UP" || choice_command == "FP3D_STAIRS_DOWN" ||
+                    choice_command == "FP3D_ATTACK" ) {
+                    return resolve( choice_command, candidate, you, here );
                 }
-                const std::string order_command = choice->command;
-                if( order_command != "FP3D_GUARD" && order_command != "FP3D_FOLLOW" ) {
+                if( choice_command != "FP3D_GUARD" && choice_command != "FP3D_FOLLOW" ) {
                     return std::nullopt;
                 }
                 fp3d_inventory::operation operation;
                 operation.kind = fp3d_inventory::operation_kind::follower_order;
                 operation.talking_npc_id = npc_id;
                 operation.destination_tile = candidate->position;
-                operation.follower_command = order_command == "FP3D_GUARD" ?
+                operation.follower_command = choice_command == "FP3D_GUARD" ?
                                              npc_orders::kind::guard : npc_orders::kind::follow;
                 fp3d_inventory::stage( std::move( operation ) );
                 return request{ ACTION_ITEMACTION, std::nullopt, false };
             }
             action = choice->action;
-            const auto current_choices = context_entries( *candidate, you, here );
-            if( stairs && std::none_of( current_choices.begin(), current_choices.end(), [&]( const auto &entry ) {
-                return entry.visible && entry.enabled && entry.action == action && action != ACTION_NULL;
-            } ) ) {
-                return std::nullopt;
-            }
             if( action == ACTION_NULL ) {
                 return std::nullopt;
             }

@@ -2596,7 +2596,7 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
             break;
 
         case ACTION_BUTCHER:
-            butcher();
+            butcher( mouse_target );
             break;
 
         case ACTION_CHAT: {

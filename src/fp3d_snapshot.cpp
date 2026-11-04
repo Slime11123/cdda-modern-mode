@@ -38,6 +38,15 @@
 
 namespace fp3d_snapshot
 {
+std::string item_sprite_id( const item &object )
+{
+    const std::string &id = object.typeId().str();
+    if( id == "corpse" && object.get_mtype() ) {
+        return "corpse_" + object.get_mtype()->id.str();
+    }
+    return id;
+}
+
 namespace
 {
 float city_building_height( const oter_t &terrain )
@@ -248,10 +257,7 @@ sprite describe_item( const item &object, const tripoint_abs_ms &position )
     sprite image;
     image.position = position;
     image.kind = sprite_kind::item;
-    image.id = object.typeId().str();
-    if( image.id == "corpse" && object.get_mtype() ) {
-        image.id = "corpse_" + object.get_mtype()->id.str();
-    }
+    image.id = item_sprite_id( object );
     if( object.has_itype_variant() ) {
         image.variant = object.itype_variant().id;
     }

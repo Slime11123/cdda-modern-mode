@@ -2184,14 +2184,13 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     fp3d_targeting::kind::creature, {} };
                 const auto context_choices = fp3d_interaction::context_entries( context_target, you, here );
                 REQUIRE( context_choices[2].enabled );
-                REQUIRE_FALSE( context_choices[5].enabled );
+                REQUIRE_FALSE( context_choices[5].visible );
                 auto contextual = fp3d_quick_menu::create( context_choices, "目标操作", layout[2] );
                 for( int frame = 0; frame < 9; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();
                     ImGui_ImplSDL2_NewFrame();
-                    ImGui::GetIO().AddMousePosEvent( frame < 7 ? center.x + 160 : center.x,
-                                                   frame < 7 ? center.y : center.y - 160 );
-                    ImGui::GetIO().AddMouseButtonEvent( 0, frame == 4 || frame == 7 );
+                    ImGui::GetIO().AddMousePosEvent( center.x, center.y - 160 );
+                    ImGui::GetIO().AddMouseButtonEvent( 0, frame == 7 );
                     ImGui::NewFrame();
                     contextual->draw();
                     if( frame == 4 ) {
@@ -2225,7 +2224,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 for( int frame = 0; frame < 3; ++frame ) {
                     ImGui_ImplSDLRenderer2_NewFrame();
                     ImGui_ImplSDL2_NewFrame();
-                    ImGui::GetIO().AddMousePosEvent( center.x - 160, center.y );
+                    ImGui::GetIO().AddMousePosEvent( center.x, center.y + 160 );
                     ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
                     ImGui::NewFrame();
                     context_cancel->draw();
@@ -2233,6 +2232,33 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 CHECK_FALSE( context_cancel->get_is_open() );
                 CHECK_FALSE( context_cancel->has_button_action() );
+                {
+                    const auto position = you.pos_bub( here );
+                    item_location corpse;
+                    {
+                        restore_on_out_of_scope restore_fixture_rng( rng_get_engine() );
+                        corpse = here.add_item_or_charges_ret_loc( position,
+                                 item::make_corpse( mtype_id( "mon_deer" ), calendar::turn ) );
+                    }
+                    REQUIRE( corpse );
+                    on_out_of_scope remove_corpse( [&]() { corpse.remove_item(); } );
+                    const fp3d_targeting::target target{ you.pos_abs(), here.get_abs( position ),
+                            fp3d_targeting::kind::item, fp3d_snapshot::item_sprite_id( *corpse ) };
+                    const auto choices = fp3d_interaction::context_entries( target, you, here );
+                    auto corpse_wheel = fp3d_quick_menu::create( choices, "尸体", layout[2] );
+                    for( int frame = 0; frame < 5; ++frame ) {
+                        ImGui_ImplSDLRenderer2_NewFrame();
+                        ImGui_ImplSDL2_NewFrame();
+                        ImGui::GetIO().AddMousePosEvent( center.x + 139, center.y + 80 );
+                        ImGui::GetIO().AddMouseButtonEvent( 0, frame == 3 );
+                        ImGui::NewFrame();
+                        corpse_wheel->draw();
+                        ImGui::Render();
+                    }
+                    CHECK_FALSE( corpse_wheel->get_is_open() );
+                    CHECK( corpse_wheel->get_button_action() == action_ident( ACTION_BUTCHER ) );
+                    CHECK( corpse );
+                }
                 {
                     const auto stair_position = you.pos_bub( here );
                     const ter_id previous_terrain = here.ter( stair_position );

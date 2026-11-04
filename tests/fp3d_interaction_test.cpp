@@ -1,5 +1,7 @@
 #include "fp3d_interaction.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <algorithm>
+
 #include "avatar.h"
 #include "cata_catch.h"
 #include "calendar.h"
@@ -94,6 +96,84 @@ TEST_CASE( "fp3d_quick_pickup_uses_native_activity_and_respects_closed_container
     process_activity( you );
     CHECK( here.i_at( p ).empty() );
     CHECK( you.has_amount( itype_id( "rock" ), 1 ) );
+}
+
+TEST_CASE( "fp3d_hold_interact_lists_only_actions_for_the_aimed_target",
+           "[fp3d][interaction][target_wheel]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    on_out_of_scope cleanup( []() { clear_npcs(); } );
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    const auto choices_for = [&]( float pitch ) {
+        fp3d_snapshot::prepare_view( you, here );
+        const auto target = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, pitch );
+        REQUIRE( target );
+        REQUIRE( target->position == here.get_abs( p ) );
+        REQUIRE( fp3d_interaction::valid( *target, you, here ) );
+        return fp3d_interaction::context_entries( *target, you, here );
+    };
+    const auto actions_of = []( const auto &choices ) {
+        std::vector<action_id> actions;
+        for( const auto &choice : choices ) {
+            if( choice.visible && choice.enabled && choice.action != ACTION_NULL ) {
+                actions.push_back( choice.action );
+            }
+        }
+        return actions;
+    };
+
+    SECTION( "corpse exposes butchery and pickup, ordinary item exposes pickup" ) {
+        here.add_item_or_charges( p, item::make_corpse( mtype_id( "mon_zombie" ), calendar::turn ) );
+        const auto choices = choices_for( 55 );
+        CHECK( actions_of( choices ) == std::vector<action_id>{ ACTION_PICKUP, ACTION_BUTCHER } );
+        const auto corpse = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, 55 );
+        REQUIRE( corpse );
+        CHECK( corpse->type == fp3d_targeting::kind::item );
+        CHECK( corpse->id == "corpse_mon_zombie" );
+        here.i_clear( p );
+        here.add_item_or_charges( p, item( itype_id( "rock" ) ) );
+        CHECK_FALSE( fp3d_interaction::valid( *corpse, you, here ) );
+        CHECK( actions_of( choices_for( 55 ) ) == std::vector<action_id>{ ACTION_PICKUP } );
+    }
+    SECTION( "a sealed crate keeps its own actions even with a corpse inside" ) {
+        here.add_item_or_charges( p, item::make_corpse( mtype_id( "mon_zombie" ), calendar::turn ) );
+        here.furn_set( p, furn_str_id( "f_crate_c" ) );
+        const fp3d_targeting::target crate{ you.pos_abs(), here.get_abs( p ),
+                                          fp3d_targeting::kind::furniture, "f_crate_c" };
+        fp3d_snapshot::prepare_view( you, here );
+        CHECK( actions_of( fp3d_interaction::context_entries( crate, you, here ) ) ==
+               std::vector<action_id>{ ACTION_EXAMINE_AND_PICKUP } );
+    }
+    SECTION( "only the appropriate open or close action is shown" ) {
+        here.ter_set( p, ter_str_id( "t_door_c" ) );
+        const auto choices = choices_for( 0 );
+        CHECK( actions_of( choices ) == std::vector<action_id>{ ACTION_OPEN, ACTION_EXAMINE_AND_PICKUP } );
+        CHECK( std::none_of( choices.begin(), choices.end(), []( const auto &choice ) {
+            return choice.visible && choice.action == ACTION_CLOSE;
+        } ) );
+        here.ter_set( p, ter_str_id( "t_door_o" ) );
+        CHECK( actions_of( choices_for( 55 ) ) ==
+               std::vector<action_id>{ ACTION_CLOSE, ACTION_EXAMINE_AND_PICKUP } );
+    }
+    SECTION( "a neutral NPC offers conversation, a monster offers melee" ) {
+        npc &person = spawn_npc( p.xy(), "test_talker" );
+        person.set_attitude( NPCATT_NULL );
+        CHECK( actions_of( choices_for( 0 ) ) == std::vector<action_id>{ ACTION_CHAT } );
+        clear_npcs();
+        spawn_test_monster( "mon_zombie", p );
+        const auto choices = choices_for( 0 );
+        CHECK( actions_of( choices ).empty() );
+        CHECK( std::any_of( choices.begin(), choices.end(), []( const auto &choice ) {
+            return choice.visible && choice.enabled && choice.command &&
+                   std::string( choice.command ) == "FP3D_ATTACK";
+        } ) );
+    }
 }
 
 TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][interaction][ray]" )

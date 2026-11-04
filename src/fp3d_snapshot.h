@@ -16,10 +16,13 @@
 #include "fp3d_furniture.h"
 
 class avatar;
+class item;
 class map;
 
 namespace fp3d_snapshot
 {
+std::string item_sprite_id( const item &object );
+
 // Cover the native loaded visibility range, independently of 2D tile zoom.
 constexpr int radius = MAX_VIEW_DISTANCE;
 // Coarse outdoor landscape beyond the detailed native reality bubble.

@@ -9833,9 +9833,16 @@ static void add_disassemblables( uilist &menu,
     }
 }
 
-void game::butcher()
+void game::butcher( std::optional<tripoint_bub_ms> corpse_target )
 {
     map &here = get_map();
+    const tripoint_bub_ms origin = u.pos_bub( here );
+    const tripoint_bub_ms position = corpse_target.value_or( origin );
+    if( corpse_target && ( !here.inbounds( position ) || position.z() != origin.z() ||
+                           square_dist( origin, position ) > 1 || !u.sees( here, position ) ||
+                           !here.could_see_items( position, u ) ) ) {
+        return;
+    }
 
     static const std::string salvage_string = "salvage";
     if( u.controlling_vehicle ) {
@@ -9849,8 +9856,8 @@ void game::butcher()
     const std::string no_corpse_msg = _( "There are no corpses here to butcher." );
 
     //You can't butcher on sealed terrain- you have to smash/shovel/etc it open first
-    if( here.has_flag( ter_furn_flag::TFLAG_SEALED, u.pos_bub() ) ) {
-        if( here.sees_some_items( u.pos_bub(), u ) ) {
+    if( here.has_flag( ter_furn_flag::TFLAG_SEALED, position ) ) {
+        if( here.sees_some_items( position, u ) ) {
             add_msg( m_info, _( "You can't access the items here." ) );
         } else if( factor > INT_MIN || factorD > INT_MIN ) {
             add_msg( m_info, no_corpse_msg );
@@ -9865,7 +9872,7 @@ void game::butcher()
     std::vector<map_stack::iterator> corpses;
     std::vector<map_stack::iterator> disassembles;
     std::vector<map_stack::iterator> salvageables;
-    map_stack items = here.i_at( u.pos_bub() );
+    map_stack items = here.i_at( position );
     const inventory &crafting_inv = u.crafting_inventory();
 
     // TODO: Properly handle different material whitelists
@@ -9899,7 +9906,7 @@ void game::butcher()
     for( map_stack::iterator it = items.begin(); it != items.end(); ++it ) {
         if( it->is_corpse() ) {
             corpses.push_back( it );
-        } else {
+        } else if( !corpse_target ) {
             if( ( salvage_tool_index != INT_MIN ) && salvage_iuse->valid_to_cut_up( nullptr, *it ) ) {
                 salvageables.push_back( it );
             }
@@ -9967,7 +9974,8 @@ void game::butcher()
     size_t ret = 0;
     if( !corpses.empty() || !disassembles.empty() || !salvageables.empty() ) {
         uilist kmenu;
-        kmenu.text = _( "Choose corpse to butcher / item to disassemble" );
+        kmenu.text = corpse_target ? _( "Butcher" ) :
+                     _( "Choose corpse to butcher / item to disassemble" );
 
         size_t i = 0;
         // Add corpses, disassembleables, and salvagables to the UI
@@ -10072,7 +10080,7 @@ void game::butcher()
                     if( bt.has_value() ) {
                         std::vector<butchery_data> bd;
                         for( map_stack::iterator &it : corpses ) {
-                            item_location corpse_loc = item_location( map_cursor( u.pos_abs() ), &*it );
+                            item_location corpse_loc( map_cursor( position ), &*it );
                             bd.emplace_back( corpse_loc, bt.value() );
                         }
                         u.assign_activity( butchery_activity_actor( bd ) );
@@ -10093,7 +10101,7 @@ void game::butcher()
         case BUTCHER_CORPSE: {
             const std::optional<butcher_type> bt = butcher_submenu( corpses, indexer_index );
             if( bt.has_value() ) {
-                item_location corpse_loc = item_location( map_cursor( u.pos_abs() ), &*corpses[indexer_index] );
+                item_location corpse_loc( map_cursor( position ), &*corpses[indexer_index] );
                 butchery_data bd( corpse_loc, bt.value() );
                 u.assign_activity( butchery_activity_actor( bd ) );
             }

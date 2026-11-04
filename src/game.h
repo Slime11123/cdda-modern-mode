@@ -946,7 +946,7 @@ class game
         void unload_container(); // Unload a container w/ direction  'd'
         void drop_in_direction( const tripoint_bub_ms &pnt ); // Drop w/ direction  'D'
 
-        void butcher(); // Butcher a corpse  'B'
+        void butcher( std::optional<tripoint_bub_ms> corpse_target = std::nullopt );
 
         void reload( item_location &loc, bool prompt = false, bool empty = true );
     public:
