@@ -553,6 +553,30 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         save( "confirmation" );
         REQUIRE( find_window( "QUERY_POPUP##" ) );
     }
+    for( const bool anykey : { false, true } ) {
+        visible_query query;
+        query.context( "POPUP_WAIT" ).message( "%s", "你无法屠宰它；你缺少一些工具。" )
+        .allow_cancel( !anykey ).allow_anykey( anykey );
+        const auto ui = query.create_or_get_impl();
+        frame();
+        frame();
+        const ImGuiWindow *root = find_window( "QUERY_POPUP##" );
+        REQUIRE( root );
+        ImGui::GetIO().AddMousePosEvent( root->DC.CursorStartPos.x + 12,
+                                         root->DC.CursorPosPrevLine.y + 8 );
+        frame();
+        ImGui::GetIO().AddMouseButtonEvent( 0, true );
+        frame();
+        ImGui::GetIO().AddMouseButtonEvent( 0, false );
+        if( anykey ) {
+            // The other path releases the mouse during query's own first redraw.
+            frame();
+        }
+        const query_popup::result result = query.query();
+        CHECK_FALSE( result.wait_input );
+        CHECK( result.action == ( anykey ? "ANY_INPUT" : "QUIT" ) );
+        CHECK( result.evt.type == input_event_t::error );
+    }
     {
         bool visible = true;
         int draws = 0;

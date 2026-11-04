@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <utility>
 
 #include "cached_options.h"
 #include "cata_imgui.h"
@@ -48,6 +49,9 @@ class query_popup_impl : public cataimgui::window
 
         int get_mouse_selected_option() const {
             return mouse_selected_option;
+        }
+        std::string take_button_action() {
+            return std::exchange( button_action, {} );
         }
     protected:
         void draw_controls() override;
@@ -342,9 +346,6 @@ query_popup::result query_popup::query_once()
 
     std::shared_ptr<query_popup_impl> impl = create_or_get_impl();
 
-    // ImGui doesn't like to show the window on the first drawn frame, so we do this
-    ui_manager::redraw();
-
     input_context ctxt( category, pref_kbd_mode );
     if( cancel || !options.empty() ) {
         ctxt.register_action( "HELP_KEYBINDINGS" );
@@ -373,11 +374,18 @@ query_popup::result query_popup::query_once()
     // Assign outside construction of `res` to ensure execution order
     res.wait_input = !anykey;
     do {
-        ui_manager::redraw();
-        res.action = ctxt.handle_input( 50 );
-        res.evt = ctxt.get_raw_input();
-        if( impl->has_button_action() ) {
-            res.action = impl->get_button_action();
+        if( !impl->has_button_action() ) {
+            ui_manager::redraw();
+        }
+        if( !impl->has_button_action() ) {
+            res.action = ctxt.handle_input( 50 );
+            res.evt = ctxt.get_raw_input();
+        }
+        // An ImGui button can fire on a frame with no native input event.
+        // Consume it before a subsequent redraw clears it.
+        if( std::string button = impl->take_button_action(); !button.empty() ) {
+            res.action = std::move( button );
+            res.evt = {};
         }
 
         // If we're tracking mouse movement
