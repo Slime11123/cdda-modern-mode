@@ -1,5 +1,7 @@
 # CDDA Modern Mode
 
+> **AI-generated project: This project was generated and developed with OpenAI GPT.** It is based on the open-source Cataclysm: Dark Days Ahead codebase and is not an official OpenAI or CDDA product.
+
 [简体中文](README.zh-CN.md) · [Releases & downloads](https://github.com/Slime11123/cdda-modern-mode/releases) · [Development status](docs/DEVELOPMENT_STATUS.md) · [Upstream CDDA](https://github.com/CleverRaven/Cataclysm-DDA)
 
 **CDDA Modern Mode** is an unofficial modernization project based on **Cataclysm: Dark Days Ahead (CDDA) 0.I-1 / Ito-1**. It adds experimental first-person 3D presentation, modern 2D controls, and mouse-friendly interfaces while preserving the original game's turn-based world, action-point costs, combat, and save mechanics.

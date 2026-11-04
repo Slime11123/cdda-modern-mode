@@ -1,5 +1,7 @@
 # CDDA Modern Mode
 
+> **AI 生成声明：本项目由 OpenAI GPT 生成并协助开发。** 本项目基于开源游戏 Cataclysm: Dark Days Ahead 的源码改造，并非 OpenAI 或 CDDA 官方产品。
+
 [English](README.md) · [发布与下载](https://github.com/Slime11123/cdda-modern-mode/releases) · [开发进度](docs/DEVELOPMENT_STATUS.md) · [CDDA 原版](https://github.com/CleverRaven/Cataclysm-DDA)
 
 **CDDA Modern Mode** 是基于 **Cataclysm: Dark Days Ahead（CDDA）0.I-1 / Ito-1** 的非官方现代化改造项目，在保留原版回合制、行动点、战斗、世界模拟和存档机制的基础上，加入第一人称 3D 画面、现代 2D 操作与鼠标友好的综合界面。
