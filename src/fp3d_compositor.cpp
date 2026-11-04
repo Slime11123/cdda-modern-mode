@@ -17,6 +17,7 @@
 #include <SDL_opengl.h>
 #endif
 
+#include "avatar.h"
 #include "debug.h"
 #include "game.h"
 #include "fp3d_camera.h"
@@ -27,6 +28,7 @@
 #include "fp3d_materials.h"
 #include "fp3d_scene.h"
 #include "fp3d_snapshot.h"
+#include "map.h"
 #include "sdltiles.h"
 #include "ui_manager.h"
 #include "input.h"
@@ -495,6 +497,29 @@ static bool interaction_available( const std::optional<fp3d_targeting::target> &
     return std::find( latest_scene->interactable.begin(), latest_scene->interactable.end(),
                       target->position ) != latest_scene->interactable.end();
 }
+const std::vector<fp3d_hud::data::message_entry> &target_details()
+{
+    static const std::vector<fp3d_hud::data::message_entry> empty;
+    if( !g || !turn_based() || !draw_permitted || construction_preview ) {
+        return empty;
+    }
+    const auto target = interaction_target();
+    if( !target || target->origin != get_avatar().pos_abs() ) {
+        return empty;
+    }
+    static unsigned generation = 0;
+    static std::optional<fp3d_targeting::target> previous;
+    static std::vector<fp3d_hud::data::message_entry> lines;
+    if( generation != latest_scene->render_generation || !previous ||
+        target->position != previous->position || target->type != previous->type ||
+        target->id != previous->id ) {
+        lines = fp3d_hud::inspect( get_avatar(), get_map(), *target );
+        previous = target;
+        generation = latest_scene->render_generation;
+    }
+    return lines;
+}
+
 bool interaction_available()
 {
     return turn_based() && draw_permitted && !construction_preview &&

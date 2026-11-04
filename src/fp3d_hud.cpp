@@ -5,9 +5,13 @@
 #include "avatar.h"
 #include "bodypart.h"
 #include "catacharset.h"
+#include "creature_tracker.h"
 #include "fp3d_inventory.h"
+#include "fp3d_snapshot.h"
+#include "fp3d_targeting.h"
 #include "item.h"
 #include "item_location.h"
+#include "lightmap.h"
 #include "calendar.h"
 #include "display.h"
 #include "debug.h"
@@ -15,7 +19,12 @@
 #include "messages.h"
 #include "mission.h"
 #include "map.h"
+#include "omdata.h"
 #include "output.h"
+#include "overmapbuffer.h"
+#include "string_formatter.h"
+#include "submap.h"
+#include "timed_event.h"
 #include "weather.h"
 #include "translations.h"
 namespace fp3d_hud
@@ -63,6 +72,61 @@ std::string stamina_text( const avatar &you )
     }
     const auto bar = get_stamina_bar( you.get_stamina(), you.get_stamina_max() );
     return bar.first + std::string( std::max( 0, 5 - utf8_width( bar.first ) ), '.' );
+}
+
+std::vector<data::message_entry> inspect( const avatar &you, const map &here,
+        const fp3d_targeting::target &target )
+{
+    const auto position = here.get_bub( target.position );
+    const auto &visibility = here.get_visibility_variables_cache();
+    if( target.origin != you.pos_abs() || you.is_blind() || !here.inbounds( position ) ||
+        here.get_visibility( here.apparent_light_at( position, visibility ),
+                             visibility ) != visibility_type::CLEAR ) {
+        return {};
+    }
+
+    const auto area_position = coords::project_to<coords::omt>( target.position );
+    std::string area = uppercase_first_letter( overmap_buffer.ter( area_position )->get_name(
+                           overmap_buffer.seen( area_position ) ) );
+    if( const timed_event *event = get_timed_events().get( timed_event_type::OVERRIDE_PLACE ) ) {
+        area = event->string_id;
+    }
+    std::vector<data::message_entry> lines{ { area, c_yellow } };
+    if( target.type == fp3d_targeting::kind::creature ) {
+        const Creature *creature = get_creature_tracker().creature_at( position );
+        if( creature && !creature->is_avatar() && you.sees( here, *creature ) ) {
+            lines.push_back( { creature->disp_name(), c_white } );
+        }
+    } else if( target.type == fp3d_targeting::kind::item && here.could_see_items( position, you ) ) {
+        const auto tile = here.maptile_at( position );
+        if( tile.get_item_count() > 0 && tile.get_field().displayed_field_type()->display_items ) {
+            const item &object = tile.get_uppermost_item();
+            if( fp3d_snapshot::item_sprite_id( object ) == target.id ) {
+                lines.push_back( { object.tname(), c_white } );
+            }
+        }
+    }
+    lines.push_back( { uppercase_first_letter( here.tername( position ) ), c_white } );
+    lines.push_back( { here.ter( position ).obj().description.translated(), c_light_gray } );
+    if( here.has_furn( position ) ) {
+        const auto &furniture = here.furn( position ).obj();
+        lines.push_back( { uppercase_first_letter( furniture.name() ), c_white } );
+        lines.push_back( { furniture.description.translated(), c_light_gray } );
+    }
+    lines.push_back( { string_format( _( "Concealment: %d%%" ), here.coverage( position ) ), c_light_gray } );
+    if( std::string features = here.features( position ); !features.empty() ) {
+        lines.push_back( { std::move( features ), c_light_gray } );
+    }
+    if( here.impassable( position ) ) {
+        lines.push_back( { _( "Impassable" ), c_light_red } );
+    } else {
+        lines.push_back( { string_format( _( "Move cost: %d" ), here.move_cost( position ) * 50 ),
+                           c_light_gray } );
+    }
+    const auto light = get_light_level( std::max( 1.0,
+                                        LIGHT_AMBIENT_LIT - here.ambient_light_at( position ) + 1.0 ) );
+    lines.push_back( { _( "Lighting: " ) + light.first, light.second } );
+    return lines;
 }
 
 data capture( avatar &you )

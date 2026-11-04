@@ -15,10 +15,60 @@
 #include "effect.h"
 #include "output.h"
 #include "fp3d_entry.h"
+#include "fp3d_snapshot.h"
+#include "fp3d_targeting.h"
 #include "map.h"
 #include "map_helpers.h"
 #include "player_helpers.h"
 #include "rng.h"
+#include "translations.h"
+
+TEST_CASE( "fp3d_hud_inspects_only_the_currently_visible_target", "[fp3d][hud]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto near = you.pos_bub( here ) + tripoint_rel_ms::north;
+    const auto far = near + tripoint_rel_ms::north;
+    here.ter_set( near, ter_str_id( "t_pavement" ) );
+    here.ter_set( far, ter_str_id( "t_pavement" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const fp3d_targeting::target road{ you.pos_abs(), here.get_abs( near ),
+                                     fp3d_targeting::kind::terrain, "t_pavement" };
+    const auto lines = fp3d_hud::inspect( you, here, road );
+    REQUIRE( lines.size() >= 6 );
+    CHECK_FALSE( lines.front().text.empty() );
+    const auto has_text = []( const auto &details, const std::string &text ) {
+        return std::any_of( details.begin(), details.end(), [&]( const auto &line ) {
+            return line.text == text;
+        } );
+    };
+    CHECK( has_text( lines, here.ter( near )->description.translated() ) );
+    CHECK( has_text( lines, string_format( _( "Concealment: %d%%" ), here.coverage( near ) ) ) );
+    CHECK( has_text( lines, string_format( _( "Move cost: %d" ), here.move_cost( near ) * 50 ) ) );
+    CHECK( lines.back().text.find( _( "Lighting: " ) ) == 0 );
+
+    const item rock( itype_id( "rock" ) );
+    here.add_item_or_charges( near, rock );
+    const fp3d_targeting::target object{ you.pos_abs(), here.get_abs( near ),
+                                        fp3d_targeting::kind::item, "rock" };
+    CHECK( has_text( fp3d_hud::inspect( you, here, object ), rock.tname() ) );
+    here.furn_set( near, furn_str_id( "f_crate_c" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    CHECK_FALSE( has_text( fp3d_hud::inspect( you, here, object ), rock.tname() ) );
+
+    here.furn_set( near, furn_str_id( "f_null" ) );
+    here.ter_set( near, ter_str_id( "t_wall" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const fp3d_targeting::target hidden{ you.pos_abs(), here.get_abs( far ),
+                                        fp3d_targeting::kind::terrain, "t_pavement" };
+    CHECK( fp3d_hud::inspect( you, here, hidden ).empty() );
+    you.setpos( here, you.pos_bub( here ) + tripoint_rel_ms::east );
+    CHECK( fp3d_hud::inspect( you, here, road ).empty() );
+}
 
 TEST_CASE( "fp3d_hud_body_health_keeps_limbs_independent_and_native_colors", "[fp3d][hud]" )
 {

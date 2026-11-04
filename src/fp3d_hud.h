@@ -9,6 +9,11 @@
 #include "fp3d_inventory.h"
 #include "type_id.h"
 class avatar;
+class map;
+namespace fp3d_targeting
+{
+struct target;
+}
 namespace fp3d_hud
 {
 struct data {
@@ -44,6 +49,8 @@ struct data {
     std::vector<std::string> expanded;
 };
 data capture( avatar &you );
+std::vector<data::message_entry> inspect( const avatar &you, const map &here,
+        const fp3d_targeting::target &target );
 std::string health_text( const avatar &you, const bodypart_id &part );
 std::string stamina_text( const avatar &you );
 bool navigation_enabled();

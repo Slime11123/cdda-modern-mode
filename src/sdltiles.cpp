@@ -1137,6 +1137,44 @@ static void draw_fp3d_hud()
     draw_string( *font, renderer, geometry, utf8_truncate( "温度 " + hud.temperature,
                  ( time_box.w - 2 * pad ) / font->width ),
                  point( time_box.x + pad, time_box.y + pad + font->height ), fp3d_ui_yellow );
+    const auto &details = fp3d_compositor::target_details();
+    const int look_y = time_box.y + time_box.h + pad;
+    const int columns = ( time_box.w - 2 * pad ) / font->width;
+    const int max_rows = std::min( 14, ( area[1] + area[3] / 2 - look_y - 3 * pad ) / font->height );
+    if( !details.empty() && columns > 0 && max_rows > 0 ) {
+        std::vector<fp3d_hud::data::message_entry> rows;
+        for( const auto &detail : details ) {
+            for( std::string &line : foldstring( remove_color_tags( detail.text ), columns ) ) {
+                if( !line.empty() ) {
+                    rows.push_back( { std::move( line ), detail.color } );
+                }
+            }
+        }
+        if( rows.size() > static_cast<size_t>( max_rows ) ) {
+            // Leave room for movement cost and lighting when descriptions are long.
+            const int tail = std::min( 2, max_rows - 1 );
+            const int head = max_rows - tail;
+            rows.erase( rows.begin() + head, rows.end() - tail );
+            auto &last_description = rows[head - 1].text;
+            last_description = utf8_truncate( last_description, columns - 1 ) + "…";
+        }
+        SDL_Rect look_box{ time_box.x, look_y, time_box.w,
+                           static_cast<int>( rows.size() ) * font->height + 2 * pad };
+        SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
+        SDL_RenderFillRect( renderer.get(), &look_box );
+        SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
+        SDL_RenderDrawRect( renderer.get(), &look_box );
+        int row_y = look_box.y + pad;
+        for( const auto &row : rows ) {
+            int color = cata_cursesport::colorpairs[row.color.to_color_pair_index()].FG;
+            if( row.color.is_bold() && color < 8 ) {
+                color += 8;
+            }
+            draw_string( *font, renderer, geometry, utf8_truncate( row.text, columns ),
+                         point( look_box.x + pad, row_y ), std::clamp( color, 1, 15 ) );
+            row_y += font->height;
+        }
+    }
     SDL_RenderSetClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
     SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );
     SDL_SetRenderDrawBlendMode( renderer.get(), blend );

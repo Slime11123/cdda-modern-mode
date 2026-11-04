@@ -43,6 +43,7 @@ void set_blueprint( std::optional<fp3d_scene::blueprint> preview );
 bool turn_based();
 std::vector<std::string> hud_lines();
 fp3d_hud::data hud_data();
+const std::vector<fp3d_hud::data::message_entry> &target_details();
 bool interaction_available();
 std::string interaction_prompt();
 bool draw_menu_background( int x, int y, int width, int height );
