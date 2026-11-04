@@ -11,7 +11,7 @@ namespace fp3d_furniture
 {
 enum class kind {
     table, chair, bed, bed_frame, crate, open_crate, cupboard, cabinet, rack, locker,
-    counter, desk, sofa, sink, oven, fridge, mini_fridge, dresser
+    counter, desk, sofa, sink, oven, fridge, mini_fridge, dresser, bathtub, toilet
 };
 struct model {
     std::string id;

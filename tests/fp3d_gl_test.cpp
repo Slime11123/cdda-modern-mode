@@ -412,7 +412,8 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                      "t_stairs_up", "t_wood_stairs_up", "t_wood_stairs_up_half",
                      "t_ramp_up_high", "t_ramp_up_low",
                      "f_table", "f_chair", "f_bed", "f_bed_frame", "f_crate_c", "f_crate_o",
-                     "f_cupboard", "f_locker", "f_bookcase", "f_rack"
+                     "f_cupboard", "f_locker", "f_bookcase", "f_rack",
+                     "f_sink", "f_bathtub", "f_toilet"
                  } ) {
                 CAPTURE( id );
                 construction project{};
@@ -471,6 +472,24 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     cell->furniture = ghost.terrain->furniture;
                     const auto built = render();
                     CHECK( built != empty_room );
+                    if( pack == "retrodays" && ( id == "f_sink" || id == "f_bathtub" || id == "f_toilet" ) ) {
+                        // A broad ceramic patch should fill the front face
+                        // instead of showing the black background of the glyph.
+                        const float focal = width / ( 2 * std::tan(
+                                                fp3d_camera::horizontal_fov_degrees * 3.14159265f / 360 ) );
+                        const int row = std::lround( height / 2.0f + focal *
+                                                     ( fp3d_camera::eye_height - .35f ) / 2.6f );
+                        unsigned ceramic = 0;
+                        for( int y = row - 4; y <= row + 4; ++y ) {
+                            for( int x = width / 2 - 8; x <= width / 2 + 8; ++x ) {
+                                const auto pixel = built[y * width + x];
+                                const int red = pixel >> 24;
+                                const int blue = ( pixel >> 8 ) & 0xff;
+                                ceramic += red > 50 && std::abs( red - blue ) < 15;
+                            }
+                        }
+                        CHECK( ceramic > 120 );
+                    }
                     if( id == "f_crate_c" || id == "f_crate_o" || id == "f_locker" ||
                         id == "f_bookcase" || id == "f_rack" || id == "f_chair" ) {
                         REQUIRE( fp3d_materials::bind() );

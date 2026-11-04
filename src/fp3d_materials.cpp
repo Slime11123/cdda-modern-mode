@@ -572,9 +572,11 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
 {
     const auto surface = lookup( "$furniture:" + id );
     furniture_uv result{ surface, surface, surface };
-    // These layouts belong to the actual 32x32 Undead People artwork.
-    // Resolve native looks_like without applying the layout to unrelated art.
-    if( !surface || !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ) {
+    if( !surface || !selected ) {
+        return result;
+    }
+    const bool retro = selected->get_tileset_id() == "retrodays";
+    if( !retro && selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ) {
         return result;
     }
     const auto *appearance = resolve_vegetation( *selected, id, season );
@@ -590,6 +592,19 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
                         surface->left + width *x1 / 31,
                         surface->top + height *y1 / 31 };
     };
+    if( retro ) {
+        // These 10x10 glyphs have black backgrounds. Sample the ceramic
+        // strokes so the 3D fixtures keep their silhouette from every angle.
+        if( uses( "f_sink" ) ) {
+            result.top = result.front = result.side = crop( 14, 23, 17, 23 );
+        } else if( uses( "f_bathtub" ) ) {
+            result.top = result.front = result.side = crop( 14, 14, 17, 14 );
+        } else if( uses( "f_toilet" ) ) {
+            result.top = result.front = result.side = crop( 17, 20, 20, 20 );
+        }
+        return result;
+    }
+    // The remaining layouts are specific to the Undead People artwork.
     if( uses( "f_cupboard" ) ) {
         result.top = crop( 1, 1, 30, 9 );
         result.front = crop( 1, 11, 30, 30 );
@@ -619,15 +634,23 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         result.front = crop( 1, 10, 30, 30 );
         result.side = crop( 2, 11, 5, 29 );
     } else if( uses( "f_sink" ) ) {
-        const auto metal = crop( 8, 3, 10, 5 );
+        const auto rim = crop( 7, 10, 25, 10 );
+        const auto metal = crop( 12, 2, 12, 4 );
         if( part_index == 0 ) {
             result.front = crop( 2, 14, 29, 30 );
-            result.top = result.side = crop( 3, 16, 6, 28 );
-        } else if( part_index == 1 ) {
-            result.top = crop( 3, 3, 28, 11 );
-            result.front = result.side = metal;
+            result.side = crop( 3, 16, 6, 28 );
+            result.top = crop( 7, 6, 24, 8 );
+        } else if( part_index < 5 ) {
+            result.top = result.front = result.side = rim;
         } else {
             result.top = result.front = result.side = metal;
+        }
+    } else if( uses( "f_toilet" ) ) {
+        // The toilet sprite is 64x80 and centered horizontally in the slot.
+        const auto porcelain = crop( 14, 19, 17, 22 );
+        result.top = result.front = result.side = porcelain;
+        if( part_index == 2 ) {
+            result.top = crop( 14, 24, 17, 24 );
         }
     } else if( uses( "f_oven" ) ) {
         if( part_index == 0 ) {

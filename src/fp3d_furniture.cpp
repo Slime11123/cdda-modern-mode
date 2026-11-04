@@ -57,6 +57,12 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_sink" ) {
             return model{ id, kind::sink };
         }
+        if( appearance == "f_bathtub" ) {
+            return model{ id, kind::bathtub };
+        }
+        if( appearance == "f_toilet" ) {
+            return model{ id, kind::toilet };
+        }
         if( appearance == "f_oven" ) {
             return model{ id, kind::oven };
         }
@@ -161,10 +167,33 @@ const std::vector<part> &parts( kind shape )
         { .425f, .10f, .13f, .60f, .35f, .66f }
     };
     static const std::vector<part> sink{
-        { 0, 0, .90f, .72f, 0, .78f },
-        { 0, 0, .90f, .72f, .78f, .88f },
-        { 0, -.27f, .07f, .07f, .88f, 1.04f },
-        { 0, -.22f, .07f, .14f, 1.00f, 1.04f }
+        { 0, 0, .90f, .72f, 0, .74f },
+        { 0, -.28f, .90f, .16f, .74f, .88f },
+        { 0, .31f, .90f, .10f, .74f, .88f },
+        { -.395f, .03f, .11f, .52f, .74f, .88f },
+        { .395f, .03f, .11f, .52f, .74f, .88f },
+        { 0, -.28f, .07f, .07f, .88f, 1.04f },
+        { 0, -.21f, .07f, .16f, 1.00f, 1.04f }
+    };
+    static const std::vector<part> bathtub{
+        { 0, 0, .78f, .96f, 0, .16f },
+        { -.335f, 0, .11f, .96f, .16f, .55f },
+        { .335f, 0, .11f, .96f, .16f, .55f },
+        { 0, -.415f, .56f, .13f, .16f, .55f },
+        { 0, .425f, .56f, .11f, .16f, .55f },
+        { 0, -.415f, .06f, .06f, .55f, .67f },
+        { 0, -.36f, .06f, .14f, .63f, .67f }
+    };
+    static const std::vector<part> toilet{
+        { 0, -.29f, .58f, .25f, .39f, .92f },
+        { 0, .03f, .30f, .48f, 0, .34f },
+        { 0, .095f, .48f, .59f, .25f, .39f },
+        { 0, -.16f, .48f, .08f, .39f, .48f },
+        { 0, .335f, .40f, .11f, .39f, .48f },
+        { -.19f, .07f, .10f, .38f, .39f, .48f },
+        { .19f, .07f, .10f, .38f, .39f, .48f },
+        { -.17f, .285f, .10f, .09f, .39f, .48f },
+        { .17f, .285f, .10f, .09f, .39f, .48f }
     };
     static const std::vector<part> oven{
         { 0, 0, .88f, .78f, 0, .89f },
@@ -208,6 +237,10 @@ const std::vector<part> &parts( kind shape )
             return sofa;
         case kind::sink:
             return sink;
+        case kind::bathtub:
+            return bathtub;
+        case kind::toilet:
+            return toilet;
         case kind::oven:
             return oven;
         case kind::fridge:
@@ -249,7 +282,11 @@ float item_surface( kind shape )
         case kind::sofa:
             return .46f;
         case kind::sink:
-            return .88f;
+            return .74f;
+        case kind::bathtub:
+            return .16f;
+        case kind::toilet:
+            return .39f;
         case kind::oven:
             return .89f;
         case kind::fridge:
@@ -285,7 +322,8 @@ unsigned facing( kind shape, const std::array<bool, 4> &walls,
         return 2;
     }
     if( !shows_contents( shape ) && shape != kind::cabinet && shape != kind::counter &&
-        shape != kind::desk && shape != kind::sofa && shape != kind::sink && shape != kind::oven ) {
+        shape != kind::desk && shape != kind::sofa && shape != kind::sink && shape != kind::oven &&
+        shape != kind::bathtub && shape != kind::toilet ) {
         return 0;
     }
     // Preserve the established orientation in free space. Prefer a wall behind

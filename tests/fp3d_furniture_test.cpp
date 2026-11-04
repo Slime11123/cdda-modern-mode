@@ -133,7 +133,7 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
              "f_table", "f_chair", "f_bed", "f_bed_frame", "f_crate_c", "f_crate_o",
              "f_cupboard", "f_locker", "f_bookcase", "f_rack",
              "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven", "f_fridge",
-             "f_minifridge", "f_dresser", "f_wardrobe"
+             "f_minifridge", "f_dresser", "f_wardrobe", "f_bathtub", "f_toilet"
          } ) {
         CAPTURE( id );
         const auto model = fp3d_furniture::describe( id );
@@ -162,6 +162,36 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
     CHECK_FALSE( fp3d_furniture::describe( "f_counter_gate_o" ) );
     CHECK( fp3d_furniture::parts( fp3d_furniture::kind::mini_fridge ).front().top <
            fp3d_furniture::parts( fp3d_furniture::kind::fridge ).front().top );
+}
+
+TEST_CASE( "fp3d_plumbing_rays_distinguish_basin_floors_and_rims",
+           "[fp3d][furniture][ray]" )
+{
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell fixture;
+    fixture.position = scene.origin;
+    fixture.terrain = "t_floor";
+    scene.cells.push_back( fixture );
+    for( const std::string id : { "f_sink", "f_bathtub", "f_toilet" } ) {
+        CAPTURE( id );
+        auto &model = scene.cells.front().furniture;
+        model = fp3d_furniture::describe( id );
+        REQUIRE( model );
+        const auto basin = fp3d_targeting::ray( scene, 0, 90 );
+        REQUIRE( basin );
+        CHECK( basin->id == id );
+        REQUIRE( basin->outline );
+        const auto top = []( const fp3d_targeting::target &hit ) {
+            return hit.outline->corners.front()[1] + hit.outline->height;
+        };
+        CHECK( top( *basin ) == Approx( fp3d_furniture::item_surface( model->shape ) ) );
+        const float edge_x = id == "f_toilet" ? .19f : .37f;
+        const auto rim = fp3d_targeting::ray( scene, 0, 90, { edge_x, 0 } );
+        REQUIRE( rim );
+        CHECK( rim->id == id );
+        REQUIRE( rim->outline );
+        CHECK( top( *rim ) > top( *basin ) );
+    }
 }
 
 TEST_CASE( "fp3d_storage_ray_sees_items_only_through_their_own_cabinet", "[fp3d][furniture][ray]" )
