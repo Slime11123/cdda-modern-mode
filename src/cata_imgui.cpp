@@ -848,6 +848,8 @@ class cataimgui::window_impl
             is_resized = true;
             window_adaptor = std::make_unique<ui_adaptor>();
             window_adaptor->is_imgui = true;
+            // ui_manager refreshes this before callbacks; direct drawing starts as a single window.
+            window_adaptor->is_on_top = true;
             window_adaptor->on_redraw( [this]( ui_adaptor & ) {
                 win_base->draw();
             } );
@@ -959,6 +961,7 @@ void cataimgui::window::draw()
     }
 #if defined(TILES) && defined(ENABLE_FP3D)
     const fp3d_simple_ui::scoped_theme survival_theme;
+    const bool simple_view = fp3d_simple_ui::active();
 #endif
     bool handled_resize = false;
     if( is_bounds_changed() ) {
@@ -985,7 +988,17 @@ void cataimgui::window::draw()
         ImGui::SetNextWindowSize( ImGui::GetMainViewport()->Size * ImVec2 { cached_bounds.w, cached_bounds.h } );
     }
     if( ImGui::Begin( id.c_str(), &is_open, window_flags ) ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_view ) {
+            ImGui::BeginDisabled( !p_impl->window_adaptor->is_on_top );
+        }
+#endif
         draw_controls();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( simple_view ) {
+            ImGui::EndDisabled();
+        }
+#endif
         if( p_impl->window_adaptor->is_on_top && !force_to_back ) {
             ImGui::BringWindowToDisplayFront( ImGui::GetCurrentWindow() );
         }

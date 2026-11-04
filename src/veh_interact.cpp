@@ -64,6 +64,9 @@
 #include "translation.h"
 #include "translations.h"
 #include "uilist.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 #include "ui_manager.h"
 #include "units.h"
 #include "units_utility.h"
@@ -1640,6 +1643,62 @@ void veh_interact::overview( map &here,
     restore_on_out_of_scope prev_overview_pos( overview_pos );
 
     shared_ptr_fast<ui_adaptor> current_ui = create_or_get_ui_adaptor( here );
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() && overview_action && overview_enable ) {
+        const bool was_hidden = ui_hidden;
+        hide_ui( here, true );
+        on_out_of_scope restore_vehicle_ui( [&]() {
+            hide_ui( here, was_hidden );
+        } );
+        calc_overview( here );
+
+        uilist choices;
+        choices.title = title.value_or( _( "Select part" ) );
+        choices.desc_enabled = true;
+        bool has_choice = false;
+        for( size_t index = 0; index < overview_opts.size(); ++index ) {
+            const part_option &option = overview_opts[index];
+            const vehicle_part &part = *option.part;
+            choices.addentry( index, option.selectable, option.hotkey, part.name() );
+            std::string &description = choices.entries.back().desc;
+            description = string_format( "安装位置 (%d, %d)", part.mount.x(), part.mount.y() );
+            if( part.is_broken() ) {
+                description += "\n" + colorize( "零件已损坏", c_light_red );
+            }
+            if( !part.ammo_current().is_null() ) {
+                description += string_format( "\n%s × %d", item::nname( part.ammo_current() ),
+                                              part.ammo_remaining() );
+            }
+            if( option.message ) {
+                restore_on_out_of_scope previous_message( msg );
+                msg.reset();
+                option.message( part );
+                if( msg && !msg->empty() ) {
+                    description += "\n" + *msg;
+                }
+            }
+            has_choice |= option.selectable;
+        }
+        if( !has_choice ) {
+            return;
+        }
+        const int full_list = overview_opts.size();
+        choices.addentry( full_list, true, 0, "完整车辆列表" );
+        choices.query();
+        if( choices.ret != full_list ) {
+            msg.reset();
+            if( choices.ret >= 0 && choices.ret < full_list ) {
+                const part_option &option = overview_opts[choices.ret];
+                if( option.selectable && overview_enable( here, *option.part ) ) {
+                    move_cursor( here, ( option.part->mount.raw() + dd ).rotate( 3 ) );
+                    overview_action( here, *option.part );
+                }
+            }
+            return;
+        }
+    }
+#endif
 
     while( true ) {
         calc_overview( here );

@@ -1,5 +1,6 @@
 #include "ui_iteminfo.h"
 
+#include <algorithm>
 #include <imgui/imgui.h>
 #include <string>
 #include <vector>
@@ -8,6 +9,9 @@
 #include "input_enums.h"
 #include "translations.h"
 #include "ui_manager.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_simple_ui.h"
+#endif
 
 
 iteminfo_window::iteminfo_window( item_info_data &info, point pos, int width, int height,
@@ -34,18 +38,49 @@ iteminfo_window::iteminfo_window( item_info_data &info, point pos, int width, in
     }
 
     ctxt.set_timeout( 10 );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() && !data.without_getch ) {
+        window_flags |= ImGuiWindowFlags_NoNavInputs;
+    }
+#endif
 }
 
 cataimgui::bounds iteminfo_window::get_bounds()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() && !data.without_getch ) {
+        const ImVec2 size = ImGui::GetMainViewport()->Size;
+        return { -1, -1, std::min( 1000.f, size.x * .92f ), size.y * .85f };
+    }
+#endif
     return { pos.x < 0 ? -1.f : static_cast<float>( str_width_to_pixels( pos.x ) ),
              pos.y < 0 ? -1.f : static_cast<float>( str_height_to_pixels( pos.y ) ),
              static_cast<float>( str_width_to_pixels( width ) ),
-             static_cast<float>( str_height_to_pixels( height ) ) };
+             static_cast<float>( str_height_to_pixels( height ) )
+           };
 }
 
 void iteminfo_window::draw_controls()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() && !data.without_getch ) {
+        fp3d_simple_ui::accent_text( remove_color_tags( data.get_item_name() ) );
+        if( !data.get_type_name().empty() &&
+            data.get_item_name().find( data.get_type_name() ) == std::string::npos ) {
+            cataimgui::draw_colored_text( data.get_type_name(), c_white, ImGui::GetContentRegionAvail().x );
+        }
+        ImGui::Separator();
+        const float height = std::max( ImGui::GetFrameHeight(), ImGui::GetContentRegionAvail().y -
+                                       ImGui::GetFrameHeightWithSpacing() );
+        if( ImGui::BeginChild( "item details", ImVec2( 0, height ) ) ) {
+            cataimgui::set_scroll( s );
+            display_item_info( data.get_item_display(), data.get_item_compare() );
+        }
+        ImGui::EndChild();
+        action_button( "QUIT", _( "Back" ) );
+        return;
+    }
+#endif
     cataimgui::set_scroll( s );
 
     nc_color base_color = c_light_gray;
@@ -71,6 +106,9 @@ void iteminfo_window::execute()
     while( true ) {
         ui_manager::redraw();
         std::string action = ctxt.handle_input();
+        if( has_button_action() ) {
+            action = get_button_action();
+        }
 
         if( data.handle_scrolling && data.arrow_scrolling && action == "UP" ) {
             s = cataimgui::scroll::line_up;

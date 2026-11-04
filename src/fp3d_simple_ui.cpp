@@ -4,6 +4,8 @@
 #include "fp3d_compositor.h"
 #include "cata_imgui.h"
 #include "imgui/imgui.h"
+#include "item.h"
+#include "scoped_rng.h"
 
 namespace fp3d_simple_ui
 {
@@ -16,7 +18,8 @@ class panel : public cataimgui::window
     public:
         panel( const std::string &title,
                const std::function<void( cataimgui::window & )> &draw,
-               const std::function<bool()> &visible ) : window( title ), contents( draw ), visible( visible ) {}
+               const std::function<bool()> &visible ) : window( title, ImGuiWindowFlags_NoNavInputs ),
+            contents( draw ), visible( visible ) {}
         void draw() override {
             if( !visible || visible() ) {
                 cataimgui::window::draw();
@@ -27,6 +30,7 @@ class panel : public cataimgui::window
             return { -1, -1, .9f, .85f };
         }
         void draw_controls() override {
+            const scoped_rng_restore preserve_preview_rng;
             contents( *this );
         }
 };
@@ -42,6 +46,12 @@ std::unique_ptr<cataimgui::window> create_panel( const std::string &title,
 bool active()
 {
     return fp3d_compositor::view_3d() && fp3d_compositor::turn_based();
+}
+
+std::vector<iteminfo> item_information( const item &object )
+{
+    const scoped_rng_restore preserve_preview_rng;
+    return object.get_info( true );
 }
 
 ImVec4 text_color( const nc_color &color )

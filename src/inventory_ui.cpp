@@ -56,6 +56,10 @@
 #include "uilist.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include "fp3d_simple_ui.h"
+#include "cata_imgui.h"
+#include "input_popup.h"
+#include "imgui/imgui.h"
+#include "scoped_rng.h"
 #endif
 #include "ui_iteminfo.h"
 #include "ui_manager.h"
@@ -231,12 +235,6 @@ struct navigation_mode_data {
     navigation_mode next_mode;
     translation name;
     nc_color color;
-};
-
-struct inventory_input {
-    std::string action;
-    int ch = 0;
-    inventory_entry *entry;
 };
 
 struct container_data {
@@ -2480,9 +2478,32 @@ shared_ptr_fast<ui_adaptor> inventory_selector::create_or_get_ui_adaptor()
         } );
         current_ui->mark_resize();
 
-        current_ui->on_redraw( [this]( const ui_adaptor & ) {
-            refresh_window();
-        } );
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( fp3d_simple_ui::active() && !dynamic_cast<trade_selector *>( this ) &&
+            ( dynamic_cast<ammo_inventory_selector *>( this ) ||
+              dynamic_cast<inventory_multiselector *>( this ) ||
+              dynamic_cast<inventory_examiner *>( this ) ||
+              ( dynamic_cast<unload_selector *>( this ) &&
+                !static_cast<unload_selector *>( this )->drag_enabled ) ) ) {
+            ctxt.set_timeout( 50 );
+            simple_input.reset();
+            simple_scrolled = item_location();
+            simple_information_source = item_location();
+            simple_information_text.clear();
+            std::shared_ptr<cataimgui::window> panel = fp3d_simple_ui::create_panel(
+            title.empty() ? "选择物品" : title, [this]( cataimgui::window & win ) {
+                draw_simple_inventory( win );
+            } );
+            simple_window = panel;
+            // The native adaptor owns the modern window for exactly this query.
+            current_ui->on_redraw( [panel]( const ui_adaptor & ) { } );
+        } else
+#endif
+        {
+            current_ui->on_redraw( [this]( const ui_adaptor & ) {
+                refresh_window();
+            } );
+        }
     }
     return current_ui;
 }
@@ -2741,6 +2762,18 @@ std::pair< bool, std::string > inventory_selector::query_string( const std::stri
 
 void inventory_selector::query_set_filter()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !simple_window.expired() ) {
+        string_input_popup_imgui popup( 48, filter, "物品筛选" );
+        popup.set_identifier( "item_filter" );
+        popup.set_description( "可以使用原有筛选语法。取消后保留当前筛选。", c_white );
+        const std::string value = popup.query();
+        if( !popup.cancelled() ) {
+            set_filter( value );
+        }
+        return;
+    }
+#endif
     std::pair< bool, std::string > query = query_string( filter );
     if( query.first ) {
         set_filter( query.second );
@@ -2750,7 +2783,18 @@ void inventory_selector::query_set_filter()
 int inventory_selector::query_count( char init, bool end_with_toggle )
 {
     std::string sinit = init != 0 ? std::string( 1, init ) : std::string();
-    std::pair< bool, std::string > query = query_string( sinit, end_with_toggle );
+    std::pair< bool, std::string > query;
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !simple_window.expired() ) {
+        string_input_popup_imgui popup( 32, sinit, "选择数量" );
+        popup.set_max_input_length( 10 );
+        const std::string value = popup.query();
+        query = { !popup.cancelled(), value };
+    } else
+#endif
+    {
+        query = query_string( sinit, end_with_toggle );
+    }
     int ret = -1;
     if( query.first ) {
         try {
@@ -2988,7 +3032,18 @@ drop_location inventory_selector::get_only_choice() const
 
 inventory_input inventory_selector::get_input()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( const auto input = take_simple_input() ) {
+        return *input;
+    }
+#endif
     std::string const &action = ctxt.handle_input();
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !simple_window.expired() && action != "TIMEOUT" && action != "MOUSE_MOVE" &&
+        action != "COORDINATE" ) {
+        simple_information_source = item_location();
+    }
+#endif
     int const ch = ctxt.get_raw_input().get_first_input();
     return process_input( action, ch );
 }
@@ -3370,9 +3425,214 @@ std::string inventory_selector::action_bound_to_key( char key ) const
 }
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+std::optional<inventory_input> inventory_selector::take_simple_input()
+{
+    if( const auto panel = simple_window.lock() ) {
+        if( !panel->get_is_open() ) {
+            return inventory_input{ "QUIT", 0, nullptr };
+        }
+        auto input = simple_input;
+        simple_input.reset();
+        if( input ) {
+            simple_information_source = item_location();
+        }
+        return input;
+    }
+    return std::nullopt;
+}
+
+void inventory_selector::draw_simple_inventory( cataimgui::window & )
+{
+    const bool multi = dynamic_cast<inventory_multiselector *>( this );
+    const bool comparing = dynamic_cast<inventory_compare_selector *>( this );
+    const auto queue = [&]( const std::string & action, inventory_entry *entry = nullptr ) {
+        simple_input = inventory_input{ action, 0, entry };
+    };
+    if( !hint.empty() ) {
+        const float height = std::min( ImGui::GetWindowHeight() * .12f,
+                                       ImGui::GetTextLineHeightWithSpacing() * 3 );
+        if( ImGui::BeginChild( "hint", ImVec2( 0, height ) ) ) {
+            cataimgui::draw_colored_text( hint, c_white, ImGui::GetContentRegionAvail().x );
+        }
+        ImGui::EndChild();
+    }
+    for( const std::string &stat : get_stats() ) {
+        if( remove_color_tags( stat ).find_first_not_of( " \t\r\n" ) != std::string::npos ) {
+            cataimgui::draw_colored_text( stat, c_white, ImGui::GetContentRegionAvail().x );
+        }
+    }
+    if( ImGui::Button( "筛选" ) ) {
+        queue( "INVENTORY_FILTER" );
+    }
+    ImGui::SameLine();
+    if( ImGui::Button( "清除筛选" ) ) {
+        queue( "RESET_FILTER" );
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted( filter.c_str() );
+    ImGui::Separator();
+
+    std::vector<inventory_entry *> available;
+    std::unordered_set<const item *> seen;
+    const auto matches = filter_from_string<inventory_entry>( filter,
+    [this]( const std::string & term ) {
+        return preset.get_filter( term );
+    } );
+    for( inventory_column *column : columns ) {
+        for( inventory_entry *entry : column->get_entries( return_item ) ) {
+            if( entry->any_item() && matches( *entry ) && seen.insert( entry->any_item().get_item() ).second ) {
+                available.push_back( entry );
+            }
+        }
+    }
+    const inventory_entry &selected = get_highlighted();
+    const float height = std::max( 60.f, ImGui::GetContentRegionAvail().y -
+                                   ImGui::GetFrameHeightWithSpacing() * 2 -
+                                   ImGui::GetStyle().ItemSpacing.y * 2 - ImGui::GetStyle().CellPadding.y * 2 );
+    if( ImGui::BeginTable( "inventory choices", 2, ImGuiTableFlags_SizingStretchProp ) ) {
+        ImGui::TableSetupColumn( "items", ImGuiTableColumnFlags_WidthStretch, .58f );
+        ImGui::TableSetupColumn( "details", ImGuiTableColumnFlags_WidthStretch, .42f );
+        ImGui::TableNextColumn();
+        if( ImGui::BeginChild( "items", ImVec2( 0, height ) ) ) {
+            const float row_height = ImGui::GetFrameHeight();
+            ImGuiListClipper clipper;
+            clipper.Begin( available.size(), row_height + ImGui::GetStyle().ItemSpacing.y );
+            for( size_t i = 0; i < available.size(); ++i ) {
+                if( available[i] == &selected ) {
+                    clipper.IncludeRangeByIndices( i, i + 1 );
+                    break;
+                }
+            }
+            while( clipper.Step() ) {
+                for( int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i ) {
+                    inventory_entry &entry = *available[i];
+                    ImGui::PushID( i );
+                    if( multi ) {
+                        bool marked = entry.chosen_count > 0;
+                        ImGui::BeginDisabled( !entry.is_selectable() );
+                        if( ImGui::Checkbox( "##marked", &marked ) ) {
+                            queue( "SELECT", &entry );
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                    }
+                    std::string name = preset.get_cell_text( entry, 0 );
+                    if( entry.chosen_count > 0 ) {
+                        name += " × " + std::to_string( entry.chosen_count );
+                    }
+                    const auto flags = entry.is_selectable() ? ImGuiSelectableFlags_None :
+                                       ImGuiSelectableFlags_Disabled;
+                    if( ImGui::Selectable( remove_color_tags( name ).c_str(), &entry == &selected,
+                                           flags, ImVec2( 0, row_height ) ) ) {
+                        queue( "MOUSE_MOVE", &entry );
+                    }
+                    if( ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) ) {
+                        const std::string reason = preset.get_denial( entry );
+                        ImGui::SetTooltip( "%s", remove_color_tags( reason.empty() ? name : reason ).c_str() );
+                    }
+                    if( &entry == &selected && simple_scrolled != entry.any_item() ) {
+                        ImGui::SetScrollHereY();
+                        simple_scrolled = entry.any_item();
+                    }
+                    ImGui::PopID();
+                }
+            }
+            if( available.empty() ) {
+                ImGui::TextUnformatted( "没有符合条件的物品" );
+            }
+        }
+        ImGui::EndChild();
+        ImGui::TableNextColumn();
+        if( ImGui::BeginChild( "details", ImVec2( 0, height ) ) ) {
+            const inventory_entry *preview = selected.is_item() ? &selected : nullptr;
+            if( preview && preview->any_item() ) {
+                const float width = ImGui::GetContentRegionAvail().x;
+                fp3d_simple_ui::accent_text( remove_color_tags( preset.get_cell_text( *preview, 0 ) ) );
+                ImGui::Separator();
+                cataimgui::draw_colored_text( preview->any_item().describe( &u ), c_white, width );
+                cataimgui::draw_colored_text( preset.get_denial( *preview ), c_light_red, width );
+                if( dynamic_cast<inventory_examiner *>( this ) ) {
+                    if( simple_information_source != preview->any_item() ) {
+                        simple_information_source = preview->any_item();
+                        simple_information_text = format_item_info(
+                                                      fp3d_simple_ui::item_information( *simple_information_source ), {} );
+                    }
+                    cataimgui::draw_colored_text( simple_information_text, c_white, width );
+                } else {
+                    for( size_t cell = 1; cell < preset.get_cells_count(); ++cell ) {
+                        const std::string value = preset.get_cell_text( *preview, cell );
+                        if( !value.empty() ) {
+                            cataimgui::draw_colored_text( preset.get_cell_title( cell ) + ": " + value, c_white, width );
+                        }
+                    }
+                    cataimgui::draw_colored_text( "已选数量：" + std::to_string( preview->chosen_count ), c_white,
+                                                  width );
+                }
+            }
+        }
+        ImGui::EndChild();
+        ImGui::EndTable();
+    }
+    const bool valid = selected.is_selectable();
+    if( ctxt.is_registered_action( "INCREASE_COUNT" ) && !comparing ) {
+        ImGui::BeginDisabled( !valid );
+        if( ImGui::Button( "-" ) ) {
+            queue( "DECREASE_COUNT" );
+        }
+        ImGui::SameLine();
+        if( ImGui::Button( "+" ) ) {
+            queue( "INCREASE_COUNT" );
+        }
+        if( multi ) {
+            ImGui::SameLine();
+            if( ImGui::Button( "指定数量" ) ) {
+                queue( "MARK_WITH_COUNT" );
+            }
+        }
+        ImGui::EndDisabled();
+    } else if( comparing ) {
+        ImGui::TextUnformatted( "勾选两件物品进行比较" );
+    } else if( ctxt.is_registered_action( "CONTAIN_MODE" ) ) {
+        if( ImGui::Button( uistate.unload_auto_contain ? "收纳位置：自动" :
+                           "收纳位置：手动" ) ) {
+            queue( "CONTAIN_MODE" );
+        }
+    }
+    if( ImGui::Button( "更多操作" ) ) {
+        ImGui::OpenPopup( "more actions" );
+    }
+    if( ImGui::BeginPopup( "more actions" ) ) {
+        for( const std::string action : {
+                 "EXAMINE", "EXAMINE_CONTENTS", "WIELD", "WEAR", "TOGGLE_FAVORITE",
+                 "TOGGLE_NON_FAVORITE", "SHOW_HIDE_CONTENTS", "SHOW_HIDE_CONTENTS_ALL", "VIEW_CATEGORY_MODE",
+                 "ORGANIZE_MENU"
+             } ) {
+            if( comparing && ( action == "TOGGLE_NON_FAVORITE" || action == "TOGGLE_FAVORITE" ) ) {
+                continue;
+            }
+            if( ctxt.is_registered_action( action ) &&
+                ImGui::Selectable( ctxt.get_action_name( action ).c_str() ) ) {
+                queue( action );
+            }
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
+    if( !comparing ) {
+        if( ImGui::Button( "确认" ) ) {
+            queue( "CONFIRM" );
+        }
+        ImGui::SameLine();
+    }
+    if( ImGui::Button( "返回" ) ) {
+        queue( "QUIT" );
+    }
+}
+
 std::vector<uilist_entry> inventory_selector::simple_pick_entries(
     std::vector<item_location> &locations )
 {
+    const scoped_rng_restore preserve_preview_rng;
     locations.clear();
     std::vector<uilist_entry> rows;
     std::unordered_set<const item *> seen;
@@ -3638,7 +3898,14 @@ void inventory_selector::action_examine( const item_location &sitem )
     std::vector<iteminfo> vThisItem;
     std::vector<iteminfo> vDummy;
 
-    sitem->info( true, vThisItem );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( fp3d_simple_ui::active() ) {
+        vThisItem = fp3d_simple_ui::item_information( *sitem );
+    } else
+#endif
+    {
+        sitem->info( true, vThisItem );
+    }
     vThisItem.insert( vThisItem.begin(),
     { {}, string_format( _( "Location: %s" ), sitem.describe( &u ) ) } );
 
@@ -4555,34 +4822,42 @@ int inventory_examiner::execute()
     shared_ptr_fast<ui_adaptor> ui = create_or_get_ui_adaptor();
     debug_print_timer( tp_start );
 
-    ui_adaptor ui_examine;
+    std::unique_ptr<ui_adaptor> ui_examine;
+    bool simple = false;
+#if defined(TILES) && defined(ENABLE_FP3D)
+    simple = fp3d_simple_ui::active();
+#endif
+    if( !simple ) {
+        ui_examine = std::make_unique<ui_adaptor>();
 
-    ui_examine.on_screen_resize( [&]( ui_adaptor & ui_examine ) {
-        force_max_window_size();
-        ui->mark_resize();
+        ui_examine->on_screen_resize( [&]( ui_adaptor & ui_examine ) {
+            force_max_window_size();
+            ui->mark_resize();
 
-        int const width = TERMX - _fixed_size.x;
-        int const height = TERMY;
-        point const start_position = point( TERMX - width, 0 );
+            int const width = TERMX - _fixed_size.x;
+            int const height = TERMY;
+            point const start_position = point( TERMX - width, 0 );
 
-        scroll_item_info_lines = TERMY / 2;
+            scroll_item_info_lines = TERMY / 2;
 
-        w_examine = catacurses::newwin( height, width, start_position );
-        ui_examine.position_from_window( w_examine );
-    } );
-    ui_examine.mark_resize();
+            w_examine = catacurses::newwin( height, width, start_position );
+            ui_examine.position_from_window( w_examine );
+        } );
+        ui_examine->mark_resize();
 
-    ui_examine.on_redraw( [&]( const ui_adaptor & ) {
-        const inventory_entry &selected = get_active_column().get_highlighted();
-        if( selected ) {
-            if( selected_item != selected.any_item() ) {
-                //A new item has been selected, reset scrolling
-                examine_window_scroll = 0;
-                selected_item = selected.any_item();
+        ui_examine->on_redraw( [&]( const ui_adaptor & ) {
+            const inventory_entry &selected = get_active_column().get_highlighted();
+            if( selected ) {
+                if( selected_item != selected.any_item() ) {
+                    //A new item has been selected, reset scrolling
+                    examine_window_scroll = 0;
+                    selected_item = selected.any_item();
+                }
+                draw_item_details( selected_item );
             }
-            draw_item_details( selected_item );
-        }
-    } );
+        } );
+
+    }
 
     while( true ) {
         /* Since ui_examine is the most recently created ui_adaptor, it will always be redrawn.

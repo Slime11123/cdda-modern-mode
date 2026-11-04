@@ -26,7 +26,7 @@ class iteminfo_window : public cataimgui::window
         int height;
         input_context ctxt;
 
-        cataimgui::scroll s;
+        cataimgui::scroll s = cataimgui::scroll::none;
 };
 
 #endif // CATA_SRC_UI_ITEMINFO_H

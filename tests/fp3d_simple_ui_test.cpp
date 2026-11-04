@@ -30,6 +30,7 @@
 #include "item.h"
 #include "map_helpers.h"
 #include "player_helpers.h"
+#include "ui_iteminfo.h"
 
 namespace
 {
@@ -38,6 +39,43 @@ class visible_picker : public inventory_pick_selector
     public:
         using inventory_pick_selector::inventory_pick_selector;
         using inventory_selector::simple_pick_entries;
+};
+
+class visible_multi : public inventory_multiselector
+{
+    public:
+        using inventory_multiselector::inventory_multiselector;
+        using inventory_selector::create_or_get_ui_adaptor;
+        using inventory_selector::take_simple_input;
+        void apply( const inventory_input &input ) {
+            on_input( input );
+        }
+        const auto &selection() const {
+            return to_use;
+        }
+};
+
+class visible_ammo : public ammo_inventory_selector
+{
+    public:
+        using ammo_inventory_selector::ammo_inventory_selector;
+        using inventory_selector::create_or_get_ui_adaptor;
+        using inventory_selector::take_simple_input;
+};
+
+class visible_unload : public unload_selector
+{
+    public:
+        using unload_selector::unload_selector;
+        using inventory_selector::create_or_get_ui_adaptor;
+        using inventory_selector::take_simple_input;
+};
+
+class visible_examiner : public inventory_examiner
+{
+    public:
+        using inventory_examiner::inventory_examiner;
+        using inventory_selector::create_or_get_ui_adaptor;
 };
 
 class picker_preset : public inventory_selector_preset
@@ -53,6 +91,14 @@ class picker_preset : public inventory_selector_preset
         }
         std::string get_denial( const item_location &location ) const override {
             return location->typeId() == itype_id( "lighter" ) ? "native denial" : "";
+        }
+};
+
+class ammo_preset : public inventory_selector_preset
+{
+    public:
+        bool is_shown( const item_location &location ) const override {
+            return location->typeId() == itype_id( "9mm" );
         }
 };
 
@@ -165,20 +211,35 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     fp3d_compositor::publish( fp3d_snapshot::scene_snapshot{} );
     fp3d_compositor::apply_modes( true, true );
     REQUIRE( fp3d_simple_ui::active() );
+    clear_map();
+    clear_avatar();
+    avatar &you = get_avatar();
+    REQUIRE( you.wear_item( item( itype_id( "backpack" ), calendar::turn ) ) );
+    const item_location apple = you.i_add( item( itype_id( "apple" ), calendar::turn ) );
+    REQUIRE( apple );
+    item ammo_item( itype_id( "9mm" ), calendar::turn );
+    ammo_item.charges = 30;
+    const item_location ammo = you.i_add( ammo_item );
+    const item_location magazine = you.i_add( item( itype_id( "glockmag" ), calendar::turn ) );
+    REQUIRE( ammo );
+    REQUIRE( magazine );
     restore_on_out_of_scope restore_test( test_mode );
     test_mode = false;
     const auto before_time = calendar::turn;
     const auto before_rng = rng_get_engine();
     const int colors = GImGui->ColorStack.Size;
+    const int before_moves = you.get_moves();
     const int variables = GImGui->StyleVarStack.Size;
     const ImVec4 background = ImGui::GetStyleColorVec4( ImGuiCol_WindowBg );
     const auto frame = [&]() {
+        const auto draw_rng = rng_get_engine();
         SDL_SetRenderDrawColor( renderer.get(), 60, 80, 100, 255 );
         REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
         ui_manager::redraw();
         CHECK( GImGui->ColorStack.Size == colors );
         CHECK( GImGui->StyleVarStack.Size == variables );
         CHECK( ImGui::GetStyleColorVec4( ImGuiCol_WindowBg ).w == background.w );
+        CHECK( rng_get_engine() == draw_rng );
     };
     const auto save = [&]( const std::string & name ) {
         if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
@@ -195,6 +256,164 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
                                                  ( name + ".png" ) ).u8string().c_str() ) == 0 );
         }
     };
+
+    const auto click = [&]( float x, float y ) {
+        ImGui::GetIO().AddMousePosEvent( x, y );
+        frame();
+        ImGui::GetIO().AddMouseButtonEvent( 0, true );
+        frame();
+        ImGui::GetIO().AddMouseButtonEvent( 0, false );
+        frame();
+    };
+
+    {
+        picker_preset preset;
+        visible_multi selector( you, preset );
+        selector.set_title( "简易多选回归" );
+        selector.add_character_items( you );
+        selector.set_filter( "apple" );
+        auto ui = selector.create_or_get_ui_adaptor();
+        frame();
+        frame();
+        ImGuiWindow *items = find_window( "/items" );
+        REQUIRE( items );
+        CHECK( selector.selection().empty() );
+        const ImVec2 checkbox( items->DC.CursorStartPos.x + 8, items->DC.CursorStartPos.y + 8 );
+        {
+            auto information = fp3d_simple_ui::item_information( *apple );
+            item_info_data data( "遮挡输入验证", apple->type_name(), information, {} );
+            iteminfo_window details( data, point( -1, -1 ), 80, 0 );
+            frame();
+            frame();
+            click( checkbox.x, checkbox.y );
+            CHECK_FALSE( selector.take_simple_input() );
+            CHECK( selector.selection().empty() );
+        }
+        frame();
+        frame();
+        items = find_window( "/items" );
+        REQUIRE( items );
+        click( items->DC.CursorStartPos.x + 8, items->DC.CursorStartPos.y + 8 );
+        auto input = selector.take_simple_input();
+        REQUIRE( input );
+        CHECK( input->action == "SELECT" );
+        REQUIRE( input->entry );
+        CHECK( input->entry->any_item() == apple );
+        selector.apply( *input );
+        REQUIRE( selector.selection().size() == 1 );
+        CHECK( selector.selection().front().first == apple );
+        CHECK( selector.selection().front().second == 1 );
+        CHECK_FALSE( selector.take_simple_input() );
+        frame();
+        save( "multiselect" );
+        items = find_window( "/items" );
+        REQUIRE( items );
+        click( items->DC.CursorStartPos.x + 8, items->DC.CursorStartPos.y + 8 );
+        input = selector.take_simple_input();
+        REQUIRE( input );
+        selector.apply( *input );
+        CHECK( selector.selection().empty() );
+        ImGuiWindow *root = find_window( "简易多选回归##" );
+        REQUIRE( root );
+        click( root->Pos.x + root->Size.x - 16, root->Pos.y + 13 );
+        input = selector.take_simple_input();
+        REQUIRE( input );
+        CHECK( input->action == "QUIT" );
+        ui.reset();
+        CHECK_FALSE( selector.take_simple_input() );
+    }
+    {
+        INFO( "before ammo chooser" );
+        CHECK( rng_get_engine() == before_rng );
+        ammo_preset preset;
+        visible_ammo selector( you, magazine, preset );
+        selector.set_title( "简易弹药回归" );
+        selector.add_character_items( you );
+        selector.set_filter( "9mm" );
+        selector.set_all_entries_chosen_count();
+        INFO( "after native ammo quantity preview" );
+        CHECK( rng_get_engine() == before_rng );
+        auto ui = selector.create_or_get_ui_adaptor();
+        frame();
+        frame();
+        ImGuiWindow *items = find_window( "/items" );
+        REQUIRE( items );
+        click( items->DC.CursorStartPos.x + 60, items->DC.CursorStartPos.y + 8 );
+        auto input = selector.take_simple_input();
+        REQUIRE( input );
+        CHECK( input->action == "MOUSE_MOVE" );
+        REQUIRE( input->entry );
+        CHECK( input->entry->any_item() == ammo );
+        CHECK( input->entry->chosen_count == 15 );
+        frame();
+        save( "ammunition" );
+        ImGuiWindow *root = find_window( "简易弹药回归##" );
+        REQUIRE( root );
+        click( root->DC.CursorStartPos.x + 10,
+               root->DC.CursorPosPrevLine.y - root->CalcFontSize() - 16 + 8 );
+        input = selector.take_simple_input();
+        REQUIRE( input );
+        CHECK( input->action == "DECREASE_COUNT" );
+        CHECK_FALSE( input->entry );
+        CHECK( ammo->charges == 30 );
+        CHECK( magazine->ammo_remaining() == 0 );
+    }
+    {
+        INFO( "before native item-info fixture" );
+        CHECK( rng_get_engine() == before_rng );
+        std::vector<iteminfo> information = fp3d_simple_ui::item_information( *apple );
+        INFO( "after native item-info fixture" );
+        CHECK( rng_get_engine() == before_rng );
+        information.emplace_back( "DESCRIPTION", std::string( 6000, 'A' ) );
+        item_info_data data( "苹果详情 / 简易窗口", apple->type_name(), information, {} );
+        data.handle_scrolling = true;
+        data.arrow_scrolling = true;
+        iteminfo_window details( data, point( -1, -1 ), 80, 0 );
+        frame();
+        frame();
+        ImGuiWindow *body = find_window( "/item details" );
+        REQUIRE( body );
+        CHECK( body->ScrollMax.y > 0 );
+        save( "item-information" );
+    }
+    {
+        visible_unload selector( you );
+        selector.set_title( "卸载选择回归" );
+        selector.add_character_items( you );
+        selector.set_filter( "Glock" );
+        auto ui = selector.create_or_get_ui_adaptor();
+        frame();
+        frame();
+        ImGuiWindow *root = find_window( "卸载选择回归##" );
+        REQUIRE( root );
+        save( "unload-selection" );
+        click( root->DC.CursorStartPos.x + 40,
+               root->DC.CursorPosPrevLine.y - root->CalcFontSize() - 16 + 8 );
+        const auto input = selector.take_simple_input();
+        REQUIRE( input );
+        CHECK( input->action == "CONTAIN_MODE" );
+        CHECK_FALSE( input->entry );
+    }
+    {
+        item_location backpack;
+        for( const item_location &location : you.top_items_loc() ) {
+            if( location->typeId() == itype_id( "backpack" ) ) {
+                backpack = location;
+            }
+        }
+        REQUIRE( backpack );
+        visible_examiner examiner( you, backpack );
+        examiner.set_title( "容器详情回归" );
+        examiner.set_filter( "apple" );
+        auto ui = examiner.create_or_get_ui_adaptor();
+        frame();
+        frame();
+        REQUIRE( find_window( "容器详情回归##" ) );
+        REQUIRE( find_window( "/details" ) );
+        save( "container-information" );
+        ui.reset();
+        CHECK( examiner.cleanup() == EXAMINED_CONTENTS_UNCHANGED );
+    }
 
     {
         uilist menu;
@@ -323,5 +542,6 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     }
     CHECK( calendar::turn == before_time );
     CHECK( rng_get_engine() == before_rng );
+    CHECK( you.get_moves() == before_moves );
 }
 #endif

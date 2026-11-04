@@ -8,6 +8,10 @@
 #include <string>
 #include <functional>
 #include <memory>
+#include <vector>
+
+class item;
+struct iteminfo;
 
 namespace cataimgui
 {
@@ -20,6 +24,7 @@ namespace fp3d_simple_ui
 bool active();
 ImVec4 text_color( const nc_color &color );
 void accent_text( const std::string &text );
+std::vector<iteminfo> item_information( const item &object );
 // Adapt a native screen's drawing; its existing input loop still executes actions.
 std::unique_ptr<cataimgui::window> create_panel( const std::string &title,
         const std::function<void( cataimgui::window & )> &draw,

@@ -42,6 +42,10 @@ class string_input_popup;
 class tinymap;
 class ui_adaptor;
 struct uilist_entry;
+namespace cataimgui
+{
+class window;
+}
 template <typename E> struct enum_traits;
 
 enum class navigation_mode : int {
@@ -227,6 +231,12 @@ class inventory_entry
 };
 
 struct inventory_selector_save_state;
+
+struct inventory_input {
+    std::string action;
+    int ch = 0;
+    inventory_entry *entry = nullptr;
+};
 
 /**
 * Handles how inventory_entry are displayed and selected in an inventory_selector
@@ -722,6 +732,8 @@ class inventory_selector
         // 3D presentation only; selection is returned to the original caller.
         std::vector<uilist_entry> simple_pick_entries( std::vector<item_location> &locations );
         std::optional<item_location> execute_simple_pick();
+        void draw_simple_inventory( cataimgui::window &panel );
+        std::optional<inventory_input> take_simple_input();
 
         const item_category *naturalize_category( const item_category &category,
                 const tripoint_bub_ms &pos );
@@ -920,6 +932,11 @@ class inventory_selector
         catacurses::window w_inv;
 
         weak_ptr_fast<ui_adaptor> ui;
+        std::weak_ptr<cataimgui::window> simple_window;
+        std::optional<inventory_input> simple_input;
+        item_location simple_scrolled;
+        item_location simple_information_source;
+        std::string simple_information_text;
 
         std::unique_ptr<string_input_popup> spopup;
 
