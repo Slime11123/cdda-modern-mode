@@ -81,7 +81,12 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     const auto wall_at = [&]( const tripoint_abs_ms & p ) {
         const auto *tile = cell_at( p );
         return tile && ( tile->kind == fp3d_snapshot::terrain_kind::wall ||
+                         tile->kind == fp3d_snapshot::terrain_kind::glass ||
                          tile->kind == fp3d_snapshot::terrain_kind::window );
+    };
+    const auto table_at = [&]( const tripoint_abs_ms &p ) {
+        const auto *tile = cell_at( p );
+        return tile && fp3d_furniture::chair_table( tile->furniture );
     };
     for( const auto *tile : local ) {
         const auto p = tile->position - scene.origin;
@@ -121,7 +126,14 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                     { left, base, south } }}, flat ? 0 : top - bottom }, type );
         };
         if( tile->furniture ) {
-            const unsigned facing = fp3d_furniture::facing( tile->furniture->shape, {
+            const auto shape = tile->furniture->shape;
+            const unsigned facing = shape == fp3d_furniture::kind::chair ?
+                                    fp3d_furniture::facing( shape, {},
+            { table_at( tile->position + tripoint_rel_ms::north ),
+              table_at( tile->position + tripoint_rel_ms::east ),
+              table_at( tile->position + tripoint_rel_ms::south ),
+              table_at( tile->position + tripoint_rel_ms::west ) } ) :
+            fp3d_furniture::facing( shape, {
                 wall_at( tile->position + tripoint_rel_ms::north ),
                 wall_at( tile->position + tripoint_rel_ms::east ),
                 wall_at( tile->position + tripoint_rel_ms::south ),
@@ -191,21 +203,14 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         if( tile->kind == terrain::wall || tile->kind == terrain::obstacle ) {
             box( 0, 0, .98f, .98f, 0, tile->kind == terrain::wall ? fp3d_camera::floor_height : 1 );
         } else if( tile->kind == terrain::closed_door || tile->kind == terrain::open_door ||
+                   tile->kind == terrain::damaged_door || tile->kind == terrain::glass ||
                    tile->kind == terrain::window ) {
             const int ew = wall_at( tile->position + tripoint_rel_ms::east ) +
                            wall_at( tile->position + tripoint_rel_ms::west );
             const int ns = wall_at( tile->position + tripoint_rel_ms::north ) +
                            wall_at( tile->position + tripoint_rel_ms::south );
             const bool along_x = ew >= ns;
-            const float width = along_x ? .98f : .16f;
-            const float depth = along_x ? .16f : .98f;
-            if( tile->kind == terrain::closed_door ) {
-                box( 0, 0, width, depth, 0, fp3d_camera::floor_height );
-            } else if( tile->kind == terrain::open_door ) {
-                box( along_x ? -.44f : 0, along_x ? 0 : -.44f, .12f, .12f, 0, fp3d_camera::floor_height );
-                box( along_x ? .44f : 0, along_x ? 0 : .44f, .12f, .12f, 0, fp3d_camera::floor_height );
-                box( 0, 0, width, depth, 2.1f, fp3d_camera::floor_height );
-            } else {
+            if( tile->kind == terrain::window ) {
                 box( 0, 0, along_x ? 1 : .18f, along_x ? .18f : 1, 0, .9f );
                 box( 0, 0, along_x ? 1 : .18f, along_x ? .18f : 1, 2.1f, fp3d_camera::floor_height );
                 box( along_x ? -.46f : 0, along_x ? 0 : -.46f, along_x ? .08f : .22f,
@@ -214,6 +219,15 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                      along_x ? .22f : .08f, .9f, 2.1f );
                 if( tile->pane != fp3d_snapshot::window_pane::opening ) {
                     box( 0, 0, along_x ? .84f : 0, along_x ? 0 : .84f, .9f, 2.1f );
+                }
+            } else {
+                for( const auto &original : fp3d_snapshot::door_parts( tile->kind ) ) {
+                    const auto part = fp3d_furniture::rotated( original, along_x ? 0 : 3 );
+                    box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+                }
+                if( tile->kind == terrain::glass ) {
+                    box( 0, 0, along_x ? .88f : 0, along_x ? 0 : .88f,
+                         .06f, fp3d_camera::floor_height - .08f );
                 }
             }
         }

@@ -414,10 +414,13 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
             if( pending.size() > before ) {
                 pending.back().window = true;
             }
-        } else {
+        } else if( tile.kind != fp3d_snapshot::terrain_kind::glass ) {
             add( tile.terrain, nullptr );
         }
-        if( tile.ceiling_present ) {
+        if( tile.ceiling_present || tile.kind == fp3d_snapshot::terrain_kind::glass ||
+            tile.kind == fp3d_snapshot::terrain_kind::closed_door ||
+            tile.kind == fp3d_snapshot::terrain_kind::open_door ||
+            tile.kind == fp3d_snapshot::terrain_kind::damaged_door ) {
             add( "t_floor", nullptr );
         }
         if( !tile.vegetation.empty() ) {

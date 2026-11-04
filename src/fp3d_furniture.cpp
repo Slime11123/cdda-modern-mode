@@ -88,7 +88,7 @@ const std::vector<part> &parts( kind shape )
     };
     static const std::vector<part> chair{
         { 0, 0, .58f, .58f, .40f, .48f },
-        { 0, .25f, .58f, .08f, .48f, 1.02f },
+        { 0, -.25f, .58f, .08f, .48f, 1.02f },
         { -.23f, -.23f, .07f, .07f, 0, .40f },
         { .23f, -.23f, .07f, .07f, 0, .40f },
         { -.23f, .23f, .07f, .07f, 0, .40f },
@@ -268,8 +268,22 @@ bool shows_contents( kind shape )
            shape == kind::fridge || shape == kind::mini_fridge;
 }
 
-unsigned facing( kind shape, const std::array<bool, 4> &walls )
+bool chair_table( const std::optional<model> &furniture )
 {
+    return furniture && ( furniture->shape == kind::table || furniture->shape == kind::desk );
+}
+
+unsigned facing( kind shape, const std::array<bool, 4> &walls,
+                 const std::array<bool, 4> &tables )
+{
+    if( shape == kind::chair ) {
+        for( unsigned front = 0; front < tables.size(); ++front ) {
+            if( tables[front] ) {
+                return ( front + 2 ) % 4;
+            }
+        }
+        return 2;
+    }
     if( !shows_contents( shape ) && shape != kind::cabinet && shape != kind::counter &&
         shape != kind::desk && shape != kind::sofa && shape != kind::sink && shape != kind::oven ) {
         return 0;

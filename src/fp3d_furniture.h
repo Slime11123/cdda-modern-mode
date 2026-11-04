@@ -27,7 +27,9 @@ float item_surface( kind shape );
 // Only already-captured accessible contents receive the storage display pass.
 bool shows_contents( kind shape );
 // Backing walls in native north/east/south/west order; no live-map queries.
-unsigned facing( kind shape, const std::array<bool, 4> &walls );
+unsigned facing( kind shape, const std::array<bool, 4> &walls,
+                 const std::array<bool, 4> &tables = {} );
+bool chair_table( const std::optional<model> &furniture );
 // Same quarter-turn transform as the rendered model, for part-level picking.
 part rotated( part value, unsigned quarter_turns );
 }

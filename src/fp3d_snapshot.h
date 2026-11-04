@@ -35,9 +35,11 @@ constexpr int render_below = 2;
 enum class knowledge { visible, remembered };
 enum class window_pane { glazed, opening, covered };
 
-enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle };
+enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle, glass, damaged_door };
 // Read-only terrain-definition classification, also used by construction ghosts.
 terrain_kind terrain_shape( const std::string &id );
+// Door/frame parts in their east-west orientation, shared by drawing and picking.
+const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind );
 
 struct cell {
     tripoint_abs_ms position;

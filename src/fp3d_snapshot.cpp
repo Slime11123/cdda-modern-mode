@@ -186,11 +186,31 @@ terrain_kind classify( const std::string &id )
         return terrain_kind::obstacle;
     }
     const ter_t &definition = terrain.obj();
-    if( definition.has_flag( ter_furn_flag::TFLAG_DOOR ) ) {
+    const bool door_id = id.find( "door" ) != std::string::npos;
+    if( definition.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_DOOR_DAMAGED ) ||
+        ( door_id && definition.has_flag( "BARRICADABLE_DOOR_REINFORCED_DAMAGED" ) ) ) {
+        return terrain_kind::damaged_door;
+    }
+    const bool door = definition.has_flag( ter_furn_flag::TFLAG_DOOR ) ||
+                      ( definition.movecost == 0 && door_id &&
+                        ( definition.has_flag( ter_furn_flag::TFLAG_LOCKED ) ||
+                          definition.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_DOOR ) ||
+                          definition.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_DOOR_REINFORCED ) ) );
+    if( definition.movecost == 0 && id.find( "glass" ) != std::string::npos &&
+        ( door || definition.has_flag( ter_furn_flag::TFLAG_WALL ) ) &&
+        ( definition.has_flag( ter_furn_flag::TFLAG_TRANSPARENT ) ||
+          definition.has_flag( ter_furn_flag::TFLAG_TRANSLUCENT ) ) ) {
+        return terrain_kind::glass;
+    }
+    if( door ) {
         return terrain_kind::closed_door;
     }
     if( !definition.close.is_null() && definition.close.is_valid() &&
         definition.close->has_flag( ter_furn_flag::TFLAG_DOOR ) ) {
+        return terrain_kind::open_door;
+    }
+    if( definition.movecost > 0 && door_id &&
+        id.size() >= 6 && id.compare( id.size() - 6, 6, "_frame" ) == 0 ) {
         return terrain_kind::open_door;
     }
     if( definition.has_flag( ter_furn_flag::TFLAG_WINDOW ) || id.compare( 0, 9, "t_window_" ) == 0 ||
@@ -304,6 +324,34 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
 terrain_kind terrain_shape( const std::string &id )
 {
     return classify( id );
+}
+
+const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind )
+{
+    constexpr float top = fp3d_camera::floor_height;
+    static const std::vector<fp3d_furniture::part> closed{ { 0, 0, .98f, .16f, 0, top } };
+    static const std::vector<fp3d_furniture::part> open{
+        { -.44f, 0, .12f, .12f, 0, top }, { .44f, 0, .12f, .12f, 0, top },
+        { 0, 0, .98f, .16f, 2.1f, top }
+    };
+    static const std::vector<fp3d_furniture::part> damaged{
+        { 0, 0, .98f, .16f, 0, .34f },
+        { -.325f, 0, .33f, .16f, .34f, .85f }, { .365f, 0, .25f, .16f, .34f, .85f },
+        { 0, 0, .98f, .16f, .85f, .95f },
+        { -.3925f, 0, .195f, .16f, .95f, 1.76f }, { .3375f, 0, .305f, .16f, .95f, 1.76f },
+        { 0, 0, .98f, .16f, 1.76f, top }
+    };
+    static const std::vector<fp3d_furniture::part> glass{
+        { -.47f, 0, .06f, .10f, 0, top }, { .47f, 0, .06f, .10f, 0, top },
+        { 0, 0, .88f, .10f, 0, .06f }, { 0, 0, .88f, .10f, top - .08f, top }
+    };
+    if( kind == terrain_kind::open_door ) {
+        return open;
+    }
+    if( kind == terrain_kind::damaged_door ) {
+        return damaged;
+    }
+    return kind == terrain_kind::glass ? glass : closed;
 }
 
 void prepare_view( avatar &you, map &here )

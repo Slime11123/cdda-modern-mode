@@ -144,7 +144,8 @@ void crossed_plant( float x, float z, float height, bool grass,
     }
 }
 
-void window_face( const std::optional<fp3d_materials::uv_rect> &material )
+void window_face( const std::optional<fp3d_materials::uv_rect> &material,
+                  float half_width = .42f, float bottom = .9f, float top = 2.1f )
 {
     const auto uv = material.value_or( fp3d_materials::uv_rect{ 0, 0, 1, 1 } );
     if( material ) {
@@ -156,13 +157,13 @@ void window_face( const std::optional<fp3d_materials::uv_rect> &material )
     // lintel, jambs or ground. Culling is disabled, so both sides are visible.
     glBegin( GL_QUADS );
     glTexCoord2f( uv.left, uv.bottom );
-    glVertex3f( -.42f, .9f, 0 );
+    glVertex3f( -half_width, bottom, 0 );
     glTexCoord2f( uv.right, uv.bottom );
-    glVertex3f( .42f, .9f, 0 );
+    glVertex3f( half_width, bottom, 0 );
     glTexCoord2f( uv.right, uv.top );
-    glVertex3f( .42f, 2.1f, 0 );
+    glVertex3f( half_width, top, 0 );
     glTexCoord2f( uv.left, uv.top );
-    glVertex3f( -.42f, 2.1f, 0 );
+    glVertex3f( -half_width, top, 0 );
     glEnd();
 }
 
@@ -203,6 +204,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     using kind = fp3d_snapshot::terrain_kind;
     const bool memory = tile.known == fp3d_snapshot::knowledge::remembered;
     const bool grass = tile.vegetation.compare( 0, 7, "t_grass" ) == 0;
+    const bool door = tile.kind == kind::closed_door || tile.kind == kind::open_door ||
+                      tile.kind == kind::damaged_door || tile.kind == kind::glass;
     const auto material = fp3d_materials::lookup(
                               tile.kind == kind::window ? "t_floor" :
                               tile.vegetation == tile.terrain && !grass ? "t_dirt" : tile.terrain );
@@ -214,16 +217,20 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     glPushMatrix();
     const bool stair_opening = tile.goes_down && below && below->goes_up;
     if( tile.floor_present && !tile.is_ramp ) {
+        const auto floor_material = door ? fp3d_materials::lookup( "t_floor" ) : material;
+        if( floor_material ) {
+            color( brightness, brightness, brightness );
+        }
         // A matched stair pair has a half-tile opening; never remove an
         // unrelated upper floor just because a lower tile says GOES_UP.
         const float width = stair_opening ? .5f : 1.0f;
         const float center = x - ( stair_opening ? .25f : 0 );
-        box( center, z, width, 1, -.08f, 0, material );
+        box( center, z, width, 1, -.08f, 0, floor_material );
         glPushMatrix();
         glTranslatef( center, -.08f, z );
         glScalef( width, 1, 1 );
         glRotatef( 180, 1, 0, 0 );
-        floor( 0, 0, 0, material );
+        floor( 0, 0, 0, floor_material );
         glPopMatrix();
     }
     const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
@@ -316,24 +323,39 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             glEnable( GL_LIGHTING );
         }
         glPopMatrix();
-    } else if( tile.kind == kind::closed_door || tile.kind == kind::open_door ) {
+    } else if( door ) {
         // Orientation uses only permitted snapshot neighbours, never the map.
         const bool along_x = ew >= ns;
         color( memory ? .23f : .62f, memory ? .23f : .36f, memory ? .23f : .15f );
         if( material ) {
             color( brightness, brightness, brightness );
         }
-        if( tile.kind == kind::closed_door ) {
-            box( x, z, along_x ? .98f : .16f, along_x ? .16f : .98f, 0, fp3d_camera::floor_height, material );
-        } else {
-            const float dx = along_x ? .44f : 0;
-            const float dz = along_x ? 0 : .44f;
-            box( x - dx, z - dz, .12f, .12f, 0, fp3d_camera::floor_height, material );
-            box( x + dx, z + dz, .12f, .12f, 0, fp3d_camera::floor_height, material );
-            box( x, z, along_x ? .98f : .16f, along_x ? .16f : .98f, 2.1f, fp3d_camera::floor_height,
-                 material );
-
+        glPushMatrix();
+        glTranslatef( x, 0, z );
+        if( !along_x ) {
+            glRotatef( 90, 0, 1, 0 );
         }
+        for( const auto &part : fp3d_snapshot::door_parts( tile.kind ) ) {
+            if( tile.kind == kind::glass ) {
+                color( brightness * .46f, brightness * .52f, brightness * .56f );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, std::nullopt );
+            } else if( tile.kind == kind::damaged_door && material ) {
+                // Map each surviving piece to its region of the original door art.
+                const float u = material->right - material->left;
+                const float v = material->bottom - material->top;
+                const fp3d_materials::uv_rect front{
+                    material->left + u * ( .5f + ( part.x - part.width / 2 ) / .98f ),
+                    material->bottom - v * part.top / fp3d_camera::floor_height,
+                    material->left + u * ( .5f + ( part.x + part.width / 2 ) / .98f ),
+                    material->bottom - v * part.bottom / fp3d_camera::floor_height
+                };
+                const fp3d_materials::furniture_uv faces{ front, front, front };
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, material, false, &faces );
+            } else {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, material );
+            }
+        }
+        glPopMatrix();
     }
     glPopMatrix();
 }
@@ -562,14 +584,27 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     const auto known_wall = [&]( const tripoint_abs_ms & p ) {
         const auto *tile = known_cell( p );
         return tile && ( tile->kind == fp3d_snapshot::terrain_kind::wall ||
+                         tile->kind == fp3d_snapshot::terrain_kind::glass ||
                          tile->kind == fp3d_snapshot::terrain_kind::window );
     };
+    const auto table_at = [&]( const tripoint_abs_ms &p ) {
+        const auto *tile = known_cell( p );
+        return tile && fp3d_furniture::chair_table( tile->furniture );
+    };
     const auto furniture_facing = [&]( const fp3d_snapshot::cell &tile ) {
-        return tile.furniture ? fp3d_furniture::facing( tile.furniture->shape,
+        if( !tile.furniture ) {
+            return 0u;
+        }
+        if( tile.furniture->shape == fp3d_furniture::kind::chair ) {
+            return fp3d_furniture::facing( tile.furniture->shape, {},
+            { table_at( tile.position + tripoint_rel_ms::north ), table_at( tile.position + tripoint_rel_ms::east ),
+              table_at( tile.position + tripoint_rel_ms::south ), table_at( tile.position + tripoint_rel_ms::west ) } );
+        }
+        return fp3d_furniture::facing( tile.furniture->shape,
         { known_wall( tile.position + tripoint_rel_ms::north ),
           known_wall( tile.position + tripoint_rel_ms::east ),
           known_wall( tile.position + tripoint_rel_ms::south ),
-          known_wall( tile.position + tripoint_rel_ms::west ) } ) : 0;
+          known_wall( tile.position + tripoint_rel_ms::west ) } );
     };
     const auto window_wall = [&]( const fp3d_snapshot::cell & tile ) {
         for( const auto &direction : {
@@ -635,6 +670,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 hash_value( signature, std::hash<std::string> {}( tile->furniture ? tile->furniture->id : "" ) );
                 if( tile->furniture ) {
                     hash_value( signature, static_cast<unsigned>( tile->furniture->shape ) );
+                    hash_value( signature, furniture_facing( *tile ) );
                 }
                 hash_value( signature, std::hash<float> {}( tile->vegetation_height ) );
                 hash_value( signature, static_cast<unsigned>( tile->kind ) );
@@ -877,8 +913,9 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     // Depth testing keeps nearer walls/actors opaque; glass never writes depth.
     std::vector<const fp3d_snapshot::cell *> glass;
     for( const auto &tile : scene.cells ) {
-        if( tile.kind == fp3d_snapshot::terrain_kind::window &&
-            tile.pane == fp3d_snapshot::window_pane::glazed ) {
+        if( tile.kind == fp3d_snapshot::terrain_kind::glass ||
+            ( tile.kind == fp3d_snapshot::terrain_kind::window &&
+              tile.pane == fp3d_snapshot::window_pane::glazed ) ) {
             glass.push_back( &tile );
         }
     }
@@ -909,13 +946,23 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                        known_wall( tile->position + tripoint_rel_ms::south );
         const bool memory = tile->known == fp3d_snapshot::knowledge::remembered;
         const float brightness = memory ? .23f : .9f;
-        glColor4f( brightness, brightness, brightness, .32f );
+        const bool full_glass = tile->kind == fp3d_snapshot::terrain_kind::glass;
+        if( full_glass ) {
+            const float opacity = tile->terrain.find( "frosted" ) != std::string::npos ? .60f : .32f;
+            glColor4f( brightness * .66f, brightness * .89f, brightness, opacity );
+        } else {
+            glColor4f( brightness, brightness, brightness, .32f );
+        }
         glPushMatrix();
         glTranslatef( offset.x(), y, offset.y() );
         if( ew < ns ) {
             glRotatef( 90, 0, 1, 0 );
         }
-        window_face( fp3d_materials::lookup( "$window:" + tile->terrain ) );
+        if( full_glass ) {
+            window_face( std::nullopt, .44f, .06f, fp3d_camera::floor_height - .08f );
+        } else {
+            window_face( fp3d_materials::lookup( "$window:" + tile->terrain ) );
+        }
         glPopMatrix();
     }
     if( preview ) {
@@ -937,15 +984,20 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             glTranslatef( 0, y + .025f, 0 );
             draw_cell( tile, offset.x(), offset.y(), nullptr, nullptr, ew, ns, window_wall( tile ),
                        &tint, false, furniture_facing( tile ) );
-            if( tile.kind == fp3d_snapshot::terrain_kind::window &&
-                tile.pane == fp3d_snapshot::window_pane::glazed ) {
+            const bool full_glass = tile.kind == fp3d_snapshot::terrain_kind::glass;
+            if( full_glass || ( tile.kind == fp3d_snapshot::terrain_kind::window &&
+                               tile.pane == fp3d_snapshot::window_pane::glazed ) ) {
                 glDisable( GL_LIGHTING );
                 glPushMatrix();
                 glTranslatef( offset.x(), 0, offset.y() );
                 if( ew < ns ) {
                     glRotatef( 90, 0, 1, 0 );
                 }
-                window_face( fp3d_materials::lookup( "$window:" + tile.terrain ) );
+                if( full_glass ) {
+                    window_face( std::nullopt, .44f, .06f, fp3d_camera::floor_height - .08f );
+                } else {
+                    window_face( fp3d_materials::lookup( "$window:" + tile.terrain ) );
+                }
                 glPopMatrix();
             }
             glPopMatrix();

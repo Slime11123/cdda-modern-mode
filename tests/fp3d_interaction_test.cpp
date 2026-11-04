@@ -264,6 +264,34 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         REQUIRE( opening );
         CHECK( opening->position == scene.origin + tripoint_rel_ms( 0, -3, 0 ) );
     }
+    SECTION( "glass doors remain selectable and damaged wood has an actual opening" ) {
+        using shape = terrain_kind;
+        auto &barrier = add( 0, -2, 0 );
+        barrier.terrain = "t_door_b";
+        barrier.kind = terrain_shape( barrier.terrain );
+        REQUIRE( barrier.kind == shape::damaged_door );
+        add( 0, -4, 0, shape::wall );
+        const auto through = fp3d_targeting::ray( scene, 0, 0 );
+        REQUIRE( through );
+        CHECK( through->position == scene.origin + tripoint_rel_ms( 0, -4, 0 ) );
+        const auto lower_opening = fp3d_targeting::ray( scene, 0, 25 );
+        CHECK( ( !lower_opening || lower_opening->position != scene.cells.front().position ) );
+        const auto edge = fp3d_targeting::ray( scene, 0, 0, { .40f, 0 } );
+        REQUIRE( edge );
+        CHECK( edge->position == scene.cells.front().position );
+        CHECK( terrain_shape( "t_door_locked" ) == shape::closed_door );
+        CHECK( terrain_shape( "t_door_metal_locked" ) == shape::closed_door );
+        CHECK( terrain_shape( "t_door_frame" ) == shape::open_door );
+        CHECK( terrain_shape( "t_door_glass_o" ) == shape::open_door );
+        for( const std::string id : { "t_door_glass_c", "t_wall_glass", "t_door_glass_frosted_c" } ) {
+            scene.cells.front().terrain = id;
+            scene.cells.front().kind = terrain_shape( id );
+            REQUIRE( scene.cells.front().kind == shape::glass );
+            const auto glass = fp3d_targeting::ray( scene, 0, 0 );
+            REQUIRE( glass );
+            CHECK( glass->position == scene.cells.front().position );
+        }
+    }
     SECTION( "visible sprites need a ray intersection and cannot bypass a wall" ) {
         sprite image;
         image.kind = sprite_kind::monster;

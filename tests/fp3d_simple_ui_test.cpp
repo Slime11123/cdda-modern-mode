@@ -652,6 +652,7 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     CHECK_FALSE( fp3d_simple_ui::active() );
     {
         fp3d_compositor::apply_modes( true, true );
+        fp3d_compositor::publish( fp3d_snapshot::scene_snapshot{} );
         fp3d_compositor::set_input_context( "UILIST" );
         REQUIRE( fp3d_compositor::turn_based() );
         SDL_Texture_Ptr background_layer( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,

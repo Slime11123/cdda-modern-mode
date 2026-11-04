@@ -26,6 +26,21 @@ TEST_CASE( "fp3d_cabinet_front_faces_open_space_using_owned_walls", "[fp3d][furn
     CHECK( fp3d_furniture::facing( fp3d_furniture::kind::bed, { false, true, false, false } ) == 0 );
 }
 
+TEST_CASE( "fp3d_chair_seat_faces_adjacent_table_with_backrest_outside", "[fp3d][furniture]" )
+{
+    using fp3d_furniture::kind;
+    const auto &back = fp3d_furniture::parts( kind::chair )[1];
+    for( unsigned direction = 0; direction < 4; ++direction ) {
+        std::array<bool, 4> tables{};
+        tables[direction] = true;
+        const auto facing = fp3d_furniture::facing( kind::chair, {}, tables );
+        CHECK( facing == ( direction + 2 ) % 4 );
+        const auto oriented = fp3d_furniture::rotated( back, facing );
+        const std::array<float, 4> back_offset{ oriented.z, -oriented.x, -oriented.z, oriented.x };
+        CHECK( back_offset[direction] > 0 );
+    }
+}
+
 TEST_CASE( "fp3d_rotated_bookcase_ray_tracks_its_open_front_and_side_panels",
            "[fp3d][furniture][ray]" )
 {

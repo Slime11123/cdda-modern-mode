@@ -1238,6 +1238,24 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             CHECK( IMG_SavePNG( image.get(), ( std::filesystem::path( directory ) /
                                                ( pack + "-window.png" ) ).u8string().c_str() ) == 0 );
         }
+        for( const std::string id : { "t_door_glass_c", "t_wall_glass", "t_door_b", "t_door_locked" } ) {
+            CAPTURE( id );
+            scene.cells.back().terrain = id;
+            scene.cells.back().kind = fp3d_snapshot::terrain_shape( id );
+            const auto empty = render();
+            scene.sprites.push_back( zombie );
+            auto occupied = render();
+            CHECK( ( occupied != empty ) == ( id != "t_door_locked" ) );
+            scene.sprites.clear();
+            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom(
+                                           occupied.data(), width, height, 32, width * 4,
+                                           SDL_PIXELFORMAT_RGBA8888 ) );
+                REQUIRE( image );
+                CHECK( IMG_SavePNG( image.get(), ( std::filesystem::path( directory ) /
+                                                   ( pack + "-" + id + ".png" ) ).u8string().c_str() ) == 0 );
+            }
+        }
         scene.sky.visible = false;
 
         // A new atlas slot must not invalidate every previously cached chunk.
