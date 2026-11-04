@@ -57,6 +57,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     const vector3 eye{ offset.x, offset.y, fp3d_camera::eye_height };
     const vector3 direction{ sy * cp, -cy * cp, -std::sin( pitch * radians ) };
     float nearest = reach + .001f;
+    float nearest_opaque = nearest;
+    std::vector<std::pair<tripoint_abs_ms, float>> storage_hits;
     std::optional<target> result;
     std::vector<const fp3d_snapshot::cell *> local;
     for( const auto &tile : scene.cells ) {
@@ -88,10 +90,20 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         const float z = p.z() * fp3d_camera::floor_height;
         const auto accept = [&]( const std::optional<float> &hit, const edge_outline &outline,
                                  kind type = kind::terrain ) {
-            if( hit && *hit >= fp3d_camera::near_clip && *hit <= reach && *hit < nearest ) {
+            if( !hit || *hit < fp3d_camera::near_clip || *hit > reach ) {
+                return;
+            }
+            const bool visible = tile->known == fp3d_snapshot::knowledge::visible && !tile->exterior_only;
+            if( visible && type == kind::furniture &&
+                fp3d_furniture::shows_contents( tile->furniture->shape ) ) {
+                storage_hits.emplace_back( tile->position, *hit );
+            } else {
+                nearest_opaque = std::min( nearest_opaque, *hit );
+            }
+            if( *hit < nearest ) {
                 nearest = *hit;
                 result.reset();
-                if( tile->known == fp3d_snapshot::knowledge::visible && !tile->exterior_only ) {
+                if( visible ) {
                     result = target{ scene.origin, tile->position, type,
                                      type == kind::furniture ? tile->furniture->id : tile->terrain, outline };
                 }
@@ -206,6 +218,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         }
     }
+    float nearest_sprite = reach + .001f;
     for( const auto &image : scene.sprites ) {
         if( image.kind == fp3d_snapshot::sprite_kind::held_item ) {
             continue;
@@ -221,12 +234,22 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                            sy * ( eye[1] + distance * direction[1] - p.y() );
         const float height = eye[2] + distance * direction[2] -
                              p.z() * fp3d_camera::floor_height - image.elevation;
-        if( distance >= fp3d_camera::near_clip && distance <= reach && distance < nearest &&
-            std::abs( side ) <= image.height / 2 && height >= .04f && height <= image.height ) {
-            nearest = distance;
-            result = target{ scene.origin, image.position,
-                             image.kind == fp3d_snapshot::sprite_kind::item ? kind::item : kind::creature, image.id };
+        if( distance < fp3d_camera::near_clip || distance > reach || distance >= nearest_sprite ||
+            std::abs( side ) > image.height / 2 || height < .04f || height > image.height ) {
+            continue;
         }
+        const bool item = image.kind == fp3d_snapshot::sprite_kind::item;
+        if( distance >= nearest ) {
+            const bool blocked = !item || distance >= nearest_opaque ||
+            std::any_of( storage_hits.begin(), storage_hits.end(), [&]( const auto &hit ) {
+                return hit.first != image.position && hit.second <= distance;
+            } );
+            if( blocked ) {
+                continue;
+            }
+        }
+        nearest_sprite = distance;
+        result = target{ scene.origin, image.position, item ? kind::item : kind::creature, image.id };
     }
     return result;
 }

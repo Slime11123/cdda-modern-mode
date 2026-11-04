@@ -611,6 +611,39 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
     } else if( uses( "f_rack" ) ) {
         result.top = crop( 2, 1, 29, 8 );
         result.front = result.side = crop( 1, 10, 2, 28 );
+    } else if( uses( "f_dresser" ) ) {
+        result.top = crop( 1, 1, 30, 8 );
+        result.front = crop( 1, 10, 30, 30 );
+        result.side = crop( 2, 11, 5, 29 );
+    } else if( uses( "f_sink" ) ) {
+        const auto metal = crop( 8, 3, 10, 5 );
+        if( part_index == 0 ) {
+            result.front = crop( 2, 14, 29, 30 );
+            result.top = result.side = crop( 3, 16, 6, 28 );
+        } else if( part_index == 1 ) {
+            result.top = crop( 3, 3, 28, 11 );
+            result.front = result.side = metal;
+        } else {
+            result.top = result.front = result.side = metal;
+        }
+    } else if( uses( "f_oven" ) ) {
+        if( part_index == 0 ) {
+            result.top = crop( 3, 6, 28, 10 );
+            result.front = crop( 1, 11, 30, 30 );
+            result.side = crop( 3, 12, 5, 29 );
+        } else {
+            result.front = crop( 3, 2, 28, 5 );
+            result.top = result.side = crop( 4, 2, 6, 4 );
+        }
+    } else if( uses( "f_fridge" ) ) {
+        // The 64x80 sprite is letterboxed in the atlas. Sample its opaque
+        // appliance pixels after that fit, away from the surrounding shadow.
+        result.top = crop( 11, 14, 20, 17 );
+        result.front = crop( 10, 17, 21, 30 );
+        result.side = crop( 14, 19, 18, 22 );
+    } else if( uses( "f_sofa" ) ) {
+        result.top = part_index >= 3 ? crop( 2, 4, 5, 27 ) : crop( 8, 11, 22, 16 );
+        result.front = result.side = crop( 9, 12, 21, 15 );
     } else if( uses( "f_chair" ) ) {
         const auto wood = crop( 6, 23, 7, 29 );
         if( part_index == 0 ) {

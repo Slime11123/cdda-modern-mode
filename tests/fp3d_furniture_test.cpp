@@ -1,6 +1,7 @@
 #include "fp3d_furniture.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <cmath>
 #include "avatar.h"
 #include "calendar.h"
 #include "cata_catch.h"
@@ -124,6 +125,86 @@ TEST_CASE( "fp3d_furniture_capture_items_and_revalidation_follow_native_visibili
             return entry.furniture.has_value();
         } ) );
     }
+}
+
+TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][furniture]" )
+{
+    for( const std::string id : {
+             "f_table", "f_chair", "f_bed", "f_bed_frame", "f_crate_c", "f_crate_o",
+             "f_cupboard", "f_locker", "f_bookcase", "f_rack",
+             "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven", "f_fridge",
+             "f_minifridge", "f_dresser", "f_wardrobe"
+         } ) {
+        CAPTURE( id );
+        const auto model = fp3d_furniture::describe( id );
+        REQUIRE( model );
+        CHECK( model->id == id );
+        const auto &parts = fp3d_furniture::parts( model->shape );
+        REQUIRE_FALSE( parts.empty() );
+        CHECK( std::any_of( parts.begin(), parts.end(), []( const auto &part ) { return part.bottom == 0; } ) );
+        for( const auto &part : parts ) {
+            CHECK( part.width > 0 );
+            CHECK( part.depth > 0 );
+            CHECK( part.bottom >= 0 );
+            CHECK( part.top > part.bottom );
+            CHECK( part.top <= fp3d_camera::floor_height );
+            CHECK( std::abs( part.x ) + part.width / 2 <= .501f );
+            CHECK( std::abs( part.z ) + part.depth / 2 <= .501f );
+        }
+        const float elevation = fp3d_furniture::item_surface( model->shape );
+        CHECK( std::any_of( parts.begin(), parts.end(), [&]( const auto &part ) {
+            return std::abs( part.x ) <= part.width / 2 && std::abs( part.z ) <= part.depth / 2 &&
+                   ( fp3d_furniture::shows_contents( model->shape ) ?
+                     elevation > part.bottom && elevation < part.top : elevation == part.top );
+        } ) );
+    }
+    CHECK_FALSE( fp3d_furniture::describe( "f_counter_gate_c" ) );
+    CHECK_FALSE( fp3d_furniture::describe( "f_counter_gate_o" ) );
+    CHECK( fp3d_furniture::parts( fp3d_furniture::kind::mini_fridge ).front().top <
+           fp3d_furniture::parts( fp3d_furniture::kind::fridge ).front().top );
+}
+
+TEST_CASE( "fp3d_storage_ray_sees_items_only_through_their_own_cabinet", "[fp3d][furniture][ray]" )
+{
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell rear;
+    rear.position = tripoint_abs_ms( 0, -3, 0 );
+    rear.terrain = "t_floor";
+    rear.furniture = fp3d_furniture::describe( "f_locker" );
+    REQUIRE( rear.furniture );
+    scene.cells.push_back( rear );
+    fp3d_snapshot::sprite item;
+    item.position = rear.position;
+    item.kind = fp3d_snapshot::sprite_kind::item;
+    item.id = "apple";
+    item.elevation = 1;
+    item.height = .7f;
+    scene.sprites.push_back( item );
+    auto hit = fp3d_targeting::ray( scene, 0, 0 );
+    REQUIRE( hit );
+    CHECK( hit->type == fp3d_targeting::kind::item );
+    CHECK_FALSE( hit->outline );
+
+    scene.sprites.front().kind = fp3d_snapshot::sprite_kind::monster;
+    hit = fp3d_targeting::ray( scene, 0, 0 );
+    REQUIRE( hit );
+    CHECK( hit->type == fp3d_targeting::kind::furniture );
+    CHECK( hit->outline );
+
+    scene.sprites.front() = item;
+    auto front = rear;
+    front.position = tripoint_abs_ms( 0, -1, 0 );
+    scene.cells.push_back( front );
+    hit = fp3d_targeting::ray( scene, 0, 0 );
+    REQUIRE( hit );
+    CHECK( hit->type == fp3d_targeting::kind::furniture );
+    CHECK( hit->position == front.position );
+    scene.cells.back().kind = fp3d_snapshot::terrain_kind::wall;
+    scene.cells.back().furniture.reset();
+    hit = fp3d_targeting::ray( scene, 0, 0 );
+    REQUIRE( hit );
+    CHECK( hit->type == fp3d_targeting::kind::terrain );
+    CHECK( hit->position == front.position );
 }
 
 TEST_CASE( "fp3d_furniture_ray_uses_model_parts_and_respects_wall_occlusion",

@@ -96,6 +96,46 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
                                                      ( pack + "-storage-" + name + ".png" ) ).u8string().c_str() ) == 0 );
             }
         };
+        const auto bare_floor = render();
+        for( const std::string id : {
+                 "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven",
+                 "f_fridge", "f_minifridge", "f_dresser", "f_wardrobe"
+             } ) {
+            CAPTURE( id );
+            scene = floor_scene;
+            auto &tile = *std::find_if( scene.cells.begin(), scene.cells.end(), []( const auto &entry ) {
+                return entry.position == tripoint_abs_ms( 0, -2, 0 );
+            } );
+            tile.furniture = fp3d_furniture::describe( id );
+            REQUIRE( tile.furniture );
+            const auto model = render();
+            CHECK( model != bare_floor );
+            save( id + "-model", model );
+        }
+        {
+            scene = floor_scene;
+            for( auto &tile : scene.cells ) {
+                if( tile.position == tripoint_abs_ms( 0, -1, 0 ) ||
+                    tile.position == tripoint_abs_ms( 0, -3, 0 ) ) {
+                    tile.furniture = fp3d_furniture::describe( "f_locker" );
+                }
+            }
+            const auto cabinets = render();
+            fp3d_snapshot::sprite apple;
+            apple.position = tripoint_abs_ms( 0, -3, 0 );
+            apple.kind = fp3d_snapshot::sprite_kind::item;
+            apple.id = "apple";
+            apple.height = .7f;
+            apple.elevation = 1;
+            scene.sprites.push_back( apple );
+            CHECK( render() == cabinets );
+            scene.sprites.front().position = tripoint_abs_ms( 0, -1, 0 );
+            const auto visible = render();
+            CHECK( visible != cabinets );
+            REQUIRE( fp3d_compositor::interaction_target() );
+            CHECK( fp3d_compositor::interaction_target()->type == fp3d_targeting::kind::item );
+            save( "front-cabinet-contents-targeted", visible );
+        }
         for( const std::string id : {
                  "f_locker", "f_cupboard"
              } ) {

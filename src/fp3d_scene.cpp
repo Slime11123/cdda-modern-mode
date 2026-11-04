@@ -699,9 +699,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         }
         glPopMatrix();
     }
-    // Draw storage color against terrain depth, then already-authorized item
-    // sprites, then storage depth. Only the storage model is see-through to its
-    // contents; terrain and the later actor pass keep normal depth occlusion.
+    // Each cabinet exposes only its own contents. Draw back to front, writing
+    // the cabinet depth before continuing to the next cabinet or the actors.
     std::vector<const fp3d_snapshot::cell *> visible_storage;
     for( const auto *tile : storage_cells ) {
         const auto offset = tile->position - scene.origin;
@@ -747,18 +746,6 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         }
         glPopMatrix();
     };
-    glDepthMask( GL_FALSE );
-    glEnable( GL_CULL_FACE );
-    glFrontFace( GL_CCW );
-    glCullFace( GL_BACK );
-    glEnable( GL_LIGHTING );
-    for( const auto *tile : visible_storage ) {
-        draw_storage( *tile );
-    }
-    glDepthMask( GL_TRUE );
-    glDisable( GL_CULL_FACE );
-    glDisable( GL_LIGHTING );
-    glEnable( GL_ALPHA_TEST );
     glAlphaFunc( GL_GREATER, .5f );
     const float right_x = view.right_x();
     const float right_z = view.right_z();
@@ -846,17 +833,39 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                owner->known == fp3d_snapshot::knowledge::visible && !owner->exterior_only &&
                fp3d_furniture::shows_contents( owner->furniture->shape );
     };
+    std::unordered_map<tripoint_abs_ms, const fp3d_snapshot::sprite *> contents;
     for( const auto &image : scene.sprites ) {
         if( storage_item( image ) ) {
-            draw_sprite( image );
+            contents.emplace( image.position, &image );
         }
     }
+    glEnable( GL_CULL_FACE );
+    glFrontFace( GL_CCW );
+    glCullFace( GL_BACK );
+    glEnable( GL_LIGHTING );
     glDisable( GL_ALPHA_TEST );
-    glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
     for( const auto *tile : visible_storage ) {
+        const auto item = contents.find( tile->position );
+        if( item == contents.end() ) {
+            draw_storage( *tile );
+            continue;
+        }
+        glDepthMask( GL_FALSE );
         draw_storage( *tile );
+        glDepthMask( GL_TRUE );
+        glDisable( GL_LIGHTING );
+        glDisable( GL_CULL_FACE );
+        glEnable( GL_ALPHA_TEST );
+        draw_sprite( *item->second );
+        glDisable( GL_ALPHA_TEST );
+        glEnable( GL_CULL_FACE );
+        glEnable( GL_LIGHTING );
+        glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+        draw_storage( *tile );
+        glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
     }
-    glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+    glDisable( GL_CULL_FACE );
+    glDisable( GL_LIGHTING );
     glEnable( GL_ALPHA_TEST );
     // Actors and ordinary ground items still cannot be seen through cabinets.
     for( const auto &image : scene.sprites ) {
