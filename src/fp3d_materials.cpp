@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -361,7 +362,7 @@ SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image )
     return icon;
 }
 
-void prepare( const fp3d_snapshot::scene_snapshot &scene )
+void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview )
 {
     if( !selected || !renderer_owner || !*renderer_owner || failed ) {
         return;
@@ -369,13 +370,6 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
     if( season != scene.season ) {
         ++material_revision;
         season = scene.season;
-        atlas.reset();
-        slots.clear();
-    }
-    // Keep a newly equipped item drawable after world materials fill the atlas.
-    if( scene.held_item && slots.size() == max_slots &&
-        !slots.count( sprite_key( *scene.held_item ) ) ) {
-        ++material_revision;
         atlas.reset();
         slots.clear();
     }
@@ -387,6 +381,36 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
         bool furniture = false;
     };
     std::vector<request> pending;
+    std::unordered_set<std::string> model_keys;
+    const auto prioritize_furniture = [&]( const fp3d_snapshot::cell &tile ) {
+        if( tile.furniture && pending.size() < max_slots ) {
+            std::string key = "$furniture:" + tile.furniture->id;
+            if( model_keys.insert( key ).second ) {
+                pending.push_back( { std::move( key ), nullptr, false, false, true } );
+            }
+        }
+    };
+    if( scene.held_item ) {
+        pending.push_back( { sprite_key( *scene.held_item ), &*scene.held_item } );
+    }
+    if( preview ) {
+        prioritize_furniture( *preview );
+    }
+    for( const auto &tile : scene.cells ) {
+        prioritize_furniture( tile );
+    }
+    const auto resident = [&]( const request &entry ) {
+        return slots.count( entry.key ) != 0;
+    };
+    const auto missing_priority = std::count_if( pending.begin(), pending.end(),
+                                  [&]( const request &entry ) { return !resident( entry ); } );
+    // Reclaim old entries when the current models cannot fit. Geometry using
+    // the old UVs is invalidated before the reused slots are drawn again.
+    if( slots.size() + missing_priority > max_slots ) {
+        ++material_revision;
+        slots.clear();
+    }
+    pending.erase( std::remove_if( pending.begin(), pending.end(), resident ), pending.end() );
     const auto add = [&]( const std::string & key, const fp3d_snapshot::sprite * image ) {
         if( !slots.count( key ) && slots.size() + pending.size() < max_slots &&
         std::none_of( pending.begin(), pending.end(), [&]( const request & entry ) {
@@ -395,17 +419,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
             pending.push_back( { key, image } );
         }
     };
-    if( scene.held_item ) {
-        add( sprite_key( *scene.held_item ), &*scene.held_item );
-    }
-    for( const auto &tile : scene.cells ) {
-        if( tile.furniture ) {
-            const auto before = pending.size();
-            add( "$furniture:" + tile.furniture->id, nullptr );
-            if( pending.size() > before ) {
-                pending.back().furniture = true;
-            }
-        }
+    const auto add_cell = [&]( const fp3d_snapshot::cell &tile ) {
         if( tile.kind == fp3d_snapshot::terrain_kind::window ) {
             add( "t_floor", nullptr );
             add( "t_wall", nullptr );
@@ -433,6 +447,12 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
                 pending.back().plant = true;
             }
         }
+    };
+    if( preview ) {
+        add_cell( *preview );
+    }
+    for( const auto &tile : scene.cells ) {
+        add_cell( tile );
     }
     for( const auto &patch : scene.landscape ) {
         if( patch.ground_present ) {
@@ -494,6 +514,12 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene )
                                 resolve_terrain( *selected, id.substr( 8 ), season ) : entry.plant ?
                                 resolve_vegetation( *selected, id.substr( 7 ), season ) :
                                 resolve_terrain( *selected, id, season );
+        if( id == "$furniture:f_bed_frame" && selected->get_tileset_id() == "UNDEAD_PEOPLE_BASE" ) {
+            // The top-down spring grid is unsuitable for the wooden rails and slats.
+            if( const auto *wood = resolve_vegetation( *selected, "f_table", season ) ) {
+                tile = wood;
+            }
+        }
         bool painted = false;
         if( tile ) {
             const auto sprites = choose_sprites( *tile, id );
@@ -623,6 +649,10 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         result.top = crop( 5, 1, 26, 8 );
         result.front = crop( 5, 10, 26, 29 );
         result.side = crop( 8, 21, 12, 26 );
+    } else if( uses( "f_wardrobe" ) ) {
+        result.top = crop( 3, 2, 28, 6 );
+        result.front = crop( 3, 9, 28, 30 );
+        result.side = crop( 4, 2, 26, 6 );
     } else if( uses( "f_bookcase" ) ) {
         result.top = crop( 2, 1, 29, 6 );
         result.front = result.side = crop( 1, 10, 3, 29 );
@@ -670,6 +700,24 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
     } else if( uses( "f_sofa" ) ) {
         result.top = part_index >= 3 ? crop( 2, 4, 5, 27 ) : crop( 8, 11, 22, 16 );
         result.front = result.side = crop( 9, 12, 21, 15 );
+    } else if( uses( "f_bench" ) ) {
+        const auto wood = crop( 8, 7, 23, 25 );
+        const auto frame = crop( 1, 8, 4, 24 );
+        result.top = result.front = result.side = part_index == 0 || part_index == 3 ? wood : frame;
+    } else if( uses( "f_armchair" ) ) {
+        const auto fabric = crop( 10, 5, 21, 10 );
+        const auto arm = crop( 4, 13, 7, 20 );
+        result.top = result.front = result.side = part_index >= 3 ? arm : fabric;
+    } else if( uses( "f_fireplace" ) ) {
+        const auto stone = crop( 11, 5, 16, 7 );
+        result.top = result.front = result.side = stone;
+        if( part_index == 3 ) {
+            result.front = crop( 12, 14, 16, 14 );
+        } else if( part_index == 4 ) {
+            result.front = crop( 3, 15, 28, 15 );
+        } else if( part_index == 5 ) {
+            result.front = crop( 7, 3, 25, 12 );
+        }
     } else if( uses( "f_chair" ) ) {
         const auto wood = crop( 6, 23, 7, 29 );
         if( part_index == 0 ) {

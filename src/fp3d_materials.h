@@ -14,6 +14,7 @@ class tileset;
 struct tile_type;
 namespace fp3d_snapshot
 {
+struct cell;
 struct scene_snapshot;
 struct sprite;
 }
@@ -40,7 +41,8 @@ struct sprite_choice {
 };
 sprite_choice choose_sprites( const tile_type &tile, const std::string &id );
 void set_tileset( std::shared_ptr<const tileset> set, const SDL_Renderer_Ptr &renderer );
-void prepare( const fp3d_snapshot::scene_snapshot &scene );
+void prepare( const fp3d_snapshot::scene_snapshot &scene,
+              const fp3d_snapshot::cell *preview = nullptr );
 // An independently owned menu icon, not a UV borrowed from the world atlas.
 SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image );
 unsigned revision();

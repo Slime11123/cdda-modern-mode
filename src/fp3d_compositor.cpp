@@ -470,6 +470,7 @@ std::optional<fp3d_scene::blueprint> construction_preview;
 void set_blueprint( std::optional<fp3d_scene::blueprint> preview )
 {
     construction_preview = std::move( preview );
+    prepared_generation = 0;
 }
 
 std::vector<std::string> hud_lines()
@@ -825,15 +826,11 @@ void compose()
     }
     if( latest_scene && ( prepared_generation != latest_scene->render_generation ||
                           prepared_material_revision != fp3d_materials::revision() ) ) {
-        fp3d_materials::prepare( *latest_scene );
+        const auto *preview = construction_preview && construction_preview->terrain ?
+                              &*construction_preview->terrain : nullptr;
+        fp3d_materials::prepare( *latest_scene, preview );
         prepared_generation = latest_scene->render_generation;
         prepared_material_revision = fp3d_materials::revision();
-    }
-    if( latest_scene && construction_preview && construction_preview->terrain ) {
-        fp3d_snapshot::scene_snapshot materials;
-        materials.season = latest_scene->season;
-        materials.cells.push_back( *construction_preview->terrain );
-        fp3d_materials::prepare( materials );
     }
     if( SDL_RenderFlush( renderer ) != 0 || SDL_GL_GetCurrentContext() != context ) {
         disable( "flush failed or renderer context changed" );

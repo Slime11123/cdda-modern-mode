@@ -133,7 +133,9 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
              "f_table", "f_chair", "f_bed", "f_bed_frame", "f_crate_c", "f_crate_o",
              "f_cupboard", "f_locker", "f_bookcase", "f_rack",
              "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven", "f_fridge",
-             "f_minifridge", "f_dresser", "f_wardrobe", "f_bathtub", "f_toilet"
+             "f_minifridge", "f_dresser", "f_wardrobe", "f_bathtub", "f_toilet",
+             "f_bench", "f_bench_wooden", "f_bench_park", "f_armchair", "f_fireplace",
+             "f_fireplace_stone"
          } ) {
         CAPTURE( id );
         const auto model = fp3d_furniture::describe( id );

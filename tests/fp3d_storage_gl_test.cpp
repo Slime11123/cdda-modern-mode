@@ -96,11 +96,48 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
                                                      ( pack + "-storage-" + name + ".png" ) ).u8string().c_str() ) == 0 );
             }
         };
+        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+            fp3d_snapshot::scene_snapshot crowded;
+            for( int i = 0; i < 300; ++i ) {
+                auto &cell = crowded.cells.emplace_back();
+                cell.terrain = "fp3d_material_cache_probe_" + std::to_string( i );
+            }
+            fp3d_materials::prepare( crowded );
+            REQUIRE( fp3d_materials::bind() );
+            REQUIRE( fp3d_materials::lookup( "fp3d_material_cache_probe_255" ) );
+            CHECK_FALSE( fp3d_materials::lookup( "fp3d_material_cache_probe_256" ) );
+            fp3d_materials::unbind();
+            auto &cell = scene.cells.front();
+            cell.furniture = fp3d_furniture::describe( "f_bed_frame" );
+            const auto before = fp3d_materials::revision();
+            construction project{};
+            project.post_is_furniture = true;
+            project.post_terrain = "f_armchair";
+            fp3d_scene::blueprint blueprint{ tripoint_abs_ms( 0, -2, 0 ), 1, true, "armchair" };
+            blueprint.terrain = fp3d_construction::terrain_preview( project, blueprint.position );
+            REQUIRE( blueprint.terrain );
+            fp3d_compositor::set_blueprint( blueprint );
+            const auto with_preview = render();
+            CHECK( fp3d_materials::revision() == before + 1 );
+            REQUIRE( fp3d_materials::bind() );
+            CHECK( fp3d_materials::lookup_furniture( "f_bed_frame" ).side );
+            CHECK( fp3d_materials::lookup_furniture( "f_armchair" ).side );
+            CHECK( fp3d_materials::lookup( "t_floor" ) );
+            fp3d_materials::unbind();
+            CHECK( render() == with_preview );
+            CHECK( fp3d_materials::revision() == before + 1 );
+            fp3d_compositor::set_blueprint( std::nullopt );
+            scene = floor_scene;
+        }
         const auto bare_floor = render();
-        for( const std::string id : {
-                 "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven",
-                 "f_fridge", "f_minifridge", "f_dresser", "f_wardrobe"
-             } ) {
+        std::vector<std::string> furniture{ "f_counter", "f_desk", "f_sofa", "f_sink",
+                                            "f_oven", "f_fridge", "f_minifridge",
+                                            "f_dresser", "f_wardrobe" };
+        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+            furniture.insert( furniture.end(),
+            { "f_bed_frame", "f_bench", "f_bench_park", "f_armchair", "f_fireplace" } );
+        }
+        for( const std::string &id : furniture ) {
             CAPTURE( id );
             scene = floor_scene;
             auto &tile = *std::find_if( scene.cells.begin(), scene.cells.end(), []( const auto &entry ) {
@@ -110,6 +147,23 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
             REQUIRE( tile.furniture );
             const auto model = render();
             CHECK( model != bare_floor );
+            if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_bed_frame" ) {
+                unsigned wood_pixels = 0;
+                for( size_t i = 0; i < model.size(); ++i ) {
+                    const int red = model[i] >> 24;
+                    const int blue = ( model[i] >> 8 ) & 0xff;
+                    wood_pixels += model[i] != bare_floor[i] && red > blue + 20;
+                }
+                CHECK( wood_pixels > 300 );
+            }
+            if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_wardrobe" ) {
+                REQUIRE( fp3d_materials::bind() );
+                const auto faces = fp3d_materials::lookup_furniture( id );
+                REQUIRE( faces.top );
+                REQUIRE( faces.front );
+                CHECK( faces.top->bottom < faces.front->top );
+                fp3d_materials::unbind();
+            }
             save( id + "-model", model );
         }
         {
