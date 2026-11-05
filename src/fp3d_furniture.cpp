@@ -78,6 +78,15 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_oven" ) {
             return model{ id, kind::oven };
         }
+        if( appearance == "f_washer" || appearance == "f_dryer" ) {
+            return model{ id, kind::washer };
+        }
+        if( appearance == "f_dishwasher" ) {
+            return model{ id, kind::dishwasher };
+        }
+        if( appearance == "f_woodstove" ) {
+            return model{ id, kind::wood_stove };
+        }
         if( appearance == "f_minifridge" ) {
             return model{ id, kind::mini_fridge };
         }
@@ -240,6 +249,21 @@ const std::vector<part> &parts( kind shape )
         { 0, 0, .88f, .78f, 0, .89f },
         { 0, -.35f, .88f, .08f, .89f, 1.03f }
     };
+    static const std::vector<part> washer{
+        { 0, 0, .84f, .76f, 0, .88f }
+    };
+    static const std::vector<part> dishwasher{
+        { 0, 0, .84f, .74f, 0, .88f }
+    };
+    static const std::vector<part> wood_stove{
+        { 0, 0, .54f, .50f, .18f, .78f },
+        { 0, 0, .58f, .54f, .78f, .84f },
+        { 0, -.19f, .10f, .10f, .84f, 2.20f },
+        { -.20f, -.18f, .07f, .07f, 0, .18f },
+        { .20f, -.18f, .07f, .07f, 0, .18f },
+        { -.20f, .18f, .07f, .07f, 0, .18f },
+        { .20f, .18f, .07f, .07f, 0, .18f }
+    };
     static const std::vector<part> fridge{
         { 0, 0, .83f, .80f, 0, 1.82f }
     };
@@ -292,6 +316,12 @@ const std::vector<part> &parts( kind shape )
             return toilet;
         case kind::oven:
             return oven;
+        case kind::washer:
+            return washer;
+        case kind::dishwasher:
+            return dishwasher;
+        case kind::wood_stove:
+            return wood_stove;
         case kind::fridge:
             return fridge;
         case kind::mini_fridge:
@@ -344,6 +374,11 @@ float item_surface( kind shape )
             return .39f;
         case kind::oven:
             return .89f;
+        case kind::washer:
+        case kind::dishwasher:
+            return .88f;
+        case kind::wood_stove:
+            return .84f;
         case kind::fridge:
             return .74f;
         case kind::mini_fridge:
@@ -379,7 +414,8 @@ unsigned facing( kind shape, const std::array<bool, 4> &walls,
     if( !shows_contents( shape ) && shape != kind::cabinet && shape != kind::counter &&
         shape != kind::desk && shape != kind::sofa && shape != kind::sink && shape != kind::oven &&
         shape != kind::bathtub && shape != kind::toilet && shape != kind::armchair &&
-        shape != kind::fireplace && shape != kind::park_bench ) {
+        shape != kind::fireplace && shape != kind::park_bench && shape != kind::washer &&
+        shape != kind::dishwasher && shape != kind::wood_stove ) {
         return 0;
     }
     // Preserve the established orientation in free space. Prefer a wall behind

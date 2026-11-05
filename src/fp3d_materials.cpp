@@ -682,6 +682,23 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         if( part_index == 2 ) {
             result.top = crop( 14, 24, 17, 24 );
         }
+    } else if( uses( "f_washer" ) || uses( "f_dryer" ) ) {
+        result.top = crop( 3, 1, 28, 4 );
+        result.front = crop( 1, 6, 30, 30 );
+        result.side = crop( 2, 11, 5, 25 );
+    } else if( uses( "f_dishwasher" ) ) {
+        result.top = crop( 4, 1, 27, 2 );
+        result.front = crop( 1, 8, 30, 30 );
+        result.side = crop( 3, 12, 6, 24 );
+    } else if( uses( "f_woodstove" ) ) {
+        const auto metal = crop( 12, 2, 15, 8 );
+        result.top = result.front = result.side = metal;
+        if( part_index == 0 ) {
+            result.front = crop( 10, 13, 22, 25 );
+            result.side = crop( 11, 14, 16, 20 );
+        } else if( part_index == 1 ) {
+            result.top = crop( 11, 11, 20, 12 );
+        }
     } else if( uses( "f_oven" ) ) {
         if( part_index == 0 ) {
             result.top = crop( 3, 6, 28, 10 );

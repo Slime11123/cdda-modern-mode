@@ -57,7 +57,7 @@ TEST_CASE( "fp3d_furniture_blueprints_use_native_projects_without_changing_the_w
     REQUIRE( bookcase );
     CHECK( locker->shape == fp3d_furniture::kind::locker );
     CHECK( locker->shape != bookcase->shape );
-    CHECK_FALSE( fp3d_furniture::describe( "f_woodstove" ) );
+    CHECK( fp3d_furniture::describe( "f_woodstove" ) );
     CHECK_FALSE( fp3d_furniture::describe( "not_a_furniture" ) );
     CHECK( here.furn( you.pos_bub( here ) ) == before );
     CHECK( you.pos_abs() == origin );
@@ -77,7 +77,7 @@ TEST_CASE( "fp3d_furniture_capture_items_and_revalidation_follow_native_visibili
     you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
     const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
     for( const std::string id : {
-             "f_table", "f_chair", "f_bed"
+             "f_table", "f_chair", "f_bed", "f_washer", "f_dryer", "f_dishwasher", "f_woodstove"
          } ) {
         CAPTURE( id );
         here.furn_set( p, furn_str_id( id ) );
@@ -135,7 +135,7 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
              "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven", "f_fridge",
              "f_minifridge", "f_dresser", "f_wardrobe", "f_bathtub", "f_toilet",
              "f_bench", "f_bench_wooden", "f_bench_park", "f_armchair", "f_fireplace",
-             "f_fireplace_stone"
+             "f_fireplace_stone", "f_washer", "f_dryer", "f_dishwasher", "f_woodstove"
          } ) {
         CAPTURE( id );
         const auto model = fp3d_furniture::describe( id );

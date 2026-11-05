@@ -11,7 +11,8 @@ TEST_CASE( "fp3d_cabinet_front_faces_open_space_using_owned_walls", "[fp3d][furn
 {
     for( const auto shape : {
              fp3d_furniture::kind::cupboard, fp3d_furniture::kind::locker,
-             fp3d_furniture::kind::cabinet
+             fp3d_furniture::kind::cabinet, fp3d_furniture::kind::washer,
+             fp3d_furniture::kind::dishwasher, fp3d_furniture::kind::wood_stove
          } ) {
         CHECK( fp3d_furniture::facing( shape, { false, false, false, false } ) == 0 );
         CHECK( fp3d_furniture::facing( shape, { true, false, false, false } ) == 0 );

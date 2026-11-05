@@ -62,7 +62,16 @@ TEST_CASE( "fp3d_construction_ghost_uses_completed_terrain_without_building_it",
     }
     construction furniture{};
     furniture.post_is_furniture = true;
-    furniture.post_terrain = "f_woodstove";
+    for( const std::string id : { "f_washer", "f_dryer", "f_dishwasher", "f_woodstove" } ) {
+        CAPTURE( id );
+        furniture.post_terrain = id;
+        const auto ghost = fp3d_construction::terrain_preview( furniture, position );
+        REQUIRE( ghost );
+        REQUIRE( ghost->furniture );
+        CHECK( ghost->furniture->id == id );
+        CHECK( ghost->position == position );
+    }
+    furniture.post_terrain = "f_counter_gate_c";
     CHECK_FALSE( fp3d_construction::terrain_preview( furniture, position ) );
     bool frame = false;
     bool completed = false;
