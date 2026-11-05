@@ -29,6 +29,17 @@ TEST_CASE( "fp3d_materials_resolve_season_and_native_looks_like", "[fp3d][materi
     CHECK_FALSE( fp3d_materials::resolve_terrain( set, "fp3d_unknown_terrain", SPRING ) );
     CHECK_FALSE( fp3d_materials::resolve_terrain( set, "", SPRING ) );
     CHECK_FALSE( fp3d_materials::lookup( "fp3d_unknown_terrain" ) );
+    for( const auto &id : { "t_floor", "t_concrete", "t_vitrified_floor", "t_stairs_up" } ) {
+        set.create_tile_type( id, tile_type{} );
+    }
+    CHECK( fp3d_materials::resolve_terrain( set, "t_stairs_up", SPRING ) ==
+           set.find_tile_type( "t_concrete" ) );
+    CHECK( fp3d_materials::resolve_terrain( set, "t_stairs_down", SPRING ) ==
+           set.find_tile_type( "t_concrete" ) );
+    CHECK( fp3d_materials::resolve_terrain( set, "t_wood_stairs_up", SPRING ) ==
+           set.find_tile_type( "t_floor" ) );
+    CHECK( fp3d_materials::resolve_terrain( set, "t_vitrified_stairs_down", SPRING ) ==
+           set.find_tile_type( "t_vitrified_floor" ) );
 }
 
 TEST_CASE( "fp3d_materials_choose_stable_sprites_without_gameplay_rng", "[fp3d][materials]" )

@@ -191,6 +191,14 @@ const tile_type *resolve_terrain( const tileset &set, std::string id, season_typ
         id = "t_dirt";
     } else if( id.compare( 0, 16, "t_sidewalk_ramp_" ) == 0 ) {
         id = "t_sidewalk";
+    } else if( id.find( "stairs" ) != std::string::npos && ter_str_id( id ).is_valid() ) {
+        if( id.compare( 0, 7, "t_wood_" ) == 0 ) {
+            id = "t_floor";
+        } else if( id.compare( 0, 12, "t_vitrified_" ) == 0 ) {
+            id = "t_vitrified_floor";
+        } else {
+            id = "t_concrete";
+        }
     }
     for( int jumps = 0; jumps < 10 && !id.empty(); ++jumps ) {
         if( auto tile = set.find_tile_type_by_season( id, current_season ) ) {

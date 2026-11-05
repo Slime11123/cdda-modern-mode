@@ -379,6 +379,7 @@ unsigned indexed_generation = 0;
 std::unordered_map<tripoint_abs_ms, chunk_mesh> landscape_meshes;
 std::unordered_map<tripoint_abs_ms, chunk_mesh> meshes;
 std::vector<const fp3d_snapshot::cell *> storage_cells;
+std::vector<const fp3d_snapshot::cell *> stair_cells;
 std::unordered_map<std::string, GLuint> storage_meshes;
 unsigned mesh_material_revision = 0;
 draw_statistics last_statistics;
@@ -403,6 +404,7 @@ void release()
     }
     storage_meshes.clear();
     storage_cells.clear();
+    stair_cells.clear();
     for( const auto &entry : landscape_meshes ) {
         if( entry.second.list ) {
             glDeleteLists( entry.second.list, 1 );
@@ -460,6 +462,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     if( new_scene ) {
         cells.clear();
         storage_cells.clear();
+        stair_cells.clear();
         chunks.clear();
         landscape_chunks.clear();
         cells.reserve( scene.cells.size() );
@@ -467,6 +470,10 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             cells.emplace( tile.position, &tile );
             if( tile.furniture && fp3d_furniture::shows_contents( tile.furniture->shape ) ) {
                 storage_cells.push_back( &tile );
+            }
+            if( tile.known == fp3d_snapshot::knowledge::visible && !tile.exterior_only &&
+                tile.terrain.find( "stairs" ) != std::string::npos && ( tile.goes_up || tile.goes_down ) ) {
+                stair_cells.push_back( &tile );
             }
         }
         last_statistics.indexed_cells = scene.cells.size();
@@ -909,6 +916,45 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             draw_sprite( image );
         }
     }
+    // Animated signs are separate from cached stair meshes and native targets.
+    // Use presentation time so the arrows move while the turn-based world is idle.
+    const auto animation_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch() ).count();
+    const float bob = .09f * std::sin( ( animation_ms % 1800 ) * 6.2831853f / 1800 );
+    glDisable( GL_TEXTURE_2D );
+    glDisable( GL_ALPHA_TEST );
+    for( const auto *tile : stair_cells ) {
+        const auto position = tile->position - scene.origin;
+        const float y = position.z() * fp3d_camera::floor_height + 1.45f + bob;
+        if( !view.contains( position.x() - .25f - camera_offset.x,
+                            y - fp3d_camera::eye_height, position.y() - camera_offset.y, .6f ) ) {
+            continue;
+        }
+        for( const int direction : { -1, 1 } ) {
+            if( direction < 0 ? !tile->goes_down : !tile->goes_up ) {
+                continue;
+            }
+            const float separation = tile->goes_up && tile->goes_down ? direction * .19f : 0;
+            const float x = position.x() - .25f + separation * right_x;
+            const float z = position.y() + separation * right_z;
+            glColor3f( 1.0f, .78f, .25f );
+            box( x, z, .08f, .08f, y - .17f, y + .17f, std::nullopt );
+            glBegin( GL_TRIANGLES );
+            const std::array<std::array<float, 2>, 4> corners{{
+                {{ -.17f, -.17f }}, {{ .17f, -.17f }},
+                {{ .17f, .17f }}, {{ -.17f, .17f }}
+            }};
+            for( size_t i = 0; i < corners.size(); ++i ) {
+                const auto &a = corners[i];
+                const auto &b = corners[( i + 1 ) % corners.size()];
+                glVertex3f( x, y + direction * .39f, z );
+                glVertex3f( x + a[0], y + direction * .12f, z + a[1] );
+                glVertex3f( x + b[0], y + direction * .12f, z + b[1] );
+            }
+            glEnd();
+        }
+    }
+    glEnable( GL_ALPHA_TEST );
     // Glass is drawn after all opaque geometry and actors, back to front.
     // Depth testing keeps nearer walls/actors opaque; glass never writes depth.
     std::vector<const fp3d_snapshot::cell *> glass;

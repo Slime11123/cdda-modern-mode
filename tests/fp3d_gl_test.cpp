@@ -1182,6 +1182,62 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         scene.cells.back().open_air = true;
         CHECK( render() != matched_stairs );
 
+        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+            scene.cells.clear();
+            fp3d_snapshot::cell stair;
+            stair.position = tripoint_abs_ms( 0, -3, 0 );
+            stair.terrain = "t_stairs_down";
+            scene.cells.push_back( stair );
+            const auto plain = render();
+            const auto gold_pixels = [&]( const auto &pixels ) {
+                return std::count_if( pixels.begin(), pixels.end(), []( std::uint32_t pixel ) {
+                    const unsigned red = pixel >> 24;
+                    const unsigned green = ( pixel >> 16 ) & 0xff;
+                    const unsigned blue = ( pixel >> 8 ) & 0xff;
+                    return red > 230 && green > 170 && green < 215 && blue < 90;
+                } );
+            };
+            scene.cells.front().goes_down = true;
+            const auto down = render();
+            CHECK( gold_pixels( down ) > gold_pixels( plain ) + 20 );
+            SDL_Delay( 120 );
+            const auto moving = render( false );
+            SDL_Delay( 160 );
+            const auto moving_again = render( false );
+            CHECK( ( moving != down || moving_again != down ) );
+            CHECK( fp3d_scene::statistics().rebuilt == 0 );
+            CHECK( fp3d_scene::statistics().indexed_cells == 0 );
+            scene.cells.front().goes_down = false;
+            scene.cells.front().goes_up = true;
+            const auto up = render();
+            CHECK( gold_pixels( up ) > gold_pixels( plain ) + 20 );
+            CHECK( up != down );
+            const auto save_arrow = [&]( const char *name, const auto &pixels ) {
+                if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                 const_cast<std::uint32_t *>( pixels.data() ), width, height,
+                                                 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                    REQUIRE( picture );
+                    CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                         ( std::string( "UNDEAD-stair-" ) + name + ".png" ) ).u8string().c_str() ) == 0 );
+                }
+            };
+            save_arrow( "up", up );
+            save_arrow( "down", down );
+            save_arrow( "moving", moving );
+            scene.cells.front().goes_down = true;
+            CHECK( gold_pixels( render() ) > gold_pixels( up ) + 20 );
+            scene.cells.front().known = fp3d_snapshot::knowledge::remembered;
+            CHECK( gold_pixels( render() ) == 0 );
+            scene.cells.front().known = fp3d_snapshot::knowledge::visible;
+            fp3d_snapshot::cell wall;
+            wall.position = tripoint_abs_ms( 0, -2, 0 );
+            wall.terrain = "t_wall";
+            wall.kind = fp3d_snapshot::terrain_kind::wall;
+            scene.cells.push_back( wall );
+            CHECK( gold_pixels( render() ) == 0 );
+        }
+
         scene.cells.clear();
         fp3d_snapshot::cell ramp;
         ramp.position = tripoint_abs_ms( 0, -3, 0 );
