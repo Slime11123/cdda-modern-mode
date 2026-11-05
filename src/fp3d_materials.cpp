@@ -10,6 +10,7 @@
 
 #include "cata_tiles.h"
 #include "debug.h"
+#include "field_type.h"
 #include "fp3d_snapshot.h"
 #include "mapdata.h"
 #include "item.h"
@@ -387,14 +388,21 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool plant = false;
         bool window = false;
         bool furniture = false;
+        bool blood = false;
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
-    const auto prioritize_furniture = [&]( const fp3d_snapshot::cell &tile ) {
+    const auto prioritize_cell = [&]( const fp3d_snapshot::cell &tile ) {
         if( tile.furniture && pending.size() < max_slots ) {
             std::string key = "$furniture:" + tile.furniture->id;
             if( model_keys.insert( key ).second ) {
                 pending.push_back( { std::move( key ), nullptr, false, false, true } );
+            }
+        }
+        if( !tile.blood.empty() && pending.size() < max_slots ) {
+            std::string key = "$blood:" + tile.blood;
+            if( model_keys.insert( key ).second ) {
+                pending.push_back( { std::move( key ), nullptr, false, false, false, true } );
             }
         }
     };
@@ -402,10 +410,10 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         pending.push_back( { sprite_key( *scene.held_item ), &*scene.held_item } );
     }
     if( preview ) {
-        prioritize_furniture( *preview );
+        prioritize_cell( *preview );
     }
     for( const auto &tile : scene.cells ) {
-        prioritize_furniture( tile );
+        prioritize_cell( tile );
     }
     const auto resident = [&]( const request &entry ) {
         return slots.count( entry.key ) != 0;
@@ -513,15 +521,28 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         const unsigned index = slots.size();
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
-        const bool transparent = entry.image || entry.plant || entry.window;
+        const bool transparent = entry.image || entry.plant || entry.window || entry.blood;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         SDL_RenderFillRect( renderer, &slot );
-        const tile_type *tile = entry.image ? nullptr : entry.furniture ?
+        const tile_type *tile = nullptr;
+        if( entry.blood ) {
+            std::string name = id.substr( 7 );
+            for( int tries = 0; tries < 10 && !name.empty(); ++tries ) {
+                if( auto found = selected->find_tile_type_by_season( name, season ) ) {
+                    tile = &found->tile();
+                    break;
+                }
+                const field_type_str_id definition( name );
+                name = definition.is_valid() ? definition->looks_like : "";
+            }
+        } else {
+            tile = entry.image ? nullptr : entry.furniture ?
                                 resolve_vegetation( *selected, id.substr( 11 ), season ) : entry.window ?
                                 resolve_terrain( *selected, id.substr( 8 ), season ) : entry.plant ?
                                 resolve_vegetation( *selected, id.substr( 7 ), season ) :
                                 resolve_terrain( *selected, id, season );
+        }
         if( id == "$furniture:f_bed_frame" && selected->get_tileset_id() == "UNDEAD_PEOPLE_BASE" ) {
             // The top-down spring grid is unsuitable for the wooden rails and slats.
             if( const auto *wood = resolve_vegetation( *selected, "f_table", season ) ) {
@@ -531,7 +552,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool painted = false;
         if( tile ) {
             const auto sprites = choose_sprites( *tile, id );
-            if( ( !entry.plant && !entry.window ) || ( entry.window && sprites.foreground < 0 ) ) {
+            if( ( !entry.plant && !entry.window && !entry.blood ) ||
+                ( entry.window && sprites.foreground < 0 ) ) {
                 painted = paint( sprites.background, slot );
             }
             painted = paint( sprites.foreground, slot ) || painted;
@@ -766,6 +788,7 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         } else if( part_index == 1 ) {
             result.top = result.side = wood;
             result.front = crop( 8, 3, 23, 13 );
+            result.back = result.front;
         } else {
             result.top = result.front = result.side = wood;
         }

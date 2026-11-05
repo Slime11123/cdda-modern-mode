@@ -363,7 +363,7 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         REQUIRE( surface );
         CHECK( surface->position == scene.origin + tripoint_rel_ms( 0, -1, 1 ) );
     }
-    SECTION( "stair treads occupy only the rendered half of the tile" ) {
+    SECTION( "stair treads span the full tile width" ) {
         add( 0, -1, 0 ).goes_up = true;
         add( 0, -1, 1 ).goes_down = true;
         add( 0, -3, 0, terrain_kind::wall );
@@ -372,7 +372,7 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         CHECK( steps->position == scene.origin + tripoint_rel_ms::north );
         const auto side = fp3d_targeting::ray( scene, 0, 0, { -.25f, 0 } );
         REQUIRE( side );
-        CHECK( side->position == scene.origin + tripoint_rel_ms( 0, -3, 0 ) );
+        CHECK( side->position == scene.origin + tripoint_rel_ms::north );
     }
     SECTION( "a matched upper stair opening has no synthetic full ceiling" ) {
         auto &stairs = add( 0, 0, 0 );
@@ -380,9 +380,7 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         stairs.ceiling_present = true;
         add( 0, 0, 1 ).goes_down = true;
         CHECK_FALSE( fp3d_targeting::ray( scene, 0, -90, { .25f, .4f } ) );
-        const auto upper_floor = fp3d_targeting::ray( scene, 0, -90, { -.25f, .4f } );
-        REQUIRE( upper_floor );
-        CHECK( upper_floor->position == scene.origin + tripoint_rel_ms::above );
+        CHECK_FALSE( fp3d_targeting::ray( scene, 0, -90, { -.25f, .4f } ) );
     }
     SECTION( "six-tile range is finite" ) {
         add( 0, -8, 0, terrain_kind::wall );

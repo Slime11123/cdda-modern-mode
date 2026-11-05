@@ -1180,7 +1180,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         CHECK( fp3d_scene::statistics().rebuilt > 0 );
         scene.cells.back().floor_present = false;
         scene.cells.back().open_air = true;
-        CHECK( render() != matched_stairs );
+        CHECK( render() == matched_stairs ); // The matched opening already spans the full tile.
 
         if( pack == "UNDEAD_PEOPLE_BASE" ) {
             scene.cells.clear();
@@ -1236,6 +1236,58 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             wall.kind = fp3d_snapshot::terrain_kind::wall;
             scene.cells.push_back( wall );
             CHECK( gold_pixels( render() ) == 0 );
+        }
+
+        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+            scene.cells.clear();
+            fp3d_snapshot::cell ground;
+            ground.position = tripoint_abs_ms( 0, -2, 0 );
+            ground.terrain = "t_floor";
+            scene.cells.push_back( ground );
+            const auto clean = render();
+            scene.cells.front().blood = "fd_blood";
+            scene.cells.front().blood_intensity = 3;
+            const auto bloody = render();
+            CHECK( bloody != clean );
+            unsigned red = 0;
+            for( size_t i = 0; i < bloody.size(); ++i ) {
+                red += bloody[i] != clean[i] && ( bloody[i] >> 24 ) >
+                       2 * ( ( bloody[i] >> 16 ) & 0xff );
+            }
+            CHECK( red > 50 );
+            const auto save_scene = [&]( const char *name, const auto &pixels ) {
+                if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                 const_cast<std::uint32_t *>( pixels.data() ), width, height,
+                                                 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                    REQUIRE( picture );
+                    CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                         ( std::string( "UNDEAD-" ) + name + ".png" ) ).u8string().c_str() ) == 0 );
+                }
+            };
+            save_scene( "blood-ground", bloody );
+            scene.cells.front().blood.clear();
+            CHECK( render() == clean );
+            scene.cells.front().blood = "fd_blood";
+            fp3d_snapshot::cell wall = ground;
+            wall.position = tripoint_abs_ms( 0, -1, 0 );
+            wall.kind = fp3d_snapshot::terrain_kind::wall;
+            wall.terrain = "t_wall";
+            scene.cells.push_back( wall );
+            const auto blocked = render();
+            scene.cells.front().blood.clear();
+            CHECK( render() == blocked );
+            scene.cells.clear();
+            for( int y = -5; y <= -3; ++y ) {
+                for( int x = 0; x < 2; ++x ) {
+                    auto tile = ground;
+                    tile.position = tripoint_abs_ms( x, y, 0 );
+                    tile.terrain = "t_stairs_up";
+                    tile.goes_up = true;
+                    scene.cells.push_back( tile );
+                }
+            }
+            save_scene( "connected-stairs", render() );
         }
 
         scene.cells.clear();

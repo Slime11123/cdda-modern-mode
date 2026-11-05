@@ -323,6 +323,63 @@ TEST_CASE( "fp3d_snapshot_respects_native_field_item_suppression", "[fp3d][visio
     CHECK( cleared.sprites.front().id == "rock" );
 }
 
+TEST_CASE( "fp3d_blood_capture_tracks_visible_native_fields_without_memory_leaks", "[fp3d][vision]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 0, 2, 0 );
+    here.add_field( p, fd_blood, 3, 10_minutes );
+    refresh_vision( here, p.z() );
+    const auto before_rng = rng_get_engine();
+    const auto before_time = calendar::turn;
+    const auto before_moves = you.get_moves();
+    const auto bloody = fp3d_snapshot::capture( you, here );
+    const auto *tile = find_cell( bloody, here.get_abs( p ) );
+    REQUIRE( tile );
+    CHECK( tile->blood == "fd_blood" );
+    CHECK( tile->blood_intensity == 3 );
+    CHECK( rng_get_engine() == before_rng );
+    CHECK( calendar::turn == before_time );
+    CHECK( you.get_moves() == before_moves );
+    here.invalidate_visibility_cache();
+    const auto hidden = fp3d_snapshot::capture( you, here );
+    CHECK( std::none_of( hidden.cells.begin(), hidden.cells.end(), []( const auto &cell ) {
+        return !cell.blood.empty();
+    } ) );
+    here.delete_field( p, fd_blood );
+    refresh_vision( here, p.z() );
+    const auto clean = fp3d_snapshot::capture( you, here );
+    REQUIRE( find_cell( clean, here.get_abs( p ) ) );
+    CHECK( find_cell( clean, here.get_abs( p ) )->blood.empty() );
+}
+
+TEST_CASE( "fp3d_adjacent_stair_tiles_share_one_continuous_flight", "[fp3d][stairs]" )
+{
+    fp3d_snapshot::scene_snapshot scene;
+    for( int y = 0; y < 3; ++y ) {
+        for( int x = 0; x < 2; ++x ) {
+            fp3d_snapshot::cell tile;
+            tile.position = tripoint_abs_ms( x, y, 0 );
+            tile.terrain = "t_stairs_up";
+            tile.goes_up = true;
+            scene.cells.push_back( tile );
+        }
+    }
+    fp3d_snapshot::connect_stairs( scene );
+    for( const auto &tile : scene.cells ) {
+        REQUIRE( tile.stairs );
+        CHECK( tile.stairs->rows == 3 );
+        CHECK( tile.stairs->width == 2 );
+        CHECK( tile.stairs->south == 2 - tile.position.y() );
+    }
+    scene.cells[2].goes_up = false;
+    fp3d_snapshot::connect_stairs( scene );
+    CHECK_FALSE( scene.cells[2].stairs );
+    REQUIRE( scene.cells.front().stairs );
+    CHECK( scene.cells.front().stairs->rows == 1 );
+}
+
 TEST_CASE( "fp3d_landscape_extends_beyond_reality_bubble_without_simulation", "[fp3d][landscape]" )
 {
     prepare_scene();

@@ -54,6 +54,7 @@ struct furniture_uv {
     std::optional<uv_rect> top;
     std::optional<uv_rect> front;
     std::optional<uv_rect> side;
+    std::optional<uv_rect> back = std::nullopt;
 };
 // Some packs combine a top and a front view in one pseudo-3D sprite.
 furniture_uv lookup_furniture( const std::string &id, unsigned part_index = 0 );

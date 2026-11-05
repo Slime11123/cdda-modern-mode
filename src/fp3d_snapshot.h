@@ -41,6 +41,13 @@ terrain_kind terrain_shape( const std::string &id );
 // Door/frame parts in their east-west orientation, shared by drawing and picking.
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind );
 
+struct stair_section {
+    int rows = 1;
+    int width = 1;
+    int south = 0;
+    int east = 0;
+};
+
 struct cell {
     tripoint_abs_ms position;
     std::string terrain;
@@ -48,6 +55,9 @@ struct cell {
     knowledge known = knowledge::visible;
     std::string vegetation;
     std::optional<fp3d_furniture::model> furniture;
+    std::optional<stair_section> stairs;
+    std::string blood;
+    int blood_intensity = 0;
     float vegetation_height = 0;
     window_pane pane = window_pane::glazed;
     bool exterior_only = false;
@@ -104,6 +114,10 @@ struct scene_snapshot {
     unsigned remembered = 0;
     std::vector<tripoint_abs_ms> interactable;
 };
+
+// Connect permitted adjacent stair tiles into rectangular flights.
+void connect_stairs( scene_snapshot &scene );
+std::vector<fp3d_furniture::part> stair_parts( const cell &tile );
 
 // Prepare native view caches independently of the 2D Tiles draw or exploration.
 void prepare_view( avatar &you, map &here );

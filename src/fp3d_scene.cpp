@@ -69,8 +69,10 @@ void box( float x, float z, float width, float depth, float bottom, float top,
     glVertex3f( r, top, s );
     glTexCoord2f( uv.right, uv.top );
     glVertex3f( r, top, n );
-    const auto side = [&]( float x0, float z0, float x1, float z1, bool front = false ) {
-        const auto side_uv = faces ? ( front ? faces->front : faces->side ).value_or( uv ) : uv;
+    const auto side = [&]( float x0, float z0, float x1, float z1, bool front = false,
+                          bool back = false ) {
+        const auto side_uv = faces ? ( front ? faces->front :
+                                      back && faces->back ? faces->back : faces->side ).value_or( uv ) : uv;
         // Atlas slots cannot use GL_REPEAT. Split upright wall faces into
         // one-metre rows and crop partial rows instead of stretching a square
         // terrain image over the full storey. Keep window surrounds aligned.
@@ -94,7 +96,7 @@ void box( float x, float z, float width, float depth, float bottom, float top,
         }
     };
     glNormal3f( 0, 0, -1 );
-    side( faces ? r : l, n, faces ? l : r, n );
+    side( faces ? r : l, n, faces ? l : r, n, false, true );
     glNormal3f( 0, 0, 1 );
     side( faces ? l : r, s, faces ? r : l, s, true );
     glNormal3f( -1, 0, 0 );
@@ -271,15 +273,14 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     }
     glPushMatrix();
     const bool stair_opening = tile.goes_down && below && below->goes_up;
-    if( tile.floor_present && !tile.is_ramp ) {
+    if( tile.floor_present && !tile.is_ramp && !stair_opening ) {
         const auto floor_material = door ? fp3d_materials::lookup( "t_floor" ) : material;
         if( floor_material ) {
             color( brightness, brightness, brightness );
         }
-        // A matched stair pair has a half-tile opening; never remove an
-        // unrelated upper floor just because a lower tile says GOES_UP.
-        const float width = stair_opening ? .5f : 1.0f;
-        const float center = x - ( stair_opening ? .25f : 0 );
+        // Open matched stair tiles across the full flight width.
+        const float width = 1.0f;
+        const float center = x;
         box( center, z, width, 1, -.08f, 0, floor_material );
         glPushMatrix();
         glTranslatef( center, -.08f, z );
@@ -287,6 +288,19 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         glRotatef( 180, 1, 0, 0 );
         floor( 0, 0, 0, floor_material );
         glPopMatrix();
+        if( !tile.blood.empty() ) {
+            if( const auto blood = fp3d_materials::lookup( "$blood:" + tile.blood ) ) {
+                glEnable( GL_BLEND );
+                glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+                glDisable( GL_LIGHTING );
+                glDepthMask( GL_FALSE );
+                color( brightness, brightness, brightness );
+                floor( x, z, .006f, blood );
+                glDepthMask( GL_TRUE );
+                glDisable( GL_BLEND );
+                glEnable( GL_LIGHTING );
+            }
+        }
     }
     const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
     if( tile.ceiling_present && !upper_floor_surface ) {
@@ -313,9 +327,14 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                           ( !above && !tile.ceiling_present && !tile.exterior_only &&
                             tile.known == fp3d_snapshot::knowledge::visible ) ) ) {
         // Presentation steps; native stair movement/collision is untouched.
-        for( int step = 0; step < 12; ++step ) {
-            box( x + .25f, z + .5f - ( step + .5f ) / 12, .5f, 1.0f / 12,
-                 0, fp3d_camera::floor_height * ( step + 1 ) / 12, material );
+        auto surface = material;
+        if( surface && tile.stairs ) {
+            const float width = surface->right - surface->left;
+            surface->left += width * ( tile.stairs->width - 1 - tile.stairs->east ) / tile.stairs->width;
+            surface->right = surface->left + width / tile.stairs->width;
+        }
+        for( const auto &part : fp3d_snapshot::stair_parts( tile ) ) {
+            box( x, z + part.z, part.width, part.depth, part.bottom, part.top, surface );
         }
     }
     if( tile.is_ramp ) {
@@ -527,7 +546,9 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 storage_cells.push_back( &tile );
             }
             if( tile.known == fp3d_snapshot::knowledge::visible && !tile.exterior_only &&
-                tile.terrain.find( "stairs" ) != std::string::npos && ( tile.goes_up || tile.goes_down ) ) {
+                tile.terrain.find( "stairs" ) != std::string::npos && ( tile.goes_up || tile.goes_down ) &&
+                ( !tile.stairs || ( tile.stairs->south == tile.stairs->rows - 1 &&
+                                   tile.stairs->east == tile.stairs->width - 1 ) ) ) {
                 stair_cells.push_back( &tile );
             }
         }
@@ -729,6 +750,14 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 hash_value( signature, std::hash<tripoint_abs_ms> {}( tile->position ) );
                 hash_value( signature, std::hash<std::string> {}( tile->terrain ) );
                 hash_value( signature, std::hash<std::string> {}( tile->vegetation ) );
+                hash_value( signature, std::hash<std::string> {}( tile->blood ) );
+                hash_value( signature, tile->blood_intensity );
+                if( tile->stairs ) {
+                    hash_value( signature, tile->stairs->rows );
+                    hash_value( signature, tile->stairs->south );
+                    hash_value( signature, tile->stairs->width );
+                    hash_value( signature, tile->stairs->east );
+                }
                 hash_value( signature, std::hash<std::string> {}( tile->furniture ? tile->furniture->id : "" ) );
                 if( tile->furniture ) {
                     hash_value( signature, static_cast<unsigned>( tile->furniture->shape ) );
@@ -980,9 +1009,12 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     glDisable( GL_ALPHA_TEST );
     for( const auto *tile : stair_cells ) {
         const auto position = tile->position - scene.origin;
+        const auto section = tile->stairs.value_or( fp3d_snapshot::stair_section{} );
         const float y = position.z() * fp3d_camera::floor_height + 1.45f + bob;
-        if( !view.contains( position.x() - .25f - camera_offset.x,
-                            y - fp3d_camera::eye_height, position.y() - camera_offset.y, .6f ) ) {
+        const float center_x = position.x() + ( section.width - 1 ) / 2.0f;
+        const float front_z = position.y() + section.rows - 1 + .18f;
+        if( !view.contains( center_x - camera_offset.x,
+                            y - fp3d_camera::eye_height, front_z - camera_offset.y, .6f ) ) {
             continue;
         }
         for( const int direction : { -1, 1 } ) {
@@ -990,8 +1022,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 continue;
             }
             const float separation = tile->goes_up && tile->goes_down ? direction * .19f : 0;
-            const float x = position.x() - .25f + separation * right_x;
-            const float z = position.y() + separation * right_z;
+            const float x = center_x + separation * right_x;
+            const float z = front_z + separation * right_z;
             glColor3f( 1.0f, .78f, .25f );
             box( x, z, .08f, .08f, y - .17f, y + .17f, std::nullopt );
             glBegin( GL_TRIANGLES );

@@ -212,7 +212,9 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         if( tile->floor_present && !tile->is_ramp ) {
             const auto *below = tile->goes_down ? cell_at( tile->position + tripoint_rel_ms::below ) : nullptr;
             const bool opening = below && below->goes_up;
-            box( opening ? -.25f : 0, 0, opening ? .5f : 1, 1, -.08f, 0, kind::terrain, true );
+            if( !opening ) {
+                box( 0, 0, 1, 1, -.08f, 0, kind::terrain, true );
+            }
         }
         const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
         if( tile->ceiling_present && !upper_floor_surface ) {
@@ -221,9 +223,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         if( tile->goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
                                ( !above && !tile->ceiling_present && !tile->exterior_only &&
                                  tile->known == fp3d_snapshot::knowledge::visible ) ) ) {
-            for( int step = 0; step < 12; ++step ) {
-                box( .25f, .5f - ( step + .5f ) / 12, .5f, 1.0f / 12,
-                     0, fp3d_camera::floor_height * ( step + 1 ) / 12 );
+            for( const auto &part : fp3d_snapshot::stair_parts( *tile ) ) {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
             }
         }
         using terrain = fp3d_snapshot::terrain_kind;

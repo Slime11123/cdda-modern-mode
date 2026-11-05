@@ -720,6 +720,7 @@ void publish( fp3d_snapshot::scene_snapshot scene )
                                    << ", z_range=" << scene.min_z << ".." << scene.max_z
                                    << ", capture_ms=" << scene.capture_ms;
     }
+    fp3d_snapshot::connect_stairs( scene );
     camera.confirm( scene.origin, SDL_GetTicks(), accepted_walk && *accepted_walk == scene.origin );
     scene.render_generation = ++published_generation;
     latest_scene = std::move( scene );

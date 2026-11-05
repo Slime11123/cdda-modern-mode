@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <unordered_map>
+#include <tuple>
 
 #include "game.h"
 #include "level_cache.h"
@@ -38,6 +39,78 @@
 
 namespace fp3d_snapshot
 {
+std::vector<fp3d_furniture::part> stair_parts( const cell &tile )
+{
+    const auto section = tile.stairs.value_or( stair_section{} );
+    std::vector<fp3d_furniture::part> result;
+    for( int step = 0; step < 12; ++step ) {
+        const float start = std::max( 0.0f, step * section.rows / 12.0f - section.south );
+        const float end = std::min( 1.0f, ( step + 1 ) * section.rows / 12.0f - section.south );
+        if( end > start ) {
+            result.push_back( { 0, .5f - ( start + end ) / 2, 1, end - start,
+                                0, fp3d_camera::floor_height * ( step + 1 ) / 12 } );
+        }
+    }
+    return result;
+}
+
+void connect_stairs( scene_snapshot &scene )
+{
+    std::unordered_map<tripoint_abs_ms, size_t> remaining;
+    std::vector<size_t> ordered;
+    for( size_t i = 0; i < scene.cells.size(); ++i ) {
+        auto &tile = scene.cells[i];
+        tile.stairs.reset();
+        if( !tile.exterior_only && ( tile.goes_up || tile.goes_down ) &&
+            tile.terrain.find( "stairs" ) != std::string::npos ) {
+            remaining.emplace( tile.position, i );
+            ordered.push_back( i );
+        }
+    }
+    std::sort( ordered.begin(), ordered.end(), [&]( size_t a, size_t b ) {
+        const auto &p = scene.cells[a].position;
+        const auto &q = scene.cells[b].position;
+        return std::make_tuple( p.z(), p.y(), p.x() ) < std::make_tuple( q.z(), q.y(), q.x() );
+    } );
+    for( size_t index : ordered ) {
+        const auto &anchor = scene.cells[index];
+        if( !remaining.count( anchor.position ) ) {
+            continue;
+        }
+        const auto matches = [&]( int x, int y ) {
+            const auto it = remaining.find( anchor.position + tripoint_rel_ms( x, y, 0 ) );
+            if( it == remaining.end() ) {
+                return false;
+            }
+            const auto &other = scene.cells[it->second];
+            return other.terrain == anchor.terrain && other.known == anchor.known &&
+                   other.goes_up == anchor.goes_up && other.goes_down == anchor.goes_down;
+        };
+        int width = 1;
+        while( matches( width, 0 ) ) {
+            ++width;
+        }
+        int rows = 1;
+        while( true ) {
+            int x = 0;
+            while( x < width && matches( x, rows ) ) {
+                ++x;
+            }
+            if( x != width ) {
+                break;
+            }
+            ++rows;
+        }
+        for( int y = 0; y < rows; ++y ) {
+            for( int x = 0; x < width; ++x ) {
+                const auto it = remaining.find( anchor.position + tripoint_rel_ms( x, y, 0 ) );
+                scene.cells[it->second].stairs = stair_section{ rows, width, rows - y - 1, width - x - 1 };
+                remaining.erase( it );
+            }
+        }
+    }
+}
+
 std::string item_sprite_id( const item &object )
 {
     const std::string &id = object.typeId().str();
@@ -587,6 +660,14 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 }
                 if( visible && !tile.exterior_only ) {
                     tile.furniture = fp3d_furniture::describe( furniture );
+                    for( const auto &entry : here.field_at( p ) ) {
+                        const std::string id = entry.first.id().str();
+                        if( id.compare( 0, 8, "fd_blood" ) == 0 &&
+                            entry.second.get_field_intensity() > tile.blood_intensity ) {
+                            tile.blood = id;
+                            tile.blood_intensity = entry.second.get_field_intensity();
+                        }
+                    }
                 }
                 if( tile.known == knowledge::visible ) {
                     ++result.visible;
@@ -608,6 +689,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
         std::chrono::duration<double, std::milli>( finished - detail_finished ).count(),
         std::chrono::duration<double, std::milli>( perception_finished - perception_started ).count(),
         std::chrono::duration<double, std::milli>( detail_finished - perception_finished ).count() );
+    connect_stairs( result );
     return result;
 }
 } // namespace fp3d_snapshot

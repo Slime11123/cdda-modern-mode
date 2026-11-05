@@ -138,7 +138,7 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
             furniture.insert( furniture.end(),
             { "f_bed_frame", "f_bench", "f_bench_park", "f_armchair", "f_fireplace",
               "f_washer", "f_dryer", "f_dishwasher", "f_woodstove",
-              "f_stool", "f_glass_fridge" } );
+              "f_stool", "f_glass_fridge", "f_chair" } );
         }
         for( const std::string &id : furniture ) {
             CAPTURE( id );
