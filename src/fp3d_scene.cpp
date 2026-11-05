@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <utility>
 #include <unordered_map>
 
 #if defined(_MSC_VER) && defined(USE_VCPKG)
@@ -167,6 +168,56 @@ void window_face( const std::optional<fp3d_materials::uv_rect> &material,
     glEnd();
 }
 
+void round_furniture_part( const fp3d_furniture::part &part,
+                           const fp3d_materials::furniture_uv &surfaces )
+{
+    constexpr int sides = 16;
+    for( const bool top : { true, false } ) {
+        const auto material = top ? surfaces.top : surfaces.side;
+        const auto uv = material.value_or( fp3d_materials::uv_rect{ 0, 0, 1, 1 } );
+        if( material ) {
+            glEnable( GL_TEXTURE_2D );
+        } else {
+            glDisable( GL_TEXTURE_2D );
+        }
+        const float height = top ? part.top : part.bottom;
+        glNormal3f( 0, top ? 1 : -1, 0 );
+        glBegin( GL_TRIANGLE_FAN );
+        glTexCoord2f( ( uv.left + uv.right ) / 2, ( uv.top + uv.bottom ) / 2 );
+        glVertex3f( part.x, height, part.z );
+        for( int side = 0; side <= sides; ++side ) {
+            const float angle = side * 6.2831853f / sides;
+            const float x = std::cos( angle );
+            const float z = std::sin( angle ) * ( top ? -1 : 1 );
+            glTexCoord2f( uv.left + ( x + 1 ) / 2 * ( uv.right - uv.left ),
+                          uv.top + ( z + 1 ) / 2 * ( uv.bottom - uv.top ) );
+            glVertex3f( part.x + x * part.width / 2, height, part.z + z * part.depth / 2 );
+        }
+        glEnd();
+    }
+    const auto uv = surfaces.side.value_or( fp3d_materials::uv_rect{ 0, 0, 1, 1 } );
+    if( surfaces.side ) {
+        glEnable( GL_TEXTURE_2D );
+    } else {
+        glDisable( GL_TEXTURE_2D );
+    }
+    glBegin( GL_QUADS );
+    for( int side = 0; side < sides; ++side ) {
+        for( const auto corner : { std::pair{ side, false }, std::pair{ side, true },
+                                   std::pair{ side + 1, true }, std::pair{ side + 1, false } } ) {
+            const float angle = corner.first * 6.2831853f / sides;
+            const float x = std::cos( angle );
+            const float z = std::sin( angle );
+            glNormal3f( x, 0, z );
+            glTexCoord2f( uv.left + ( uv.right - uv.left ) * corner.first / sides,
+                          corner.second ? uv.top : uv.bottom );
+            glVertex3f( part.x + x * part.width / 2, corner.second ? part.top : part.bottom,
+                        part.z + z * part.depth / 2 );
+        }
+    }
+    glEnd();
+}
+
 void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
                          unsigned facing = 0 )
 {
@@ -176,6 +227,10 @@ void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
     unsigned part_index = 0;
     for( const auto &part : fp3d_furniture::parts( model.shape ) ) {
         const auto surfaces = fp3d_materials::lookup_furniture( model.id, part_index++ );
+        if( part.round ) {
+            round_furniture_part( part, surfaces );
+            continue;
+        }
         box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
              surfaces.side, false, &surfaces );
         glPushMatrix();

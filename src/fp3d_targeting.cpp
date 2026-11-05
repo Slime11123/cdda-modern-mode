@@ -16,7 +16,7 @@ constexpr float reach = 6;
 
 // A slab test also handles horizontal floors and vertical sprite planes.
 std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
-                                const vector3 &low, const vector3 &high )
+                                const vector3 &low, const vector3 &high, bool round = false )
 {
     float enter = 0;
     float leave = reach;
@@ -33,6 +33,32 @@ std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
             }
             enter = std::max( enter, a );
             leave = std::min( leave, b );
+            if( enter > leave ) {
+                return std::nullopt;
+            }
+        }
+    }
+    if( round ) {
+        const float radius_x = ( high[0] - low[0] ) / 2;
+        const float radius_y = ( high[1] - low[1] ) / 2;
+        const float x = ( eye[0] - ( low[0] + high[0] ) / 2 ) / radius_x;
+        const float y = ( eye[1] - ( low[1] + high[1] ) / 2 ) / radius_y;
+        const float dx = direction[0] / radius_x;
+        const float dy = direction[1] / radius_y;
+        const float a = dx * dx + dy * dy;
+        const float b = x * dx + y * dy;
+        const float c = x * x + y * y - 1;
+        if( a < .000001f ) {
+            if( c > 0 ) {
+                return std::nullopt;
+            }
+        } else {
+            const float discriminant = b * b - a * c;
+            if( discriminant < 0 ) {
+                return std::nullopt;
+            }
+            enter = std::max( enter, ( -b - std::sqrt( discriminant ) ) / a );
+            leave = std::min( leave, ( -b + std::sqrt( discriminant ) ) / a );
             if( enter > leave ) {
                 return std::nullopt;
             }
@@ -115,13 +141,13 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         };
         const auto box = [&]( float dx, float dy, float width, float depth, float bottom, float top,
-                              kind type = kind::terrain, bool flat = false ) {
+                              kind type = kind::terrain, bool flat = false, bool round = false ) {
             const float left = x + dx - width / 2;
             const float right = x + dx + width / 2;
             const float north = y + dy - depth / 2;
             const float south = y + dy + depth / 2;
             const float base = z + ( flat ? top : bottom );
-            accept( intersect( eye, direction, { left, north, z + bottom }, { right, south, z + top } ),
+            accept( intersect( eye, direction, { left, north, z + bottom }, { right, south, z + top }, round ),
             { {{ { left, base, north }, { right, base, north }, { right, base, south },
                     { left, base, south } }}, flat ? 0 : top - bottom }, type );
         };
@@ -141,7 +167,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             } );
             for( const auto &original : fp3d_furniture::parts( tile->furniture->shape ) ) {
                 const auto part = fp3d_furniture::rotated( original, facing );
-                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, kind::furniture );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                     kind::furniture, false, part.round );
             }
         }
         if( tile->vegetation_height > 0 ) {

@@ -21,6 +21,12 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_chair" ) {
             return model{ id, kind::chair };
         }
+        if( appearance == "f_stool" ) {
+            return model{ id, kind::stool };
+        }
+        if( appearance == "f_glass_fridge" ) {
+            return model{ id, kind::chest_freezer };
+        }
         if( appearance == "f_bed" ) {
             return model{ id, kind::bed };
         }
@@ -120,6 +126,17 @@ const std::vector<part> &parts( kind shape )
         { .23f, -.23f, .07f, .07f, 0, .40f },
         { -.23f, .23f, .07f, .07f, 0, .40f },
         { .23f, .23f, .07f, .07f, 0, .40f }
+    };
+    static const std::vector<part> stool{
+        { 0, 0, .56f, .56f, .45f, .53f, true },
+        { -.17f, -.17f, .07f, .07f, 0, .45f },
+        { .17f, -.17f, .07f, .07f, 0, .45f },
+        { -.17f, .17f, .07f, .07f, 0, .45f },
+        { .17f, .17f, .07f, .07f, 0, .45f }
+    };
+    static const std::vector<part> chest_freezer{
+        { 0, 0, .94f, .84f, 0, .90f },
+        { 0, 0, .94f, .84f, .90f, 1.00f }
     };
     static const std::vector<part> bed{
         { 0, 0, .86f, .98f, .20f, .42f },
@@ -278,6 +295,10 @@ const std::vector<part> &parts( kind shape )
             return table;
         case kind::chair:
             return chair;
+        case kind::stool:
+            return stool;
+        case kind::chest_freezer:
+            return chest_freezer;
         case kind::bed:
             return bed;
         case kind::bed_frame:
@@ -339,6 +360,10 @@ float item_surface( kind shape )
             return .78f;
         case kind::chair:
             return .48f;
+        case kind::stool:
+            return .53f;
+        case kind::chest_freezer:
+            return .40f;
         case kind::bed:
             return .42f;
         case kind::bed_frame:
@@ -392,7 +417,7 @@ float item_surface( kind shape )
 bool shows_contents( kind shape )
 {
     return shape == kind::cupboard || shape == kind::locker || shape == kind::dresser ||
-           shape == kind::fridge || shape == kind::mini_fridge;
+           shape == kind::fridge || shape == kind::mini_fridge || shape == kind::chest_freezer;
 }
 
 bool chair_table( const std::optional<model> &furniture )

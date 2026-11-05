@@ -12,7 +12,7 @@ namespace fp3d_furniture
 enum class kind {
     table, chair, bed, bed_frame, crate, open_crate, cupboard, cabinet, rack, locker,
     counter, desk, sofa, sink, oven, fridge, mini_fridge, dresser, bathtub, toilet,
-    bench, park_bench, armchair, fireplace, washer, dishwasher, wood_stove
+    bench, park_bench, armchair, fireplace, washer, dishwasher, wood_stove, stool, chest_freezer
 };
 struct model {
     std::string id;
@@ -20,6 +20,7 @@ struct model {
 };
 struct part {
     float x, z, width, depth, bottom, top;
+    bool round = false;
 };
 // Owned, read-only presentation shared by built furniture, ghosts and picking.
 std::optional<model> describe( const std::string &id );

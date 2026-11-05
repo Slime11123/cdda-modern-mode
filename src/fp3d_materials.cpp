@@ -716,6 +716,13 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
             result.front = crop( 3, 2, 28, 5 );
             result.top = result.side = crop( 4, 2, 6, 4 );
         }
+    } else if( uses( "f_glass_fridge" ) ) {
+        result.top = result.front = result.side = crop( 2, 21, 29, 29 );
+        if( part_index == 1 ) {
+            // The upper blue rectangle is the horizontal sliding glass lid.
+            result.top = crop( 0, 0, 31, 19 );
+            result.front = result.side = crop( 1, 1, 30, 2 );
+        }
     } else if( uses( "f_fridge" ) ) {
         // The 64x80 sprite is letterboxed in the atlas. Sample its opaque
         // appliance pixels after that fit, away from the surrounding shadow.
@@ -742,6 +749,13 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
             result.front = crop( 3, 15, 28, 15 );
         } else if( part_index == 5 ) {
             result.front = crop( 7, 3, 25, 12 );
+        }
+    } else if( uses( "f_stool" ) ) {
+        const auto metal = crop( 15, 23, 17, 28 );
+        result.top = result.front = result.side = metal;
+        if( part_index == 0 ) {
+            result.top = crop( 8, 10, 25, 19 );
+            result.front = result.side = crop( 12, 16, 18, 18 );
         }
     } else if( uses( "f_chair" ) ) {
         const auto wood = crop( 6, 23, 7, 29 );

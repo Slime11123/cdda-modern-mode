@@ -2,6 +2,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -136,7 +137,8 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
         if( pack == "UNDEAD_PEOPLE_BASE" ) {
             furniture.insert( furniture.end(),
             { "f_bed_frame", "f_bench", "f_bench_park", "f_armchair", "f_fireplace",
-              "f_washer", "f_dryer", "f_dishwasher", "f_woodstove" } );
+              "f_washer", "f_dryer", "f_dishwasher", "f_woodstove",
+              "f_stool", "f_glass_fridge" } );
         }
         for( const std::string &id : furniture ) {
             CAPTURE( id );
@@ -164,6 +166,20 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
                 REQUIRE( faces.front );
                 CHECK( faces.top->bottom < faces.front->top );
                 fp3d_materials::unbind();
+            }
+            if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_glass_fridge" ) {
+                const float focal = width / ( 2 * std::tan(
+                                        fp3d_camera::horizontal_fov_degrees * 3.14159265f / 360 ) );
+                const auto pixel_at = [&]( float x, float y, float distance ) {
+                    const int px = std::lround( width / 2.0f + focal * x / distance );
+                    const int py = std::lround( height / 2.0f + focal *
+                                               ( fp3d_camera::eye_height - y ) / distance );
+                    return model[py * width + px];
+                };
+                const auto lid = pixel_at( .18f, 1.0f, 2 );
+                const auto front = pixel_at( .18f, .65f, 1.58f );
+                CHECK( int( ( lid >> 8 ) & 0xff ) > int( lid >> 24 ) + 10 );
+                CHECK( std::abs( int( front >> 24 ) - int( ( front >> 8 ) & 0xff ) ) < 18 );
             }
             save( id + "-model", model );
         }

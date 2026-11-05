@@ -77,7 +77,8 @@ TEST_CASE( "fp3d_furniture_capture_items_and_revalidation_follow_native_visibili
     you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
     const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
     for( const std::string id : {
-             "f_table", "f_chair", "f_bed", "f_washer", "f_dryer", "f_dishwasher", "f_woodstove"
+             "f_table", "f_chair", "f_bed", "f_washer", "f_dryer", "f_dishwasher", "f_woodstove",
+             "f_stool", "f_glass_fridge"
          } ) {
         CAPTURE( id );
         here.furn_set( p, furn_str_id( id ) );
@@ -135,7 +136,8 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
              "f_counter", "f_desk", "f_sofa", "f_sink", "f_oven", "f_fridge",
              "f_minifridge", "f_dresser", "f_wardrobe", "f_bathtub", "f_toilet",
              "f_bench", "f_bench_wooden", "f_bench_park", "f_armchair", "f_fireplace",
-             "f_fireplace_stone", "f_washer", "f_dryer", "f_dishwasher", "f_woodstove"
+             "f_fireplace_stone", "f_washer", "f_dryer", "f_dishwasher", "f_woodstove",
+             "f_stool", "f_glass_fridge"
          } ) {
         CAPTURE( id );
         const auto model = fp3d_furniture::describe( id );
@@ -164,6 +166,34 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
     CHECK_FALSE( fp3d_furniture::describe( "f_counter_gate_o" ) );
     CHECK( fp3d_furniture::parts( fp3d_furniture::kind::mini_fridge ).front().top <
            fp3d_furniture::parts( fp3d_furniture::kind::fridge ).front().top );
+    const auto freezer = fp3d_furniture::describe( "f_glass_fridge" );
+    REQUIRE( freezer );
+    CHECK( freezer->shape == fp3d_furniture::kind::chest_freezer );
+    CHECK( fp3d_furniture::parts( freezer->shape ).back().top == Approx( 1 ) );
+}
+
+TEST_CASE( "fp3d_round_stool_has_no_backrest_and_does_not_target_empty_corners",
+           "[fp3d][furniture][ray]" )
+{
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell tile;
+    tile.position = scene.origin;
+    tile.terrain = "t_floor";
+    tile.floor_present = false;
+    tile.furniture = fp3d_furniture::describe( "f_stool" );
+    REQUIRE( tile.furniture );
+    CHECK( tile.furniture->shape == fp3d_furniture::kind::stool );
+    for( const auto &part : fp3d_furniture::parts( tile.furniture->shape ) ) {
+        CHECK( part.top <= .53f );
+    }
+    scene.cells.push_back( tile );
+    const auto seat = fp3d_targeting::ray( scene, 0, 90 );
+    REQUIRE( seat );
+    CHECK( seat->id == "f_stool" );
+    CHECK_FALSE( fp3d_targeting::ray( scene, 0, 90, { .26f, .26f } ) );
+    const auto rim = fp3d_targeting::ray( scene, 0, 90, { .26f, 0 } );
+    REQUIRE( rim );
+    CHECK( rim->id == "f_stool" );
 }
 
 TEST_CASE( "fp3d_plumbing_rays_distinguish_basin_floors_and_rims",
