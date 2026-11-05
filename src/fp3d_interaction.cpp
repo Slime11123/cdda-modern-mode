@@ -183,13 +183,13 @@ bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p, bool target
     if( objects.empty() ) {
         return false;
     }
-    if( targeted && objects.size() > 1 ) {
+    const item *top = &here.maptile_at( p ).get_uppermost_item();
+    if( targeted && ( objects.size() > 1 || top->is_corpse() ) ) {
         auto action = fp3d_modern_ui::show( you, here, false, -1, here.get_abs( p ) );
         return action && fp3d_inventory::execute( *action, you, here );
     }
     // Native pick_up schedules the standard activity, including capacity,
     // theft, pocket selection, time and interruption rules. No item copying.
-    const item *top = &here.maptile_at( p ).get_uppermost_item();
     for( item &object : objects ) {
         if( &object == top ) {
             you.pick_up( { { item_location( map_cursor( p ), &object ), targeted ? object.count() : 1 } } );
