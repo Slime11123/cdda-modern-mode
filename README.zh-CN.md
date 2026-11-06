@@ -6,18 +6,36 @@
 
 **CDDA Modern Mode** 是基于 **Cataclysm: Dark Days Ahead（CDDA）0.I-1 / Ito-1** 的非官方现代化改造项目，在保留原版回合制、行动点、战斗、世界模拟和存档机制的基础上，加入第一人称 3D 画面、现代 2D 操作与鼠标友好的综合界面。
 
-> **状态：Windows 实验性预览版（2026-11-04）**。当前开发版本仍可能存在崩溃、输入兼容及性能问题；不是 CDDA 官方产品，也不保证全部玩法已通过完整人工验收。
+> **状态：Windows 实验性预览版（2026 年 11 月）**。当前开发版本仍可能存在崩溃、输入兼容及性能问题；不是 CDDA 官方产品，也不保证全部玩法已通过完整人工验收。
 
 ## 下载安装
 
 Windows 玩家可前往 [Releases 页面](https://github.com/Slime11123/cdda-modern-mode/releases) 查看是否提供 Windows ZIP 预览包。下载时优先选择名称含 **Windows-x64** 的压缩包；GitHub 自动生成的「Source code」仅包含源代码，不能直接运行。
 
 1. 将 Windows ZIP **完整解压**至有写入权限的英文路径（建议非 `Program Files`），不要直接在压缩包内双击。
-2. 双击 `Play-CDDA-Modern-Mode.cmd`；游戏文件和 DLL 必须保持在原有目录结构。
+2. **直接双击 `cataclysm-tiles.exe`**（真正的游戏主程序）。Alpha.4 Windows 版无需 CMD 或第二个 EXE；请保持 DLL、`data/`、`gfx/` 和 `lang/` 等目录结构完整。
 3. 新玩家从游戏主菜单新建世界、创建角色；个人设置及存档位于解压目录的 `user/`，**请自行备份**。
 4. 在游戏中按 **F5 或 F6** 打开统一模式设置，分别选择 2D/3D 画面、经典/现代键位、原版侧栏/现代 HUD。点击「完成」保存并应用。
 
-若 ZIP 内缺少 `cataclysm-tiles.exe`、`data/`、`gfx/` 或 DLL，它不是完整玩家包。首版采用仓库随附的原版图块资源，不捆绑外部下载的素材。Windows 版本仍属于测试预览，遇到问题请反馈到 [Issues](https://github.com/Slime11123/cdda-modern-mode/issues)。
+若 ZIP 内缺少 `cataclysm-tiles.exe`、`data/`、`gfx/` 或 DLL，它不是完整玩家包。发行包仅包含源码自带且允许再分发的资源，不捆绑另行下载的第三方素材。Windows 版仍为实验性预览，问题反馈请提交至 [Issues](https://github.com/Slime11123/cdda-modern-mode/issues)。
+
+## 推荐图块包：UndeadPeople（不死人）
+
+为了获得**更好的视觉体验**，推荐搭配 **UndeadPeople（不死人 / MSX++UnDeadPeopleEdition）图块包**使用，特别适合 3D 建筑、家具和物品的呈现。
+
+> **本项目不提供、不捆绑、也不重新分发不死人图块包。** 这是独立的第三方素材，请玩家自行从维护者仓库下载并遵守相关许可和署名要求。本项目基于 CDDA 0.I-1，不同版本的图块包可能存在兼容性差异。
+
+**图块包仓库及下载地址：** [Xenikos / UndeadPeopleTileset（GitHub）](https://github.com/Xenikos/UndeadPeopleTileset)。
+
+**安装方法：** 将下载得到的 `MSX++UnDeadPeopleEdition` 文件夹放入游戏的 `gfx/` 目录；在游戏中前往 **选项 → 图形 → 选择图块包（Choose Tileset）**，选择 **UNDEAD_PEOPLE**（以实际列出的名称为准）。如未立即生效，请重新启动游戏。
+
+## 实机演示
+
+以下为项目开发者提供的第一人称 3D 实机截图：
+
+![CDDA Modern Mode — 第一人称 3D 厨房场景实机截图](docs/images/ingame-demo-kitchen-3d.png)
+
+*开发中的实机截图；实际画面会因所选图块包及版本而有所差异。*
 
 ## 主要功能
 
