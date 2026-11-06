@@ -394,6 +394,13 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
     const auto prioritize_cell = [&]( const fp3d_snapshot::cell &tile ) {
+        if( ( tile.kind == fp3d_snapshot::terrain_kind::ladder ||
+              tile.kind == fp3d_snapshot::terrain_kind::downspout ) && pending.size() < max_slots ) {
+            std::string key = tile.terrain == "t_vitrified_downspout" ? "t_vitrified_floor" : "t_metal_floor";
+            if( model_keys.insert( key ).second ) {
+                pending.push_back( { std::move( key ), nullptr } );
+            }
+        }
         if( tile.kind == fp3d_snapshot::terrain_kind::fence && pending.size() < max_slots ) {
             std::string key = "$fence:" + tile.terrain;
             if( model_keys.insert( key ).second ) {
@@ -443,7 +450,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
     };
     const auto add_cell = [&]( const fp3d_snapshot::cell &tile ) {
-        if( tile.kind == fp3d_snapshot::terrain_kind::fence ) {
+        if( tile.kind == fp3d_snapshot::terrain_kind::ladder ) {
+            add( "t_concrete", nullptr );
+        } else if( tile.kind == fp3d_snapshot::terrain_kind::downspout || tile.kind == fp3d_snapshot::terrain_kind::fence ) {
             add( "t_dirt", nullptr );
         } else if( tile.kind == fp3d_snapshot::terrain_kind::window ) {
             add( "t_floor", nullptr );

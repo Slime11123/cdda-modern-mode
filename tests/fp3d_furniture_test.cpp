@@ -12,6 +12,7 @@
 #include "game.h"
 #include "item.h"
 #include "map.h"
+#include "mapdata.h"
 #include "map_helpers.h"
 #include "options_helpers.h"
 #include "player_activity.h"
@@ -247,6 +248,73 @@ TEST_CASE( "fp3d_chain_fence_uses_thin_connected_panels_and_posts", "[fp3d][furn
     CHECK( panel->outline->corners.front()[2] == Approx( -2 ) );
     scene.cells.front().terrain = "t_chainfence_posts";
     CHECK_FALSE( fp3d_targeting::ray( scene, 0, 0, { .3f, 0 } ) );
+}
+
+TEST_CASE( "fp3d_ladders_and_downspouts_keep_native_links_and_model_targets", "[fp3d][multilevel][ray]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    for( const char *id : { "t_ladder_up", "t_ladder_down", "t_ladder_up_down",
+                           "t_gutter_downspout", "t_vitrified_downspout" } ) {
+        CAPTURE( id );
+        REQUIRE( here.ter_set( p, ter_str_id( id ) ) );
+        here.invalidate_visibility_cache();
+        fp3d_snapshot::prepare_view( you, here );
+        const auto scene = fp3d_snapshot::capture( you, here );
+        const auto tile = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto &cell ) {
+            return cell.position == here.get_abs( p );
+        } );
+        REQUIRE( tile != scene.cells.end() );
+        CHECK_FALSE( tile->stairs );
+        CHECK_FALSE( fp3d_snapshot::climb_parts( *tile ).empty() );
+        CHECK( tile->goes_up == here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) );
+        CHECK( tile->goes_down == here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) );
+        CHECK( here.ter( p ).id() == ter_str_id( id ) );
+    }
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell ladder;
+    ladder.position = tripoint_abs_ms( 0, -2, 0 );
+    ladder.terrain = "t_ladder_up";
+    ladder.kind = fp3d_snapshot::terrain_shape( ladder.terrain );
+    ladder.goes_up = true;
+    scene.cells.push_back( ladder );
+    const auto rung = fp3d_targeting::ray( scene, 0, 0 );
+    REQUIRE( rung );
+    REQUIRE( rung->outline );
+    CHECK( rung->id == "t_ladder_up" );
+    CHECK( rung->outline->height < .1f );
+    CHECK_FALSE( fp3d_targeting::ray( scene, 0, 5 ) ); // Air between rungs is not a solid stair wedge.
+    const auto rail = fp3d_targeting::ray( scene, 0, 0, { .26f, 0 } );
+    REQUIRE( rail );
+    CHECK( rail->outline->height == Approx( 2.2f ) );
+    fp3d_snapshot::cell backing;
+    backing.position = tripoint_abs_ms( 1, -2, 0 );
+    backing.kind = fp3d_snapshot::terrain_kind::wall;
+    backing.terrain = "t_wall";
+    scene.cells.front().furniture = fp3d_furniture::describe( "f_crate_c" );
+    scene.cells.push_back( backing );
+    const auto rotated = fp3d_targeting::ray( scene, 0, 0, { .32f, 0 } );
+    REQUIRE( rotated );
+    CHECK( rotated->id == "t_ladder_up" );
+    CHECK_FALSE( fp3d_targeting::ray( scene, 0, 0 ) );
+    scene.cells.pop_back();
+    scene.cells.front().furniture.reset();
+    scene.cells.front().goes_up = false;
+    scene.cells.front().goes_down = true;
+    scene.cells.front().terrain = "t_ladder_down";
+    CHECK_FALSE( fp3d_targeting::ray( scene, 0, 90 ) ); // The known downward opening has no floor lid.
+    scene.cells.front().kind = fp3d_snapshot::terrain_kind::downspout;
+    scene.cells.front().terrain = "t_gutter_downspout";
+    scene.cells.front().goes_down = false;
+    const auto pipe = fp3d_targeting::ray( scene, 0, 0 );
+    REQUIRE( pipe );
+    CHECK( pipe->id == "t_gutter_downspout" );
+    CHECK_FALSE( fp3d_targeting::ray( scene, 0, 0, { .12f, 0 } ) );
 }
 
 TEST_CASE( "fp3d_plumbing_rays_distinguish_basin_floors_and_rims",

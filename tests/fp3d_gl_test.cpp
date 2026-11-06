@@ -1292,6 +1292,42 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             CHECK( through_fence != fence );
             save_scene( "chain-fence", through_fence );
             scene.sprites.clear();
+            for( const char *id : { "t_ladder_up", "t_ladder_down", "t_ladder_up_down",
+                                   "t_gutter_downspout", "t_vitrified_downspout" } ) {
+                auto climbing = ground;
+                climbing.terrain = id;
+                climbing.kind = fp3d_snapshot::terrain_shape( id );
+                climbing.goes_up = std::string( id ) == "t_ladder_up" || std::string( id ) == "t_ladder_up_down";
+                climbing.goes_down = std::string( id ) == "t_ladder_down" || std::string( id ) == "t_ladder_up_down";
+                auto backing = wall;
+                backing.position = tripoint_abs_ms( 0, -3, 0 );
+                scene.cells = { climbing, backing };
+                const auto pixels = render();
+                const auto gold = []( const auto &image ) {
+                    return std::count_if( image.begin(), image.end(), []( std::uint32_t pixel ) {
+                        return ( pixel >> 24 ) > 150 && ( ( pixel >> 16 ) & 0xff ) > 90 &&
+                               ( ( pixel >> 8 ) & 0xff ) < 100;
+                    } );
+                };
+                CHECK( gold( pixels ) > 20 );
+                REQUIRE( fp3d_materials::bind() );
+                CHECK( fp3d_materials::lookup( std::string( id ) == "t_vitrified_downspout" ?
+                                             "t_vitrified_floor" : "t_metal_floor" ) );
+                fp3d_materials::unbind();
+                save_scene( id, pixels );
+                if( std::string( id ) == "t_ladder_up" ) {
+                    scene.cells.front().furniture = fp3d_furniture::describe( "f_crate_c" );
+                    scene.cells.back().position = tripoint_abs_ms( 1, -2, 0 );
+                    const auto rotated = render();
+                    CHECK( rotated != pixels );
+                    CHECK( fp3d_scene::statistics().rebuilt > 0 );
+                    save_scene( "ladder-east-with-crate", rotated );
+                    scene.cells.front().furniture.reset();
+                    scene.cells.back().position = tripoint_abs_ms( 0, -3, 0 );
+                }
+                scene.cells.front().known = fp3d_snapshot::knowledge::remembered;
+                CHECK( gold( render() ) == 0 );
+            }
             scene.cells.clear();
             for( int y = -5; y <= -3; ++y ) {
                 for( int x = 0; x < 2; ++x ) {

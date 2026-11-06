@@ -249,7 +249,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const fp3d_snapshot::cell *below, const fp3d_snapshot::cell *above,
                 int ew, int ns, const std::string &wall_surface,
                 const std::array<float, 4> *tint = nullptr, bool defer_storage = false,
-                unsigned furniture_facing = 0, const std::array<bool, 4> &fence_neighbours = {} )
+                unsigned furniture_facing = 0, const std::array<bool, 4> &fence_neighbours = {},
+                unsigned climb_facing = 0 )
 {
     const auto color = [&]( float r, float g, float b ) {
         if( tint ) {
@@ -264,6 +265,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     const bool door = tile.kind == kind::closed_door || tile.kind == kind::open_door ||
                       tile.kind == kind::damaged_door || tile.kind == kind::glass;
     const auto material = fp3d_materials::lookup(
+                              tile.kind == kind::ladder ? "t_concrete" :
+                              tile.kind == kind::downspout ? "t_dirt" :
                               tile.kind == kind::fence ? "t_dirt" :
                               tile.kind == kind::window ? "t_floor" :
                               tile.vegetation == tile.terrain && !grass ? "t_dirt" : tile.terrain );
@@ -273,7 +276,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         color( brightness, brightness, brightness );
     }
     glPushMatrix();
-    const bool stair_opening = tile.goes_down && below && below->goes_up;
+    const bool stair_opening = tile.goes_down &&
+                               ( tile.kind == kind::ladder || ( below && below->goes_up ) );
     if( tile.floor_present && !tile.is_ramp && !stair_opening ) {
         const auto floor_material = door ? fp3d_materials::lookup( "t_floor" ) : material;
         if( floor_material ) {
@@ -324,7 +328,24 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         }
         glPopMatrix();
     }
-    if( tile.goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
+    if( tile.kind == kind::ladder || tile.kind == kind::downspout ) {
+        const auto surface = fp3d_materials::lookup( tile.terrain == "t_vitrified_downspout" ?
+                             "t_vitrified_floor" : "t_metal_floor" );
+        const fp3d_materials::furniture_uv surfaces{ surface, surface, surface };
+        color( brightness, brightness, brightness );
+        glPushMatrix();
+        glTranslatef( x, 0, z );
+        glRotatef( -90.0f * climb_facing, 0, 1, 0 );
+        for( const auto &part : fp3d_snapshot::climb_parts( tile ) ) {
+            if( part.round ) {
+                round_furniture_part( part, surfaces );
+            } else {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, surface );
+            }
+        }
+        glPopMatrix();
+    }
+    if( tile.kind != kind::ladder && tile.goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
                           ( !above && !tile.ceiling_present && !tile.exterior_only &&
                             tile.known == fp3d_snapshot::knowledge::visible ) ) ) {
         // Presentation steps; native stair movement/collision is untouched.
@@ -563,7 +584,9 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 storage_cells.push_back( &tile );
             }
             if( tile.known == fp3d_snapshot::knowledge::visible && !tile.exterior_only &&
-                tile.terrain.find( "stairs" ) != std::string::npos && ( tile.goes_up || tile.goes_down ) &&
+                ( tile.terrain.find( "stairs" ) != std::string::npos ||
+                  tile.kind == fp3d_snapshot::terrain_kind::ladder || tile.kind == fp3d_snapshot::terrain_kind::downspout ) &&
+                ( tile.goes_up || tile.goes_down || tile.kind == fp3d_snapshot::terrain_kind::downspout ) &&
                 ( !tile.stairs || ( tile.stairs->south == tile.stairs->rows - 1 &&
                                    tile.stairs->east == tile.stairs->width - 1 ) ) ) {
                 stair_cells.push_back( &tile );
@@ -716,6 +739,15 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
           known_wall( tile.position + tripoint_rel_ms::south ),
           known_wall( tile.position + tripoint_rel_ms::west ) } );
     };
+    const auto climb_facing = [&]( const fp3d_snapshot::cell &tile ) {
+        if( tile.kind != fp3d_snapshot::terrain_kind::ladder &&
+            tile.kind != fp3d_snapshot::terrain_kind::downspout ) { return 0u; }
+        return fp3d_furniture::facing( fp3d_furniture::kind::cabinet,
+        { known_wall( tile.position + tripoint_rel_ms::north ),
+          known_wall( tile.position + tripoint_rel_ms::east ),
+          known_wall( tile.position + tripoint_rel_ms::south ),
+          known_wall( tile.position + tripoint_rel_ms::west ) } );
+    };
     const auto window_wall = [&]( const fp3d_snapshot::cell & tile ) {
         for( const auto &direction : {
                  tripoint_rel_ms::east, tripoint_rel_ms::west,
@@ -796,6 +828,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                     hash_value( signature, static_cast<unsigned>( tile->furniture->shape ) );
                     hash_value( signature, furniture_facing( *tile ) );
                 }
+                hash_value( signature, climb_facing( *tile ) );
                 hash_value( signature, std::hash<float> {}( tile->vegetation_height ) );
                 hash_value( signature, static_cast<unsigned>( tile->kind ) );
                 if( tile->kind == fp3d_snapshot::terrain_kind::window ) {
@@ -840,7 +873,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, -1 ) ),
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, 1 ) ), ew, ns,
                                tile->kind == fp3d_snapshot::terrain_kind::window ? window_wall( *tile ) : "",
-                               nullptr, true, furniture_facing( *tile ), fence_links( *tile ) );
+                               nullptr, true, furniture_facing( *tile ), fence_links( *tile ), climb_facing( *tile ) );
                 }
                 if( mesh.list ) {
                     glEndList();
@@ -1041,6 +1074,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     glDisable( GL_TEXTURE_2D );
     glDisable( GL_ALPHA_TEST );
     for( const auto *tile : stair_cells ) {
+        const bool up = tile->goes_up || tile->kind == fp3d_snapshot::terrain_kind::downspout;
+        const bool down = tile->goes_down;
         const auto position = tile->position - scene.origin;
         const auto section = tile->stairs.value_or( fp3d_snapshot::stair_section{} );
         const float y = position.z() * fp3d_camera::floor_height + 1.45f + bob;
@@ -1051,10 +1086,10 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             continue;
         }
         for( const int direction : { -1, 1 } ) {
-            if( direction < 0 ? !tile->goes_down : !tile->goes_up ) {
+            if( direction < 0 ? !down : !up ) {
                 continue;
             }
-            const float separation = tile->goes_up && tile->goes_down ? direction * .19f : 0;
+            const float separation = up && down ? direction * .19f : 0;
             const float x = center_x + separation * right_x;
             const float z = front_z + separation * right_z;
             glColor3f( 1.0f, .78f, .25f );
@@ -1149,7 +1184,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             glPushMatrix();
             glTranslatef( 0, y + .025f, 0 );
             draw_cell( tile, offset.x(), offset.y(), nullptr, nullptr, ew, ns, window_wall( tile ),
-                       &tint, false, furniture_facing( tile ) );
+                       &tint, false, furniture_facing( tile ), {}, climb_facing( tile ) );
             const bool full_glass = tile.kind == fp3d_snapshot::terrain_kind::glass;
             if( full_glass || ( tile.kind == fp3d_snapshot::terrain_kind::window &&
                                tile.pane == fp3d_snapshot::window_pane::glazed ) ) {

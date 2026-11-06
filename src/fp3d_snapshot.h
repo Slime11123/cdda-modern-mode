@@ -36,7 +36,7 @@ constexpr int render_below = 2;
 enum class knowledge { visible, remembered };
 enum class window_pane { glazed, opening, covered };
 
-enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle, glass, damaged_door, fence };
+enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle, glass, damaged_door, fence, ladder, downspout };
 // Read-only terrain-definition classification, also used by construction ghosts.
 terrain_kind terrain_shape( const std::string &id );
 // Door/frame parts in their east-west orientation, shared by drawing and picking.
@@ -122,6 +122,8 @@ struct scene_snapshot {
 // Connect permitted adjacent stair tiles into rectangular flights.
 void connect_stairs( scene_snapshot &scene );
 std::vector<fp3d_furniture::part> stair_parts( const cell &tile );
+// Vertical rails/rungs and round pipe sections, shared by rendering and picking.
+std::vector<fp3d_furniture::part> climb_parts( const cell &tile );
 
 // Prepare native view caches independently of the 2D Tiles draw or exploration.
 void prepare_view( avatar &you, map &here );

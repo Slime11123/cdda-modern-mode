@@ -172,6 +172,19 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                      tile->appliance.empty() ? kind::furniture : kind::appliance, false, part.round );
             }
         }
+        if( tile->kind == fp3d_snapshot::terrain_kind::ladder ||
+            tile->kind == fp3d_snapshot::terrain_kind::downspout ) {
+            const auto facing = fp3d_furniture::facing( fp3d_furniture::kind::cabinet,
+            { wall_at( tile->position + tripoint_rel_ms::north ),
+              wall_at( tile->position + tripoint_rel_ms::east ),
+              wall_at( tile->position + tripoint_rel_ms::south ),
+              wall_at( tile->position + tripoint_rel_ms::west ) } );
+            for( const auto &original : fp3d_snapshot::climb_parts( *tile ) ) {
+                const auto part = fp3d_furniture::rotated( original, facing );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                     kind::terrain, false, part.round );
+            }
+        }
         if( tile->vegetation_height > 0 ) {
             const float height = tile->vegetation_height;
             const float width = std::max( .9f, height <= 1.2f ? height : height * .7f );
@@ -212,7 +225,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         }
         if( tile->floor_present && !tile->is_ramp ) {
             const auto *below = tile->goes_down ? cell_at( tile->position + tripoint_rel_ms::below ) : nullptr;
-            const bool opening = below && below->goes_up;
+            const bool opening = tile->goes_down && ( tile->kind == fp3d_snapshot::terrain_kind::ladder ||
+                                 ( below && below->goes_up ) );
             if( !opening ) {
                 box( 0, 0, 1, 1, -.08f, 0, kind::terrain, true );
             }
@@ -221,7 +235,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         if( tile->ceiling_present && !upper_floor_surface ) {
             box( 0, 0, 1, 1, fp3d_camera::floor_height - .08f, fp3d_camera::floor_height - .08f );
         }
-        if( tile->goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
+        if( tile->kind != fp3d_snapshot::terrain_kind::ladder && tile->goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
                                ( !above && !tile->ceiling_present && !tile->exterior_only &&
                                  tile->known == fp3d_snapshot::knowledge::visible ) ) ) {
             for( const auto &part : fp3d_snapshot::stair_parts( *tile ) ) {

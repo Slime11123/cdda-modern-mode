@@ -41,6 +41,31 @@
 
 namespace fp3d_snapshot
 {
+std::vector<fp3d_furniture::part> climb_parts( const cell &tile )
+{
+    if( tile.kind == terrain_kind::downspout ) {
+        return {
+            { 0, -.33f, .13f, .13f, .10f, fp3d_camera::floor_height, true },
+            { 0, -.33f, .18f, .18f, .48f, .54f, true },
+            { 0, -.33f, .18f, .18f, 1.60f, 1.66f, true },
+            { 0, -.23f, .13f, .30f, .04f, .17f },
+            { 0, -.39f, .13f, .24f, 2.05f, fp3d_camera::floor_height }
+        };
+    }
+    if( tile.kind != terrain_kind::ladder ) {
+        return {};
+    }
+    const float top = tile.goes_up ? fp3d_camera::floor_height : .62f;
+    std::vector<fp3d_furniture::part> result{
+        { -.26f, -.32f, .06f, .07f, 0, top },
+        { .26f, -.32f, .06f, .07f, 0, top }
+    };
+    for( float height = .22f; height + .025f <= top; height += .28f ) {
+        result.push_back( { 0, -.32f, .52f, .07f, height - .025f, height + .025f } );
+    }
+    return result;
+}
+
 std::vector<fp3d_furniture::part> stair_parts( const cell &tile )
 {
     const auto section = tile.stairs.value_or( stair_section{} );
@@ -261,6 +286,12 @@ terrain_kind classify( const std::string &id )
         return terrain_kind::obstacle;
     }
     const ter_t &definition = terrain.obj();
+    if( id == "t_ladder_up" || id == "t_ladder_down" || id == "t_ladder_up_down" ) {
+        return terrain_kind::ladder;
+    }
+    if( id == "t_gutter_downspout" || id == "t_vitrified_downspout" ) {
+        return terrain_kind::downspout;
+    }
     if( id.compare( 0, 12, "t_chainfence" ) == 0 ) {
         return terrain_kind::fence;
     }
