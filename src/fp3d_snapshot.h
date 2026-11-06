@@ -4,6 +4,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <string>
+#include <array>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -35,11 +36,13 @@ constexpr int render_below = 2;
 enum class knowledge { visible, remembered };
 enum class window_pane { glazed, opening, covered };
 
-enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle, glass, damaged_door };
+enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle, glass, damaged_door, fence };
 // Read-only terrain-definition classification, also used by construction ghosts.
 terrain_kind terrain_shape( const std::string &id );
 // Door/frame parts in their east-west orientation, shared by drawing and picking.
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind );
+std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighbours,
+        bool posts_only = false );
 
 struct stair_section {
     int rows = 1;
@@ -55,6 +58,7 @@ struct cell {
     knowledge known = knowledge::visible;
     std::string vegetation;
     std::optional<fp3d_furniture::model> furniture;
+    std::string appliance;
     std::optional<stair_section> stairs;
     std::string blood;
     int blood_intensity = 0;

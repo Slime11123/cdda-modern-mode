@@ -125,7 +125,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 return;
             }
             const bool visible = tile->known == fp3d_snapshot::knowledge::visible && !tile->exterior_only;
-            if( visible && type == kind::furniture &&
+            if( visible && ( type == kind::furniture || type == kind::appliance ) &&
                 fp3d_furniture::shows_contents( tile->furniture->shape ) ) {
                 storage_hits.emplace_back( tile->position, *hit );
             } else {
@@ -136,6 +136,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 result.reset();
                 if( visible ) {
                     result = target{ scene.origin, tile->position, type,
+                                     type == kind::appliance ? tile->appliance :
                                      type == kind::furniture ? tile->furniture->id : tile->terrain, outline };
                 }
             }
@@ -168,7 +169,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             for( const auto &original : fp3d_furniture::parts( tile->furniture->shape ) ) {
                 const auto part = fp3d_furniture::rotated( original, facing );
                 box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
-                     kind::furniture, false, part.round );
+                     tile->appliance.empty() ? kind::furniture : kind::appliance, false, part.round );
             }
         }
         if( tile->vegetation_height > 0 ) {
@@ -228,7 +229,18 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         }
         using terrain = fp3d_snapshot::terrain_kind;
-        if( tile->kind == terrain::wall || tile->kind == terrain::obstacle ) {
+        if( tile->kind == terrain::fence ) {
+            const auto linked = [&]( const tripoint_rel_ms &direction ) {
+                const auto *other = cell_at( tile->position + direction );
+                return other && other->kind == terrain::fence;
+            };
+            for( const auto &part : fp3d_snapshot::fence_parts(
+                { linked( tripoint_rel_ms::north ), linked( tripoint_rel_ms::east ),
+                  linked( tripoint_rel_ms::south ), linked( tripoint_rel_ms::west ) },
+                tile->terrain == "t_chainfence_posts" ) ) {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+            }
+        } else if( tile->kind == terrain::wall || tile->kind == terrain::obstacle ) {
             box( 0, 0, .98f, .98f, 0, tile->kind == terrain::wall ? fp3d_camera::floor_height : 1 );
         } else if( tile->kind == terrain::closed_door || tile->kind == terrain::open_door ||
                    tile->kind == terrain::damaged_door || tile->kind == terrain::glass ||

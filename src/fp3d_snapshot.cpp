@@ -36,6 +36,8 @@
 #include "mutation.h"
 #include "submap.h"
 #include "type_id.h"
+#include "veh_type.h"
+#include "vpart_position.h"
 
 namespace fp3d_snapshot
 {
@@ -259,6 +261,9 @@ terrain_kind classify( const std::string &id )
         return terrain_kind::obstacle;
     }
     const ter_t &definition = terrain.obj();
+    if( id.compare( 0, 12, "t_chainfence" ) == 0 ) {
+        return terrain_kind::fence;
+    }
     const bool door_id = id.find( "door" ) != std::string::npos;
     if( definition.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_DOOR_DAMAGED ) ||
         ( door_id && definition.has_flag( "BARRICADABLE_DOOR_REINFORCED_DAMAGED" ) ) ) {
@@ -358,14 +363,23 @@ sprite describe_item( const item &object, const tripoint_abs_ms &position )
     return image;
 }
 
-// Native shadowcasting omits some upper facade cells even when native ray LOS
-// reaches them. Authorize only a surface touching native-visible open air;
+// Native shadowcasting omits some upper facade cells beside visible exterior
+// air. Authorize only a surface touching native-visible open air;
 // no furniture, items or creatures may use this presentation-only fallback.
 bool exposed_surface( const avatar &you, const map &here, const tripoint_bub_ms &p,
                       bool beside_visible_air, bool blind )
 {
-    return beside_visible_air && p.z() > you.posz() && !blind && !you.cant_see( p ) &&
-           here.sees( you.pos_bub( here ), p, you.unimpaired_range() );
+    if( !beside_visible_air || p.z() <= you.posz() || blind || you.cant_see( p ) ||
+        square_dist( you.pos_bub( here ), p ) > you.unimpaired_range() ) {
+        return false;
+    }
+    const terrain_kind kind = classify( here.ter( p ).id().str() );
+    const bool facade = kind == terrain_kind::wall || kind == terrain_kind::window ||
+                        kind == terrain_kind::glass || kind == terrain_kind::closed_door ||
+                        kind == terrain_kind::open_door || kind == terrain_kind::damaged_door;
+    // An unseen floor above the player is already represented by the room's
+    // neutral ceiling. Only facade surfaces may bypass endpoint ray LOS.
+    return facade || here.sees( you.pos_bub( here ), p, you.unimpaired_range() );
 }
 
 void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
@@ -397,6 +411,29 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
 terrain_kind terrain_shape( const std::string &id )
 {
     return classify( id );
+}
+
+std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighbours,
+        bool posts_only )
+{
+    std::vector<fp3d_furniture::part> result{ { 0, 0, .06f, .06f, 0, 2.0f } };
+    if( posts_only ) {
+        return result;
+    }
+    auto linked = neighbours;
+    if( std::none_of( linked.begin(), linked.end(), []( bool value ) { return value; } ) ) {
+        linked[1] = linked[3] = true;
+    }
+    for( int direction = 0; direction < 4; ++direction ) {
+        if( !linked[direction] ) {
+            continue;
+        }
+        const bool east_west = direction % 2 != 0;
+        const float sign = direction < 2 ? 1.0f : -1.0f;
+        result.push_back( { east_west ? sign * .25f : 0, east_west ? 0 : -sign * .25f,
+                            east_west ? .5f : 0, east_west ? 0 : .5f, .06f, 1.94f } );
+    }
+    return result;
 }
 
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind )
@@ -559,14 +596,25 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                     // backdrop. Known room ceilings/walls still occlude it.
                     result.sky = fp3d_sky::sample( calendar::turn, true );
                 }
-                const bool beside_visible_air =
+                bool beside_visible_air =
                     ( perception[index( p + tripoint_rel_ms::north )] & air_bit ) ||
                     ( perception[index( p + tripoint_rel_ms::south )] & air_bit ) ||
                     ( perception[index( p + tripoint_rel_ms::east )] & air_bit ) ||
                     ( perception[index( p + tripoint_rel_ms::west )] & air_bit );
+                if( fresh && !visible && !blind && p.z() > player.z() && !beside_visible_air ) {
+                    for( int dz : { -1, 1 } ) {
+                        const auto neighbour = p + tripoint_rel_ms( 0, 0, dz );
+                        if( neighbour.z() >= result.min_z && neighbour.z() <= result.max_z &&
+                            ( perception[index( neighbour )] & air_bit ) &&
+                            here.sees( player, p, you.unimpaired_range() ) ) {
+                            beside_visible_air = true;
+                            break;
+                        }
+                    }
+                }
                 // Geometry in a dark room must still occlude the exterior.
                 // Native geometric LOS gates surfaces; contents retain full perception checks.
-                const bool room_surface = fresh && !visible && p.z() == player.z() && !blind &&
+                const bool room_surface = fresh && !visible && !blind &&
                                           !here.is_outside( p ) &&
                                           here.access_cache( z ).seen_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID + .1f &&
                                           here.sees( player, p, you.unimpaired_range() );
@@ -640,7 +688,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                 window_pane::covered : definition.movecost > 0 ?
                                 window_pane::opening : window_pane::glazed;
                 }
-                if( tile.exterior_only && ( tile.open_air ||
+                if( tile.exterior_only && ( ( tile.open_air && !tile.ceiling_present ) ||
                                             tile.kind == terrain_kind::obstacle || plant_height( tile.terrain ) > 0 ) ) {
                     continue;
                 }
@@ -660,6 +708,15 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 }
                 if( visible && !tile.exterior_only ) {
                     tile.furniture = fp3d_furniture::describe( furniture );
+                    if( !tile.furniture ) {
+                        const auto part = here.veh_at( p ).part_with_feature( VPFLAG_APPLIANCE, false );
+                        if( part ) {
+                            tile.furniture = fp3d_furniture::describe( part->info().looks_like );
+                            if( tile.furniture ) {
+                                tile.appliance = part->info().id.str();
+                            }
+                        }
+                    }
                     for( const auto &entry : here.field_at( p ) ) {
                         const std::string id = entry.first.id().str();
                         if( id.compare( 0, 8, "fd_blood" ) == 0 &&

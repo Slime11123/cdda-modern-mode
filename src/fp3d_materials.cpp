@@ -389,10 +389,17 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool window = false;
         bool furniture = false;
         bool blood = false;
+        bool fence = false;
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
     const auto prioritize_cell = [&]( const fp3d_snapshot::cell &tile ) {
+        if( tile.kind == fp3d_snapshot::terrain_kind::fence && pending.size() < max_slots ) {
+            std::string key = "$fence:" + tile.terrain;
+            if( model_keys.insert( key ).second ) {
+                pending.push_back( { std::move( key ), nullptr, false, false, false, false, true } );
+            }
+        }
         if( tile.furniture && pending.size() < max_slots ) {
             std::string key = "$furniture:" + tile.furniture->id;
             if( model_keys.insert( key ).second ) {
@@ -436,7 +443,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
     };
     const auto add_cell = [&]( const fp3d_snapshot::cell &tile ) {
-        if( tile.kind == fp3d_snapshot::terrain_kind::window ) {
+        if( tile.kind == fp3d_snapshot::terrain_kind::fence ) {
+            add( "t_dirt", nullptr );
+        } else if( tile.kind == fp3d_snapshot::terrain_kind::window ) {
             add( "t_floor", nullptr );
             add( "t_wall", nullptr );
             const auto before = pending.size();
@@ -521,7 +530,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         const unsigned index = slots.size();
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
-        const bool transparent = entry.image || entry.plant || entry.window || entry.blood;
+        const bool transparent = entry.image || entry.plant || entry.window || entry.blood || entry.fence;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         SDL_RenderFillRect( renderer, &slot );
@@ -537,7 +546,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 name = definition.is_valid() ? definition->looks_like : "";
             }
         } else {
-            tile = entry.image ? nullptr : entry.furniture ?
+            tile = entry.fence ? resolve_terrain( *selected, id.substr( 7 ), season ) :
+                   entry.image ? nullptr : entry.furniture ?
                                 resolve_vegetation( *selected, id.substr( 11 ), season ) : entry.window ?
                                 resolve_terrain( *selected, id.substr( 8 ), season ) : entry.plant ?
                                 resolve_vegetation( *selected, id.substr( 7 ), season ) :
@@ -552,7 +562,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool painted = false;
         if( tile ) {
             const auto sprites = choose_sprites( *tile, id );
-            if( ( !entry.plant && !entry.window && !entry.blood ) ||
+            if( ( !entry.plant && !entry.window && !entry.blood && !entry.fence ) ||
                 ( entry.window && sprites.foreground < 0 ) ) {
                 painted = paint( sprites.background, slot );
             }

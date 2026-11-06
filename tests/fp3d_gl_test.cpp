@@ -1277,6 +1277,19 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             const auto blocked = render();
             scene.cells.front().blood.clear();
             CHECK( render() == blocked );
+            scene.cells = { ground };
+            scene.cells.front().terrain = "t_chainfence";
+            scene.cells.front().kind = fp3d_snapshot::terrain_kind::fence;
+            const auto fence = render();
+            fp3d_snapshot::sprite actor;
+            actor.id = "mon_zombie";
+            actor.position = tripoint_abs_ms( 0, -3, 0 );
+            actor.height = 2.16f;
+            scene.sprites.push_back( actor );
+            const auto through_fence = render();
+            CHECK( through_fence != fence );
+            save_scene( "chain-fence", through_fence );
+            scene.sprites.clear();
             scene.cells.clear();
             for( int y = -5; y <= -3; ++y ) {
                 for( int x = 0; x < 2; ++x ) {
@@ -1288,6 +1301,38 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
             }
             save_scene( "connected-stairs", render() );
+            {
+                restore_on_out_of_scope restore_scene( scene );
+                clear_avatar();
+                clear_map();
+                set_time_to_day();
+                avatar &you = get_avatar();
+                map &here = get_map();
+                you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+                const auto origin = you.pos_bub( here );
+                for( int z = 0; z <= 4; ++z ) {
+                    for( int y = -16; y <= -12; ++y ) {
+                        for( int x = -4; x <= 4; ++x ) {
+                            const bool boundary = std::abs( x ) == 4 || y == -16 || y == -12;
+                            const bool window = y == -12 && std::abs( x ) == 2;
+                            here.ter_set( origin + tripoint_rel_ms( x, y, z ), ter_str_id(
+                                              z == 4 ? "t_flat_roof" : window ? "t_window" : boundary ? "t_wall" : "t_floor" ) );
+                        }
+                    }
+                }
+                fp3d_snapshot::prepare_view( you, here );
+                scene = fp3d_snapshot::capture( you, here );
+                for( int z = 1; z < 4; ++z ) {
+                    for( int x = -4; x <= 4; ++x ) {
+                        const auto position = here.get_abs( origin + tripoint_rel_ms( x, -12, z ) );
+                        CHECK( std::any_of( scene.cells.begin(), scene.cells.end(), [&]( const auto &tile ) {
+                            return tile.position == position &&
+                                   ( tile.kind == fp3d_snapshot::terrain_kind::wall || tile.kind == fp3d_snapshot::terrain_kind::window );
+                        } ) );
+                    }
+                }
+                save_scene( "native-four-storey-facade", render() );
+            }
         }
 
         scene.cells.clear();

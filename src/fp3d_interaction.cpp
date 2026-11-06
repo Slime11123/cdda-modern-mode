@@ -23,6 +23,7 @@
 #include "npc.h"
 #include "popup.h"
 #include "translations.h"
+#include "veh_type.h"
 namespace fp3d_interaction
 {
 bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
@@ -106,6 +107,10 @@ bool valid( const fp3d_targeting::target &target, const avatar &you, const map &
     if( target.type == fp3d_targeting::kind::furniture ) {
         return here.furn( p ).id().str() == target.id;
     }
+    if( target.type == fp3d_targeting::kind::appliance ) {
+        const auto part = here.veh_at( p ).part_with_feature( VPFLAG_APPLIANCE, false );
+        return part && part->info().id.str() == target.id;
+    }
     return here.ter( p ).id().str() == target.id;
 }
 
@@ -147,7 +152,8 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
     const bool corpse = items && target.type != fp3d_targeting::kind::furniture &&
                         !here.has_flag( ter_furn_flag::TFLAG_SEALED, p ) &&
                         here.maptile_at( p ).get_uppermost_item().is_corpse();
-    const bool examine = surface && ( here.has_furn( p ) || opens || closes ||
+    const bool examine = surface && ( target.type == fp3d_targeting::kind::appliance ||
+                                     here.has_furn( p ) || opens || closes ||
                                      ( !here.ter( p ).obj().has_examine( iexamine::none ) &&
                                        !here.ter( p ).obj().has_examine( iexamine::invalid ) && here.ter( p ).obj().can_examine( p ) ) );
     const bool guard = person && npc_orders::can_issue( you, *person, npc_orders::kind::guard );

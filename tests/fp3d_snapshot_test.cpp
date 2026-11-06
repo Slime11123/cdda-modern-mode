@@ -686,6 +686,41 @@ TEST_CASE( "fp3d_dark_contents_use_los_without_changing_native_perception", "[fp
     CHECK( ( hidden == nullptr || !hidden->furniture.has_value() ) );
 }
 
+TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilevel]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto origin = you.pos_bub( here );
+    for( int z = 0; z < 4; ++z ) {
+        for( int y = -3; y <= 3; ++y ) {
+            for( int x = 4; x <= 9; ++x ) {
+                const bool wall = x == 4 || x == 9 || std::abs( y ) == 3;
+                const bool window = x == 4 && std::abs( y ) == 1;
+                here.ter_set( origin + tripoint_rel_ms( x, y, z ),
+                              ter_str_id( window ? "t_window" : wall ? "t_wall" : "t_floor" ) );
+            }
+        }
+    }
+    for( int y = -3; y <= 3; ++y ) {
+        for( int x = 4; x <= 9; ++x ) {
+            here.ter_set( origin + tripoint_rel_ms( x, y, 4 ), ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    here.invalidate_visibility_cache();
+    fp3d_snapshot::prepare_view( you, here );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    for( int z = 1; z < 4; ++z ) {
+        for( int y = -3; y <= 3; ++y ) {
+            CAPTURE( z, y );
+            const auto *tile = find_cell( scene, here.get_abs( origin + tripoint_rel_ms( 4, y, z ) ) );
+            REQUIRE( tile );
+            CHECK( tile->kind == ( std::abs( y ) == 1 ? fp3d_snapshot::terrain_kind::window :
+                                   fp3d_snapshot::terrain_kind::wall ) );
+        }
+    }
+}
+
 TEST_CASE( "fp3d_multilevel_native_visibility_and_memory", "[fp3d][multilevel]" )
 {
     prepare_scene();

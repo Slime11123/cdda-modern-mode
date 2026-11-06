@@ -17,6 +17,9 @@
 #include "player_activity.h"
 #include "player_helpers.h"
 #include "rng.h"
+#include "veh_appliance.h"
+#include "vehicle.h"
+#include "vpart_position.h"
 
 TEST_CASE( "fp3d_furniture_blueprints_use_native_projects_without_changing_the_world",
            "[fp3d][furniture][blueprint]" )
@@ -194,6 +197,56 @@ TEST_CASE( "fp3d_round_stool_has_no_backrest_and_does_not_target_empty_corners",
     const auto rim = fp3d_targeting::ray( scene, 0, 90, { .26f, 0 } );
     REQUIRE( rim );
     CHECK( rim->id == "f_stool" );
+}
+
+TEST_CASE( "fp3d_connected_oven_retains_its_model_and_native_appliance_target",
+           "[fp3d][furniture][interaction]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    REQUIRE( place_appliance( here, p, vpart_id( "ap_oven" ), you, item( itype_id( "oven" ) ) ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    const auto tile = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto &cell ) {
+        return cell.position == here.get_abs( p );
+    } );
+    REQUIRE( tile != scene.cells.end() );
+    REQUIRE( tile->furniture );
+    CHECK( tile->furniture->id == "f_oven" );
+    CHECK( tile->appliance == "ap_oven" );
+    const auto target = fp3d_targeting::ray( scene, 0, 40 );
+    REQUIRE( target );
+    CHECK( target->type == fp3d_targeting::kind::appliance );
+    CHECK( target->id == "ap_oven" );
+    CHECK( fp3d_interaction::valid( *target, you, here ) );
+    const auto choices = fp3d_interaction::context_entries( *target, you, here );
+    CHECK( std::any_of( choices.begin(), choices.end(), []( const auto &choice ) {
+        return choice.enabled && choice.action == ACTION_EXAMINE_AND_PICKUP;
+    } ) );
+    here.destroy_vehicle( &here.veh_at( p )->vehicle() );
+    CHECK_FALSE( fp3d_interaction::valid( *target, you, here ) );
+}
+
+TEST_CASE( "fp3d_chain_fence_uses_thin_connected_panels_and_posts", "[fp3d][furniture][ray]" )
+{
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell fence;
+    fence.position = tripoint_abs_ms( 0, -2, 0 );
+    fence.terrain = "t_chainfence";
+    fence.kind = fp3d_snapshot::terrain_shape( fence.terrain );
+    CHECK( fence.kind == fp3d_snapshot::terrain_kind::fence );
+    scene.cells.push_back( fence );
+    const auto panel = fp3d_targeting::ray( scene, 0, 0, { .3f, 0 } );
+    REQUIRE( panel );
+    REQUIRE( panel->outline );
+    CHECK( panel->outline->corners.front()[2] == Approx( -2 ) );
+    scene.cells.front().terrain = "t_chainfence_posts";
+    CHECK_FALSE( fp3d_targeting::ray( scene, 0, 0, { .3f, 0 } ) );
 }
 
 TEST_CASE( "fp3d_plumbing_rays_distinguish_basin_floors_and_rims",

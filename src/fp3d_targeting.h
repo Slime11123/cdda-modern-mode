@@ -13,7 +13,7 @@ struct scene_snapshot;
 }
 namespace fp3d_targeting
 {
-enum class kind { terrain, creature, item, furniture };
+enum class kind { terrain, creature, item, furniture, appliance };
 struct edge_outline {
     // Vertices in renderer order (east, height, south), relative to the scene origin.
     std::array<std::array<float, 3>, 4> corners;

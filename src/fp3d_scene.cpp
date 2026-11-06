@@ -249,7 +249,7 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const fp3d_snapshot::cell *below, const fp3d_snapshot::cell *above,
                 int ew, int ns, const std::string &wall_surface,
                 const std::array<float, 4> *tint = nullptr, bool defer_storage = false,
-                unsigned furniture_facing = 0 )
+                unsigned furniture_facing = 0, const std::array<bool, 4> &fence_neighbours = {} )
 {
     const auto color = [&]( float r, float g, float b ) {
         if( tint ) {
@@ -264,6 +264,7 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     const bool door = tile.kind == kind::closed_door || tile.kind == kind::open_door ||
                       tile.kind == kind::damaged_door || tile.kind == kind::glass;
     const auto material = fp3d_materials::lookup(
+                              tile.kind == kind::fence ? "t_dirt" :
                               tile.kind == kind::window ? "t_floor" :
                               tile.vegetation == tile.terrain && !grass ? "t_dirt" : tile.terrain );
     const float brightness = memory ? .23f : .9f;
@@ -364,7 +365,23 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         color( brightness, brightness, brightness );
         furniture_geometry( *tile.furniture, x, z, furniture_facing );
     }
-    if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
+    if( tile.kind == kind::fence ) {
+        const auto parts = fp3d_snapshot::fence_parts( fence_neighbours,
+                           tile.terrain == "t_chainfence_posts" );
+        color( brightness * .7f, brightness * .72f, brightness * .74f );
+        const auto &post = parts.front();
+        box( x, z, post.width, post.depth, post.bottom, post.top, std::nullopt );
+        glEnable( GL_ALPHA_TEST );
+        glAlphaFunc( GL_GREATER, .5f );
+        const auto wire = fp3d_materials::lookup( "$fence:" + tile.terrain );
+        for( size_t i = 1; i < parts.size(); ++i ) {
+            const auto &part = parts[i];
+            box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top, wire, true );
+            box( x + part.x, z + part.z, std::max( .035f, part.width ),
+                 std::max( .035f, part.depth ), 1.91f, 1.95f, std::nullopt );
+        }
+        glDisable( GL_ALPHA_TEST );
+    } else if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
         color( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
         if( material ) {
             color( brightness, brightness, brightness );
@@ -670,6 +687,16 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                          tile->kind == fp3d_snapshot::terrain_kind::glass ||
                          tile->kind == fp3d_snapshot::terrain_kind::window );
     };
+    const auto fence_links = [&]( const fp3d_snapshot::cell &tile ) {
+        std::array<bool, 4> linked{};
+        const std::array<tripoint_rel_ms, 4> directions{ tripoint_rel_ms::north, tripoint_rel_ms::east,
+                                                       tripoint_rel_ms::south, tripoint_rel_ms::west };
+        for( size_t i = 0; i < directions.size(); ++i ) {
+            const auto *other = known_cell( tile.position + directions[i] );
+            linked[i] = other && other->kind == fp3d_snapshot::terrain_kind::fence;
+        }
+        return linked;
+    };
     const auto table_at = [&]( const tripoint_abs_ms &p ) {
         const auto *tile = known_cell( p );
         return tile && fp3d_furniture::chair_table( tile->furniture );
@@ -751,6 +778,12 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 hash_value( signature, std::hash<std::string> {}( tile->terrain ) );
                 hash_value( signature, std::hash<std::string> {}( tile->vegetation ) );
                 hash_value( signature, std::hash<std::string> {}( tile->blood ) );
+                hash_value( signature, std::hash<std::string> {}( tile->appliance ) );
+                if( tile->kind == fp3d_snapshot::terrain_kind::fence ) {
+                    for( bool linked : fence_links( *tile ) ) {
+                        hash_value( signature, linked );
+                    }
+                }
                 hash_value( signature, tile->blood_intensity );
                 if( tile->stairs ) {
                     hash_value( signature, tile->stairs->rows );
@@ -807,7 +840,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, -1 ) ),
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, 1 ) ), ew, ns,
                                tile->kind == fp3d_snapshot::terrain_kind::window ? window_wall( *tile ) : "",
-                               nullptr, true, furniture_facing( *tile ) );
+                               nullptr, true, furniture_facing( *tile ), fence_links( *tile ) );
                 }
                 if( mesh.list ) {
                     glEndList();

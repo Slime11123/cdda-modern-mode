@@ -150,6 +150,13 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
             REQUIRE( tile.furniture );
             const auto model = render();
             CHECK( model != bare_floor );
+            if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_oven" ) {
+                tile.appliance = "ap_oven";
+                const auto installed = render();
+                CHECK( installed == model );
+                save( "connected-oven", installed );
+                tile.appliance.clear();
+            }
             if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_bed_frame" ) {
                 unsigned wood_pixels = 0;
                 for( size_t i = 0; i < model.size(); ++i ) {
