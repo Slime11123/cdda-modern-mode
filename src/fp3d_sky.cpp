@@ -19,14 +19,16 @@ namespace
 constexpr float pi = 3.14159265358979323846f;
 constexpr float radius = 40;
 
-void color( const state &sky, float elevation )
+void color( const state &sky, float elevation, float clouds, float flash )
 {
     const float horizon = 1 - elevation;
     const float day = sky.daylight;
     const float glow = sky.twilight * horizon * horizon;
-    glColor3f( .008f + day * ( .20f + .35f * horizon ) + .35f * glow,
-               .012f + day * ( .43f + .26f * horizon ) + .12f * glow,
-               .035f + day * ( .76f + .10f * horizon ) - .015f * glow );
+    const float grey = .025f + day * ( .31f + .16f * horizon );
+    const float cover = clouds * .85f;
+    glColor3f( ( .008f + day * ( .20f + .35f * horizon ) + .35f * glow ) * ( 1 - cover ) + grey * cover + flash * .5f,
+               ( .012f + day * ( .43f + .26f * horizon ) + .12f * glow ) * ( 1 - cover ) + grey * cover + flash * .5f,
+               ( .035f + day * ( .76f + .10f * horizon ) - .015f * glow ) * ( 1 - cover ) + grey * cover + flash * .5f );
 }
 
 void disc( float x, float y, float z, float size )
@@ -69,7 +71,7 @@ state sample( const time_point &time, bool visible )
     return result;
 }
 
-void draw( const state &sky )
+void draw( const state &sky, float clouds, float flash, float seconds )
 {
     if( !sky.visible ) {
         return;
@@ -88,14 +90,14 @@ void draw( const state &sky )
             for( int edge = 0; edge < 2; ++edge ) {
                 const float elevation = ( ring + edge ) / 12.0f;
                 const float alt = elevation * pi / 2;
-                color( sky, std::max( 0.0f, elevation ) );
+                color( sky, std::max( 0.0f, elevation ), clouds, flash );
                 glVertex3f( radius * std::cos( alt ) * std::sin( az ),
                             radius * std::sin( alt ), radius * std::cos( alt ) * std::cos( az ) );
             }
         }
         glEnd();
     }
-    const float night = std::clamp( 1 - sky.daylight * 4, 0.0f, 1.0f );
+    const float night = std::clamp( 1 - sky.daylight * 4, 0.0f, 1.0f ) * ( 1 - clouds );
     if( night > 0 ) {
         glPointSize( 1 );
         glBegin( GL_POINTS );
@@ -111,7 +113,7 @@ void draw( const state &sky )
         }
         glEnd();
     }
-    if( sky.sun_y > 0 ) {
+    if( sky.sun_y > 0 && clouds < .8f ) {
         glColor3f( 1, .85f + .13f * sky.daylight, .55f + .4f * sky.daylight );
         disc( sky.sun_x, sky.sun_y, sky.sun_z, .65f );
     } else if( night > 0 && sky.moonlight > .01f ) {
@@ -119,6 +121,20 @@ void draw( const state &sky )
         glColor3f( brightness, brightness, brightness * .95f );
         // Decorative moon opposite the sun; brightness follows native phase.
         disc( -sky.sun_x, -sky.sun_y, -sky.sun_z, .5f );
+    }
+    if( clouds > .05f ) {
+        glEnable( GL_BLEND );
+        glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+        const float grey = .04f + sky.daylight * .48f + flash * .4f;
+        glColor4f( grey, grey, grey * 1.02f, clouds * .22f );
+        for( int i = 0; i < 36; ++i ) {
+            const float y = .18f + ( i % 5 ) * .13f;
+            const float angle = i * 2.399963f + seconds * .002f;
+            const float horizontal = std::sqrt( 1 - y * y );
+            disc( std::cos( angle ) * horizontal, y, std::sin( angle ) * horizontal,
+                  2.5f + ( i % 7 ) * .6f );
+        }
+        glDisable( GL_BLEND );
     }
     glDepthMask( GL_TRUE );
     glEnable( GL_DEPTH_TEST );

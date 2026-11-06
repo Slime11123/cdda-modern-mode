@@ -20,7 +20,7 @@ struct state {
 // Sample native astronomy on the game thread; rendering owns only these values.
 state sample( const time_point &time, bool visible );
 // Draw a camera-centred background using the scene's rotation/projection.
-void draw( const state &sky );
+void draw( const state &sky, float clouds = 0, float flash = 0, float seconds = 0 );
 }
 #endif
 #endif

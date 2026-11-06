@@ -551,9 +551,14 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     glLoadIdentity();
     glRotatef( pitch, 1, 0, 0 );
     glRotatef( yaw, 0, 1, 0 );
-    fp3d_sky::draw( scene.sky );
+    const auto weather_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch() ).count();
+    const float lightning = fp3d_weather::flash( scene.weather, weather_ms ) * ( scene.sky.visible ? 1.0f : 0.0f );
+    fp3d_sky::draw( scene.sky, scene.weather.clouds, lightning, ( weather_ms % 600000 ) / 1000.0f );
     glTranslatef( -camera_offset.x, -fp3d_camera::eye_height, -camera_offset.y );
-    const GLfloat ambient[] = { .35f, .35f, .35f, 1 };
+    fp3d_weather::begin_atmosphere( scene.weather, scene.sky.daylight, lightning );
+    const float weather_light = .35f * ( 1 - scene.weather.clouds * scene.sky.daylight * .4f ) + lightning * .5f;
+    const GLfloat ambient[] = { weather_light, weather_light, weather_light, 1 };
     const GLfloat diffuse[] = { .75f, .75f, .75f, 1 };
     const GLfloat direction[] = { -.4f, .8f, .5f, 0 };
     glEnable( GL_LIGHTING );
@@ -1110,6 +1115,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         }
     }
     glEnable( GL_ALPHA_TEST );
+    fp3d_weather::draw( scene.weather, scene.origin, yaw, scene.sky.daylight, weather_ms );
     // Glass is drawn after all opaque geometry and actors, back to front.
     // Depth testing keeps nearer walls/actors opaque; glass never writes depth.
     std::vector<const fp3d_snapshot::cell *> glass;
@@ -1270,6 +1276,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         glLineWidth( 1 );
         glDepthMask( GL_TRUE );
     }
+    glDisable( GL_FOG );
     glDisable( GL_DEPTH_TEST );
     glMatrixMode( GL_PROJECTION );
     glLoadIdentity();

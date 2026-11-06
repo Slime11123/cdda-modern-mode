@@ -13,6 +13,7 @@
 #include "calendar.h"
 #include "map_scale_constants.h"
 #include "fp3d_sky.h"
+#include "fp3d_weather.h"
 #include "fp3d_hud.h"
 #include "fp3d_furniture.h"
 
@@ -106,6 +107,7 @@ struct scene_snapshot {
     unsigned render_generation = 0; // Assigned when publishing owned render data.
     season_type season = SPRING;
     fp3d_sky::state sky;
+    fp3d_weather::state weather;
     fp3d_hud::data hud;
     std::vector<cell> cells;
     std::vector<landscape_patch> landscape;

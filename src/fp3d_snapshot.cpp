@@ -38,6 +38,7 @@
 #include "type_id.h"
 #include "veh_type.h"
 #include "vpart_position.h"
+#include "weather.h"
 
 namespace fp3d_snapshot
 {
@@ -539,6 +540,11 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
     }
     result.sky = fp3d_sky::sample( calendar::turn,
                                    player.z() >= 0 && here.is_outside( player ) && !blind );
+    const auto &weather = get_weather_const();
+    if( !blind && player.z() >= 0 && weather.weather_id.is_valid() ) {
+        result.weather = fp3d_weather::sample( *weather.weather_id, weather.windspeed,
+                                              weather.winddirection, weather.lightning_active, here.is_outside( player ) );
+    }
     const visibility_variables &variables = here.get_visibility_variables_cache();
     const bool fresh = variables.variables_set && !variables.visibility_cache_dirty &&
                        variables.last_pos == player;
@@ -766,6 +772,12 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 } else {
                     ++result.remembered;
                 }
+                if( result.weather.particles != fp3d_weather::precipitation::none &&
+                    tile.known == knowledge::visible && !tile.exterior_only && tile.floor_present &&
+                    tile.kind == terrain_kind::floor && !tile.ceiling_present &&
+                    dx * dx + dy * dy <= 144 && here.is_outside( p ) ) {
+                    result.weather.columns.push_back( tile.position );
+                }
                 result.cells.push_back( std::move( tile ) );
             }
         }
@@ -782,6 +794,12 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
         std::chrono::duration<double, std::milli>( perception_finished - perception_started ).count(),
         std::chrono::duration<double, std::milli>( detail_finished - perception_finished ).count() );
     connect_stairs( result );
+    std::sort( result.weather.columns.begin(), result.weather.columns.end(), [&]( const auto &a, const auto &b ) {
+        const auto left = a - result.origin;
+        const auto right = b - result.origin;
+        return left.x() * left.x() + left.y() * left.y() + left.z() * left.z() <
+               right.x() * right.x() + right.y() * right.y() + right.z() * right.z();
+    } );
     return result;
 }
 } // namespace fp3d_snapshot
