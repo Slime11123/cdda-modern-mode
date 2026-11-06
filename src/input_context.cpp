@@ -490,9 +490,7 @@ const std::string &input_context::handle_input( const int timeout )
 #endif
 #if defined(ENABLE_FP3D)
         if( category == "DEFAULTMODE" && fp3d_compositor::requested() &&
-            ( next_action.type == input_event_t::keyboard_code || next_action.type == input_event_t::keyboard_char ) &&
-            ( next_action.get_first_input() == static_cast<int>( keycode::f5 ) ||
-              next_action.get_first_input() == static_cast<int>( keycode::f6 ) ) ) {
+            fp3d_input::is_mode_settings_key( next_action ) ) {
             next_action.text = action_ident( ACTION_KEYBINDINGS );
             result = &next_action.text;
             break;

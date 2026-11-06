@@ -90,7 +90,8 @@ static int getopt( main_menu_opts o )
 static bool vertical_main_menu()
 {
 #if defined(TILES) && defined(ENABLE_FP3D)
-    return fp3d_compositor::controls() == fp3d_input::mode::first_person_3d;
+    // Menu layout is shared by every view and control mode in Modern Mode builds.
+    return true;
 #else
     return false;
 #endif
@@ -672,9 +673,7 @@ bool main_menu::opening_screen()
 
     world_generator->set_active_world( nullptr );
 #if defined(TILES) && defined(ENABLE_FP3D)
-    if( fp3d_compositor::modern_2d_world() ) {
-        fp3d_compositor::set_input_context( "MAIN_MENU" );
-    }
+    fp3d_compositor::set_input_context( "MAIN_MENU" );
 #endif
     world_generator->init();
 
@@ -749,6 +748,14 @@ bool main_menu::opening_screen()
         ui_manager::redraw();
         std::string action = ctxt.handle_input();
         input_event sInput = ctxt.get_raw_input();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( fp3d_compositor::requested() && fp3d_input::is_mode_settings_key( sInput ) ) {
+            fp3d_input::display_bindings( ctxt );
+            init_strings();
+            init_windows();
+            continue;
+        }
+#endif
 
         // check automatic menu shortcuts
         bool match = false;

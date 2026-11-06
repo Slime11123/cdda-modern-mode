@@ -236,7 +236,17 @@ void draw_cube()
 
 bool requested()
 {
-    static const bool value = env_enabled( "CDDA_FP3D" );
+    // In the Windows Modern Mode build, start the real game executable directly.
+    // An explicit CDDA_FP3D=0 remains a developer opt-out; other platforms keep
+    // the original opt-in behavior.
+    static const bool value = []() {
+        const char *setting = std::getenv( "CDDA_FP3D" );
+#if defined(_WIN32)
+        return setting == nullptr || std::strcmp( setting, "1" ) == 0;
+#else
+        return setting && std::strcmp( setting, "1" ) == 0;
+#endif
+    }();
     return value;
 }
 
@@ -278,7 +288,11 @@ void attach( SDL_Renderer *new_renderer, SDL_Window *new_window )
     }
     available = true;
     const auto view = get_option<std::string>( "FP3D_VIEW" );
-    enabled = view == "3d" || ( view == "auto" && env_enabled( "CDDA_FP3D_START_ACTIVE" ) );
+    // Without a launcher, an untouched profile defaults to 3D; players can
+    // still explicitly select 2D in the F5/F6 mode settings.
+    const char *start_active = std::getenv( "CDDA_FP3D_START_ACTIVE" );
+    const bool default_3d = start_active ? env_enabled( "CDDA_FP3D_START_ACTIVE" ) : requested();
+    enabled = view == "3d" || ( view == "auto" && default_3d );
     const auto keys = get_option<std::string>( "FP3D_CONTROLS" );
     modern_2d = keys == "modern" || ( keys == "auto" && enabled );
     selftest = env_enabled( "CDDA_FP3D_SELFTEST" );
@@ -412,7 +426,8 @@ bool modern_2d_input()
 
 bool survival_menu_available()
 {
-    return requested() && available && ( modern_2d || turn_based() );
+    // Shared menus follow the game session, not the camera or movement bindings.
+    return requested() && available && ( in_world || turn_based() );
 }
 
 bool modern_2d_world()

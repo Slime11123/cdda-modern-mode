@@ -183,7 +183,7 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     fp3d_compositor::attach( renderer.get(), window.get() );
     fp3d_compositor::set_input_context( "DEFAULTMODE" );
     REQUIRE( fp3d_compositor::controls() == fp3d_input::mode::original_2d );
-    CHECK_FALSE( fp3d_compositor::survival_menu_available() );
+    CHECK( fp3d_compositor::survival_menu_available() );
     fp3d_compositor::cycle_mode();
     REQUIRE( fp3d_compositor::controls() == fp3d_input::mode::modern_2d );
     CHECK( fp3d_compositor::survival_menu_available() );

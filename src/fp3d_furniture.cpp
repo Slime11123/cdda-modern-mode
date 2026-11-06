@@ -15,6 +15,9 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_counter_gate_c" ) {
             break; // The swinging panel shares the counter art, but not its body.
         }
+        if( appearance == "f_coffee_table" ) {
+            return model{ id, kind::coffee_table };
+        }
         if( appearance == "f_table" ) {
             return model{ id, kind::table };
         }
@@ -112,6 +115,13 @@ std::optional<model> describe( const std::string &id )
 
 const std::vector<part> &parts( kind shape )
 {
+    static const std::vector<part> coffee_table{
+        { 0, 0, .94f, .68f, .38f, .45f },
+        { -.39f, -.25f, .08f, .08f, 0, .38f },
+        { .39f, -.25f, .08f, .08f, 0, .38f },
+        { -.39f, .25f, .08f, .08f, 0, .38f },
+        { .39f, .25f, .08f, .08f, 0, .38f }
+    };
     static const std::vector<part> table{
         { 0, 0, .94f, .94f, .70f, .78f },
         { -.37f, -.37f, .09f, .09f, 0, .70f },
@@ -291,6 +301,8 @@ const std::vector<part> &parts( kind shape )
         { 0, 0, .93f, .72f, 0, .90f }
     };
     switch( shape ) {
+        case kind::coffee_table:
+            return coffee_table;
         case kind::table:
             return table;
         case kind::chair:
@@ -356,6 +368,8 @@ const std::vector<part> &parts( kind shape )
 float item_surface( kind shape )
 {
     switch( shape ) {
+        case kind::coffee_table:
+            return .45f;
         case kind::table:
             return .78f;
         case kind::chair:
@@ -422,7 +436,8 @@ bool shows_contents( kind shape )
 
 bool chair_table( const std::optional<model> &furniture )
 {
-    return furniture && ( furniture->shape == kind::table || furniture->shape == kind::desk );
+    return furniture && ( furniture->shape == kind::table || furniture->shape == kind::desk ||
+                         furniture->shape == kind::coffee_table );
 }
 
 unsigned facing( kind shape, const std::array<bool, 4> &walls,

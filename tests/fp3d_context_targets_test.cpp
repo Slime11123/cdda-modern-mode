@@ -6,12 +6,14 @@
 #include "avatar_action.h"
 #include "calendar.h"
 #include "cata_catch.h"
+#include "fp3d_compositor.h"
 #include "fp3d_snapshot.h"
 #include "game.h"
 #include "json.h"
 #include "json_loader.h"
 #include "map.h"
 #include "map_helpers.h"
+#include "monster.h"
 #include "npc.h"
 #include "cata_scope_helpers.h"
 #include "player_helpers.h"
@@ -370,5 +372,212 @@ TEST_CASE( "modern_2d_context_aim_passes_clicked_tile_to_native_aiming", "[fp3d]
     you.cancel_activity();
     you.remove_weapon();
     CHECK_FALSE( fp3d_interaction::resolve_2d_choice( *aim, target, you, here ) );
+}
+TEST_CASE( "modern_2d_distant_interaction_walks_then_resolves_the_selected_action",
+           "[fp3d][context_2d][approach]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto controls = fp3d_compositor::controls();
+    fp3d_compositor::apply_modes( false, true );
+    on_out_of_scope cleanup( [&]() {
+        you.clear_destination();
+        fp3d_interaction::take_2d_arrival();
+        fp3d_compositor::apply_modes( controls == fp3d_input::mode::first_person_3d,
+                                     controls != fp3d_input::mode::original_2d );
+        clear_npcs();
+    } );
+    REQUIRE( fp3d_compositor::controls() == fp3d_input::mode::modern_2d );
+    // Cross a submap boundary so the saved absolute target must survive map shifting.
+    const auto target = you.pos_bub( here ) + tripoint_rel_ms( 14, 0, 0 );
+    const auto absolute_target = here.get_abs( target );
+    action_id selected = ACTION_OPEN;
+    std::string command;
+    int reach = 1;
+    SECTION( "open" ) {
+        here.ter_set( target, ter_str_id( "t_door_c" ) );
+    }
+    SECTION( "close" ) {
+        here.ter_set( target, ter_str_id( "t_door_o" ) );
+        selected = ACTION_CLOSE;
+    }
+    SECTION( "search" ) {
+        here.furn_set( target, furn_str_id( "f_locker" ) );
+        selected = ACTION_EXAMINE_AND_PICKUP;
+    }
+    SECTION( "smash" ) {
+        here.furn_set( target, furn_str_id( "f_locker" ) );
+        selected = ACTION_SMASH;
+    }
+    SECTION( "pickup" ) {
+        here.add_item_or_charges( target, item( itype_id( "rock" ) ) );
+        selected = ACTION_PICKUP;
+    }
+    SECTION( "talk" ) {
+        spawn_npc( target.xy(), "test_talker" );
+        selected = ACTION_CHAT;
+    }
+    SECTION( "melee" ) {
+        spawn_test_monster( "mon_zombie", target );
+        selected = ACTION_NULL;
+        command = "FP3D_ATTACK";
+    }
+    SECTION( "stairs" ) {
+        here.ter_set( target, ter_str_id( "t_stairs_up" ) );
+        selected = ACTION_MOVE_UP;
+        reach = 0;
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    const auto options = fp3d_interaction::context_2d_entries( target, you, here );
+    const auto choice = std::find_if( options.begin(), options.end(), [&]( const auto &entry ) {
+        return entry.action == selected && std::string( entry.command ? entry.command : "" ) == command;
+    } );
+    REQUIRE( choice != options.end() );
+    REQUIRE( choice->enabled );
+    const auto origin = you.pos_abs();
+    const auto moves = you.get_moves();
+    const auto clock = calendar::turn;
+    const auto first = fp3d_interaction::resolve_2d_choice( *choice, target, you, here );
+    REQUIRE( first );
+    REQUIRE( first->action != ACTION_NULL );
+    CHECK( you.pos_abs() == origin );
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == clock );
+    REQUIRE( you.has_destination() );
+    CHECK( square_dist( you.get_auto_move_route().back(), target ) == reach );
+    REQUIRE( you.get_destination_activity().id() == activity_id( "ACT_MODERN_2D_INTERACT" ) );
+
+    // Reload the native destination activity while en route.
+    std::ostringstream saved;
+    JsonOut out( saved );
+    you.get_destination_activity().serialize( out );
+    player_activity restored;
+    restored.deserialize( json_loader::from_string( saved.str() ).get_object() );
+    you.set_destination_activity( restored );
+    auto step = first->action;
+    int steps = 0;
+    do {
+        const auto delta = get_delta_from_movement_action( step, iso_rotate::yes );
+        REQUIRE( avatar_action::move( you, here, tripoint_rel_ms( delta, 0 ) ) );
+        REQUIRE( ++steps <= 20 );
+        CHECK_FALSE( fp3d_interaction::take_2d_arrival() );
+        step = you.get_next_auto_move_direction();
+    } while( step != ACTION_NULL );
+    CHECK( you.get_moves() < moves );
+    REQUIRE( you.has_destination_activity() );
+    fp3d_snapshot::prepare_view( you, here );
+    you.start_destination_activity();
+    const auto arrived = fp3d_interaction::take_2d_arrival();
+    REQUIRE( arrived );
+    CHECK( arrived->position == here.get_bub( absolute_target ) );
+    const auto expected_action = command == "FP3D_ATTACK" ?
+                                 get_movement_action_from_delta( here.get_bub( absolute_target ) - you.pos_bub( here ), iso_rotate::yes ) : selected;
+    CHECK( arrived->action == expected_action );
+    CHECK( arrived->targeted_melee == ( command == "FP3D_ATTACK" ) );
+    CHECK( arrived->targeted_pickup == ( selected == ACTION_PICKUP ) );
+    CHECK_FALSE( you.has_destination() );
+    CHECK_FALSE( you.has_destination_activity() );
+    CHECK_FALSE( fp3d_interaction::take_2d_arrival() );
+    if( selected == ACTION_OPEN ) {
+        REQUIRE( here.open_door( you, *arrived->position, true ) );
+        CHECK( here.ter( here.get_bub( absolute_target ) ) == ter_str_id( "t_door_o" ).id() );
+    }
+}
+
+TEST_CASE( "modern_2d_approach_cancels_instead_of_acting_on_stale_targets",
+           "[fp3d][context_2d][approach]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto controls = fp3d_compositor::controls();
+    fp3d_compositor::apply_modes( false, true );
+    on_out_of_scope cleanup( [&]() {
+        you.clear_destination();
+        fp3d_interaction::take_2d_arrival();
+        fp3d_compositor::apply_modes( controls == fp3d_input::mode::first_person_3d,
+                                     controls != fp3d_input::mode::original_2d );
+    } );
+    const auto target = you.pos_bub( here ) + tripoint_rel_ms( 5, 0, 0 );
+    here.ter_set( target, ter_str_id( "t_door_c" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto options = fp3d_interaction::context_2d_entries( target, you, here );
+    const auto open = std::find_if( options.begin(), options.end(), []( const auto &entry ) {
+        return entry.action == ACTION_OPEN;
+    } );
+    REQUIRE( open != options.end() );
+    REQUIRE( fp3d_interaction::resolve_2d_choice( *open, target, you, here ) );
+    const auto destination = you.get_auto_move_route().back();
+    SECTION( "manual_cancel_clears_followup" ) {
+        you.abort_automove();
+        you.setpos( here, destination );
+        CHECK( you.get_destination_activity().is_null() );
+        CHECK_FALSE( you.has_destination_activity() );
+    }
+    SECTION( "changed_terrain" ) {
+        here.ter_set( target, ter_str_id( "t_door_o" ) );
+        you.setpos( here, destination );
+        you.start_destination_activity();
+    }
+    SECTION( "failed_last_step_is_not_arrival" ) {
+        you.get_auto_move_route().clear();
+        REQUIRE( you.has_destination_activity() );
+        you.start_destination_activity();
+    }
+    SECTION( "changed_mode" ) {
+        fp3d_compositor::apply_modes( false, false );
+        you.setpos( here, destination );
+        you.start_destination_activity();
+    }
+    CHECK_FALSE( fp3d_interaction::take_2d_arrival() );
+}
+TEST_CASE( "modern_2d_approach_does_not_attack_a_replacement_creature",
+           "[fp3d][context_2d][approach]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto controls = fp3d_compositor::controls();
+    fp3d_compositor::apply_modes( false, true );
+    on_out_of_scope cleanup( [&]() {
+        you.clear_destination();
+        fp3d_interaction::take_2d_arrival();
+        fp3d_compositor::apply_modes( controls == fp3d_input::mode::first_person_3d,
+                                     controls != fp3d_input::mode::original_2d );
+    } );
+    const auto target = you.pos_bub( here ) + tripoint_rel_ms( 5, 0, 0 );
+    monster &original = spawn_test_monster( "mon_zombie", target );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto options = fp3d_interaction::context_2d_entries( target, you, here );
+    const auto attack = std::find_if( options.begin(), options.end(), []( const auto &entry ) {
+        return entry.command && std::string( entry.command ) == "FP3D_ATTACK";
+    } );
+    REQUIRE( attack != options.end() );
+    REQUIRE( attack->enabled );
+    REQUIRE( fp3d_interaction::resolve_2d_choice( *attack, target, you, here ) );
+    const auto destination = you.get_auto_move_route().back();
+    original.setpos( here, target + tripoint_rel_ms::east );
+    SECTION( "original_moved" ) {}
+    SECTION( "same_species_replaced_target" ) {
+        spawn_test_monster( "mon_zombie", target );
+    }
+    you.setpos( here, destination );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( you.has_destination_activity() );
+    you.start_destination_activity();
+    CHECK_FALSE( fp3d_interaction::take_2d_arrival() );
 }
 #endif

@@ -1,6 +1,8 @@
 #include "fp3d_interaction.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <utility>
+#include "activity_actor.h"
 #include "avatar.h"
 #include "character_id.h"
 #include "creature_tracker.h"
@@ -15,17 +17,147 @@
 #include "gun_mode.h"
 #include "item.h"
 #include "item_location.h"
+#include "json.h"
 #include "map.h"
 #include "mapdata.h"
 #include "submap.h"
 #include "messages.h"
 #include "monster.h"
+#include "mtype.h"
 #include "npc.h"
 #include "popup.h"
 #include "translations.h"
+#include "vehicle.h"
 #include "veh_type.h"
 namespace fp3d_interaction
 {
+namespace
+{
+std::optional<request> arrived_2d_action;
+
+class approach_activity : public activity_actor
+{
+    public:
+        std::string action;
+        std::string command;
+        tripoint_abs_ms target;
+        tripoint_abs_ms arrival;
+        ter_str_id terrain;
+        furn_str_id furniture;
+        std::optional<character_id> person;
+        std::string monster_type;
+        weak_ptr_fast<monster> creature;
+        int saved_monster = -1;
+        std::optional<tripoint_abs_ms> vehicle_origin;
+
+        approach_activity() = default;
+        approach_activity( const fp3d_quick_menu::entry &choice, const tripoint_bub_ms &p,
+                           const tripoint_bub_ms &destination, map &here ) :
+            action( action_ident( choice.action ) ), command( choice.command ? choice.command : "" ),
+            target( here.get_abs( p ) ), arrival( here.get_abs( destination ) ),
+            terrain( here.ter( p ).id() ), furniture( here.furn( p ).id() ) {
+            if( const auto *person_at_target = get_creature_tracker().creature_at<npc>( p ) ) {
+                person = person_at_target->getID();
+            }
+            if( const auto *mon = get_creature_tracker().creature_at<monster>( p ) ) {
+                creature = g->shared_from( *mon );
+                monster_type = mon->type->id.str();
+            }
+            if( const auto vp = here.veh_at( p ) ) {
+                vehicle_origin = vp->vehicle().pos_abs();
+            }
+        }
+        const activity_id &get_type() const override {
+            static const activity_id id( "ACT_MODERN_2D_INTERACT" );
+            return id;
+        }
+        std::unique_ptr<activity_actor> clone() const override {
+            return std::make_unique<approach_activity>( *this );
+        }
+        void start( player_activity &act, Character &who ) override {
+            act.set_to_null();
+            arrived_2d_action.reset();
+            if( !who.is_avatar() || who.pos_abs() != arrival ||
+                fp3d_compositor::controls() != fp3d_input::mode::modern_2d ) {
+                return;
+            }
+            avatar &you = get_avatar();
+            map &here = get_map();
+            const auto p = here.get_bub( target );
+            if( !here.inbounds( p ) || here.ter( p ).id() != terrain ||
+                here.furn( p ).id() != furniture ) {
+                return;
+            }
+            if( person ) {
+                const auto *person_at_target = get_creature_tracker().creature_at<npc>( p );
+                if( !person_at_target || person_at_target->getID() != *person ) { return; }
+            }
+            if( !monster_type.empty() ) {
+                auto original = creature.lock();
+                if( !original && saved_monster >= 0 ) {
+                    original = get_creature_tracker().from_temporary_id( saved_monster );
+                }
+                if( !original || original.get() != get_creature_tracker().creature_at<monster>( p ) ||
+                    original->type->id.str() != monster_type ) {
+                    return;
+                }
+            }
+            const auto vp = here.veh_at( p );
+            if( vehicle_origin ? !vp || vp->vehicle().pos_abs() != *vehicle_origin : !!vp ) {
+                return;
+            }
+            const fp3d_quick_menu::entry choice{ "", "", look_up_action( action ),
+                                                command.empty() ? nullptr : command.c_str() };
+            arrived_2d_action = resolve_2d_choice( choice, p, you, here );
+        }
+        void do_turn( player_activity &act, Character & ) override {
+            act.set_to_null();
+        }
+        void finish( player_activity &act, Character & ) override {
+            act.set_to_null();
+        }
+        void serialize( JsonOut &out ) const override {
+            out.start_object();
+            out.member( "action", action );
+            out.member( "command", command );
+            out.member( "target", target );
+            out.member( "arrival", arrival );
+            out.member( "terrain", terrain );
+            out.member( "furniture", furniture );
+            out.member( "person", person );
+            out.member( "monster_type", monster_type );
+            const auto mon = creature.lock();
+            const int monster_id = mon && get_creature_tracker().creature_at<monster>( target ) == mon.get() ?
+                                   get_creature_tracker().temporary_id( *mon ) : saved_monster;
+            out.member( "monster_id", monster_id );
+            out.member( "vehicle_origin", vehicle_origin );
+            out.end_object();
+        }
+};
+}
+
+std::optional<request> take_2d_arrival()
+{
+    return std::exchange( arrived_2d_action, std::nullopt );
+}
+
+std::unique_ptr<activity_actor> deserialize_2d_interaction( JsonValue &data )
+{
+    auto result = std::make_unique<approach_activity>();
+    const JsonObject object = data.get_object();
+    object.read( "action", result->action );
+    object.read( "command", result->command );
+    object.read( "target", result->target );
+    object.read( "arrival", result->arrival );
+    object.read( "terrain", result->terrain );
+    object.read( "furniture", result->furniture );
+    object.read( "person", result->person );
+    object.read( "monster_type", result->monster_type );
+    object.read( "monster_id", result->saved_monster );
+    object.read( "vehicle_origin", result->vehicle_origin );
+    return result;
+}
+
 bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
 {
     Creature *critter = get_creature_tracker().creature_at( p );
@@ -211,7 +343,6 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
     if( you.is_dead_state() || you.is_blind() || !here.inbounds( p ) || p.z() != you.posz() || !you.sees( here, p ) ) {
         return {};
     }
-    const bool near = square_dist( you.pos_bub( here ), p ) <= 1;
     const bool self = p == you.pos_bub( here );
     const auto *critter = get_creature_tracker().creature_at( p );
     const bool creature = critter && !critter->is_avatar() && !critter->is_dead_state() && you.sees( here, *critter );
@@ -230,32 +361,32 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
             result.push_back( { "瞄准", "朝此处进入瞄准，射击需要在瞄准界面确认。", ACTION_FIRE, nullptr, true } );
         }
     }
-    if( opens ) { result.push_back( { "打开", "打开这个门窗或容器。", ACTION_OPEN, nullptr, near } ); }
-    if( closes ) { result.push_back( { "关闭", "关闭这个门窗或容器。", ACTION_CLOSE, nullptr, near } ); }
+    if( opens ) { result.push_back( { "打开", "走近并打开这个门窗或容器。", ACTION_OPEN, nullptr } ); }
+    if( closes ) { result.push_back( { "关闭", "走近并关闭这个门窗或容器。", ACTION_CLOSE, nullptr } ); }
     if( items ) { result.push_back( { "拾取物品", "查看并拾取这格物品。", ACTION_PICKUP, nullptr,
-                                     near && here.accessible_items( p ) } ); }
+                                     here.accessible_items( p ) } ); }
     if( person ) {
-        result.push_back( { "交谈", "与点中的人物交谈。", ACTION_CHAT, nullptr, near } );
+        result.push_back( { "交谈", "走近并与点中的人物交谈。", ACTION_CHAT, nullptr } );
         if( npc_orders::can_issue( you, *person, npc_orders::kind::guard ) ) {
-            result.push_back( { "原地守卫", "让这个队友守卫当前位置。", ACTION_NULL, "FP3D_GUARD", near } );
+            result.push_back( { "原地守卫", "让这个队友守卫当前位置。", ACTION_NULL, "FP3D_GUARD" } );
         }
         if( npc_orders::can_issue( you, *person, npc_orders::kind::follow ) ) {
-            result.push_back( { "继续跟随", "让这个队友继续跟随。", ACTION_NULL, "FP3D_FOLLOW", near } );
+            result.push_back( { "继续跟随", "让这个队友继续跟随。", ACTION_NULL, "FP3D_FOLLOW" } );
         }
     }
     if( creature ) {
-        result.push_back( { "近战攻击", "攻击点中的相邻目标；非敌对目标仍需确认。", ACTION_NULL, "FP3D_ATTACK", near } );
+        result.push_back( { "近战攻击", "走近并攻击点中的目标；非敌对目标仍需确认。", ACTION_NULL, "FP3D_ATTACK" } );
     } else {
-        result.push_back( { "查看 / 搜索", "检查这个地块、家具或车辆。", ACTION_EXAMINE_AND_PICKUP, nullptr, near } );
+        result.push_back( { "查看 / 搜索", "走近并检查这个地块、家具或车辆。", ACTION_EXAMINE_AND_PICKUP, nullptr } );
         if( here.is_bashable( p ) ) {
-            result.push_back( { "砸毁", "按原版规则砸击这个物体。", ACTION_SMASH, nullptr, near && !self } );
+            result.push_back( { "砸毁", "走近并按原版规则砸击这个物体。", ACTION_SMASH, nullptr, !self } );
         }
     }
     if( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ) {
-        result.push_back( { "上楼", "先站到这格楼梯上，再上楼。", ACTION_MOVE_UP, nullptr, self } );
+        result.push_back( { "上楼", "走到这格楼梯上，再上楼。", ACTION_MOVE_UP, nullptr } );
     }
     if( here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) ) {
-        result.push_back( { "下楼", "先站到这格楼梯上，再下楼。", ACTION_MOVE_DOWN, nullptr, self } );
+        result.push_back( { "下楼", "走到这格楼梯上，再下楼。", ACTION_MOVE_DOWN, nullptr } );
     }
     return result;
 }
@@ -278,6 +409,16 @@ std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
         const auto action = you.get_next_auto_move_direction();
         if( action == ACTION_NULL ) { you.clear_destination(); return std::nullopt; }
         return request{ action, std::nullopt, false };
+    }
+    const int reach = choice.action == ACTION_MOVE_UP || choice.action == ACTION_MOVE_DOWN ? 0 : 1;
+    if( choice.action != ACTION_FIRE && square_dist( you.pos_bub( here ), p ) > reach ) {
+        if( !g || fp3d_input::vehicle_controls() ) { return std::nullopt; }
+        const auto route = g->safe_route_to( you, p, reach, []( const std::string &message ) { add_msg( message ); } );
+        if( !route || route->empty() ) { return std::nullopt; }
+        you.set_destination( *route, player_activity( approach_activity( choice, p, route->back(), here ) ) );
+        const auto step = you.get_next_auto_move_direction();
+        if( step == ACTION_NULL ) { you.clear_destination(); return std::nullopt; }
+        return request{ step, std::nullopt, false };
     }
     if( command == "FP3D_ATTACK" ) {
         return resolve( command, fp3d_targeting::target{ you.pos_abs(), here.get_abs( p ),

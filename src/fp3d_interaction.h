@@ -7,6 +7,8 @@
 #include "fp3d_quick_menu.h"
 class avatar;
 class map;
+class activity_actor;
+class JsonValue;
 namespace fp3d_interaction
 {
 struct request {
@@ -29,6 +31,9 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
         const avatar &you, const map &here );
 std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
         const tripoint_bub_ms &position, avatar &you, map &here );
+// The native destination activity submits its revalidated action at arrival.
+std::optional<request> take_2d_arrival();
+std::unique_ptr<activity_actor> deserialize_2d_interaction( JsonValue &data );
 }
 #endif
 #endif

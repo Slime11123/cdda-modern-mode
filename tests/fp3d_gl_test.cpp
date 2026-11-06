@@ -12,6 +12,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+#if defined(_MSC_VER) && defined(USE_VCPKG)
+#include <SDL2/SDL_opengl.h>
+#else
+#include <SDL_opengl.h>
+#endif
 
 #include "cata_catch.h"
 #include "calendar.h"
@@ -1370,6 +1375,76 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     }
                 }
                 save_scene( "native-four-storey-facade", render() );
+            }
+            {
+                restore_on_out_of_scope restore_scene( scene );
+                clear_avatar();
+                clear_map();
+                set_time_to_day();
+                avatar &you = get_avatar();
+                map &here = get_map();
+                const tripoint_bub_ms origin( 65, 65, 0 );
+                for( int y = -5; y <= 1; ++y ) {
+                    for( int x = -3; x <= 3; ++x ) {
+                        const bool edge = std::abs( x ) == 3 || y == -5 || y == 1;
+                        const bool opening = std::abs( x ) <= 1 && y >= -4 && y <= -1;
+                        here.ter_set( origin + tripoint_rel_ms( x, y, 0 ), ter_str_id( edge ? "t_wall" : "t_floor" ) );
+                        here.ter_set( origin + tripoint_rel_ms( x, y, 1 ), ter_str_id(
+                                          edge ? "t_wall" : opening ? "t_open_air" : "t_floor" ) );
+                        here.ter_set( origin + tripoint_rel_ms( x, y, 2 ), ter_str_id( "t_flat_roof" ) );
+                    }
+                }
+                you.setpos( here, origin + tripoint_rel_ms::above );
+                fp3d_snapshot::prepare_view( you, here );
+                scene = fp3d_snapshot::capture( you, here );
+                fp3d_snapshot::sprite actor;
+                actor.id = "mon_zombie";
+                actor.height = 1.8f;
+                actor.position = here.get_abs( origin + tripoint_rel_ms( 0, -3, 0 ) );
+                const auto look_down = [&]() {
+                    render(); // Prepare native materials and flush the SDL composition.
+                    glPushAttrib( GL_ALL_ATTRIB_BITS );
+                    glMatrixMode( GL_PROJECTION );
+                    glPushMatrix();
+                    glMatrixMode( GL_MODELVIEW );
+                    glPushMatrix();
+                    on_out_of_scope restore_gl( [&]() {
+                        fp3d_materials::unbind();
+                        glMatrixMode( GL_MODELVIEW );
+                        glPopMatrix();
+                        glMatrixMode( GL_PROJECTION );
+                        glPopMatrix();
+                        glPopAttrib();
+                    } );
+                    glViewport( 0, 0, width, height );
+                    glDisable( GL_SCISSOR_TEST );
+                    glClearColor( .03f, .04f, .05f, 1 );
+                    glDepthMask( GL_TRUE );
+                    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+                    glEnable( GL_DEPTH_TEST );
+                    REQUIRE( fp3d_materials::bind() );
+                    fp3d_scene::draw( scene, 0, 50, static_cast<float>( width ) / height, {} );
+                    std::vector<std::uint32_t> pixels( width * height );
+                    glReadPixels( 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
+                    // Match the SDL RGBA8888 screenshots and their top-left origin.
+                    for( auto &pixel : pixels ) { pixel = SDL_SwapBE32( pixel ); }
+                    for( int y = 0; y < height / 2; ++y ) {
+                        std::swap_ranges( pixels.begin() + y * width, pixels.begin() + ( y + 1 ) * width,
+                                          pixels.begin() + ( height - y - 1 ) * width );
+                    }
+                    return pixels;
+                };
+                const auto empty = look_down();
+                scene.sprites.push_back( actor );
+                const auto downstairs = look_down();
+                CHECK( downstairs != empty );
+                save_scene( "atrium-from-second-floor", downstairs );
+                for( auto &tile : scene.cells ) {
+                    if( tile.position.z() == origin.z() ) { tile.ceiling_present = true; }
+                }
+                const auto covered = look_down();
+                scene.sprites.clear();
+                CHECK( look_down() == covered );
             }
         }
 

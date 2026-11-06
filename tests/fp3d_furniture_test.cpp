@@ -250,6 +250,46 @@ TEST_CASE( "fp3d_chain_fence_uses_thin_connected_panels_and_posts", "[fp3d][furn
     CHECK_FALSE( fp3d_targeting::ray( scene, 0, 0, { .3f, 0 } ) );
 }
 
+TEST_CASE( "fp3d_coffee_table_is_low_and_supports_items_at_its_actual_top", "[fp3d][furniture][ray]" )
+{
+    const auto model = fp3d_furniture::describe( "f_coffee_table" );
+    REQUIRE( model );
+    CHECK( model->shape == fp3d_furniture::kind::coffee_table );
+    const auto &parts = fp3d_furniture::parts( model->shape );
+    REQUIRE( parts.size() == 5 );
+    for( const auto &part : parts ) {
+        CHECK( part.top <= .45f );
+    }
+    CHECK( fp3d_furniture::item_surface( model->shape ) == Approx( .45f ) );
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell table;
+    table.position = tripoint_abs_ms( 0, -2, 0 );
+    table.terrain = "t_floor";
+    table.furniture = model;
+    scene.cells.push_back( table );
+    const auto top = fp3d_targeting::ray( scene, 0, 30 );
+    REQUIRE( top );
+    CHECK( top->id == "f_coffee_table" );
+    CHECK( top->type == fp3d_targeting::kind::furniture );
+
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.furn_set( p, furn_str_id( "f_coffee_table" ) );
+    here.add_item_or_charges( p, item( itype_id( "rock" ) ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto captured = fp3d_snapshot::capture( you, here );
+    const auto rock = std::find_if( captured.sprites.begin(), captured.sprites.end(), [&]( const auto &image ) {
+        return image.position == here.get_abs( p ) && image.id == "rock";
+    } );
+    REQUIRE( rock != captured.sprites.end() );
+    CHECK( rock->elevation == Approx( .45f ) );
+}
+
 TEST_CASE( "fp3d_ladders_and_downspouts_keep_native_links_and_model_targets", "[fp3d][multilevel][ray]" )
 {
     clear_avatar();

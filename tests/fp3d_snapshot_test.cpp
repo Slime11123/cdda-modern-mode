@@ -876,17 +876,62 @@ TEST_CASE( "fp3d_visible_ceiling_boundary_keeps_upstairs_private", "[fp3d][multi
     REQUIRE( room );
     CHECK_FALSE( room->ceiling_present );
 
-    // Indoor roofs that are represented by an open-air terrain cell still
-    // need a ceiling surface in the 3D presentation.
+    // Being indoors does not put a ceiling across a known open-air volume.
     REQUIRE( here.ter_set( p, ter_str_id( "t_floor" ) ) );
     REQUIRE( here.ter_set( overhead, ter_str_id( "t_open_air" ) ) );
     refresh_vision( here, p.z() );
+    fp3d_snapshot::prepare_view( you, here );
     CHECK_FALSE( here.has_floor( overhead ) );
     CHECK_FALSE( here.is_outside( p ) );
     const auto indoor_open = fp3d_snapshot::capture( you, here );
     room = find_cell( indoor_open, here.get_abs( p ) );
     REQUIRE( room );
-    CHECK( room->ceiling_present );
+    CHECK_FALSE( room->ceiling_present );
+}
+
+TEST_CASE( "fp3d_upstairs_atrium_does_not_cover_the_visible_lower_room", "[fp3d][multilevel]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto origin = you.pos_bub( here );
+    for( int y = -5; y <= 1; ++y ) {
+        for( int x = -3; x <= 3; ++x ) {
+            const bool edge = std::abs( x ) == 3 || y == -5 || y == 1;
+            const bool opening = std::abs( x ) <= 1 && y >= -4 && y <= -1;
+            here.ter_set( origin + tripoint_rel_ms( x, y, 0 ), ter_str_id( edge ? "t_wall" : "t_floor" ) );
+            here.ter_set( origin + tripoint_rel_ms( x, y, 1 ), ter_str_id(
+                              edge ? "t_wall" : opening ? "t_open_air" : "t_floor" ) );
+            here.ter_set( origin + tripoint_rel_ms( x, y, 2 ), ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    you.setpos( here, origin + tripoint_rel_ms::above );
+    const auto lower = origin + tripoint_rel_ms( 0, -2, 0 );
+    const auto opening = lower + tripoint_rel_ms::above;
+    here.add_item_or_charges( lower, item( itype_id( "rock" ) ) );
+    here.invalidate_visibility_cache();
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE_FALSE( here.has_floor( opening ) );
+    REQUIRE_FALSE( here.is_outside( lower ) );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    const auto *floor = find_cell( scene, here.get_abs( lower ) );
+    REQUIRE( floor );
+    CHECK( floor->floor_present );
+    CHECK_FALSE( floor->ceiling_present );
+    CHECK( std::any_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto &image ) {
+        return image.position == here.get_abs( lower ) && image.id == "rock";
+    } ) );
+    if( const auto *air = find_cell( scene, here.get_abs( opening ) ) ) {
+        CHECK_FALSE( air->floor_present );
+        CHECK( air->ceiling_present ); // The real roof remains one storey higher.
+    }
+    REQUIRE( here.ter_set( opening, ter_str_id( "t_floor" ) ) );
+    here.invalidate_visibility_cache();
+    fp3d_snapshot::prepare_view( you, here );
+    const auto closed = fp3d_snapshot::capture( you, here );
+    if( const auto *room = find_cell( closed, here.get_abs( lower ) ) ) {
+        CHECK( room->ceiling_present );
+    }
 }
 
 TEST_CASE( "fp3d_multilevel_capture_budget", "[fp3d][multilevel]" )

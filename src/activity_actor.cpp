@@ -20,6 +20,9 @@
 
 #include "action.h"
 #include "activity_actor_definitions.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_interaction.h"
+#endif
 #include "activity_handlers.h"
 #include "advanced_inv.h"
 #include "avatar.h"
@@ -9417,6 +9420,11 @@ deserialize_functions = {
     { ACT_MEDITATE, &meditate_activity_actor::deserialize },
     { ACT_MIGRATION_CANCEL, &migration_cancel_activity_actor::deserialize },
     { ACT_MILK, &milk_activity_actor::deserialize },
+#if defined(TILES) && defined(ENABLE_FP3D)
+    { activity_id( "ACT_MODERN_2D_INTERACT" ), &fp3d_interaction::deserialize_2d_interaction },
+#else
+    { activity_id( "ACT_MODERN_2D_INTERACT" ), &migration_cancel_activity_actor::deserialize },
+#endif
     { ACT_MOP, &mop_activity_actor::deserialize },
     { ACT_MOVE_ITEMS, &move_items_activity_actor::deserialize },
     { ACT_OPEN_GATE, &open_gate_activity_actor::deserialize },

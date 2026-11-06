@@ -691,14 +691,18 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 tile.floor_present = ( visible || tile.exterior_only ) ? here.has_floor( p ) :
                                      !definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR ) &&
                                      !definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR_WATER );
+                const auto overhead = p + tripoint_rel_ms::above;
+                const bool visible_air_above = p.z() < result.max_z &&
+                                               ( perception[index( overhead )] & air_bit );
                 if( ( visible || tile.exterior_only ) && !blind && here.supports_zlevels() ) {
-                    const auto overhead = p + tripoint_rel_ms( 0, 0, 1 );
                     // Copy only the visible room's enclosing boundary. Never
                     // copy the unseen upstairs terrain ID, contents or layout.
                     tile.ceiling_present = here.inbounds( overhead ) &&
-                                           ( here.has_floor( overhead ) || !here.is_outside( p ) );
+                                           ( here.has_floor( overhead ) ||
+                                             ( !here.is_outside( p ) && !visible_air_above ) );
                 }
-                if( tile.known == knowledge::remembered && definition.has_flag( ter_furn_flag::TFLAG_INDOORS ) ) {
+                if( tile.known == knowledge::remembered && !visible_air_above &&
+                    definition.has_flag( ter_furn_flag::TFLAG_INDOORS ) ) {
                     // Remembered indoor geometry must enclose the remembered room
                     // too; never inspect the live, unseen upstairs here.
                     tile.ceiling_present = true;

@@ -507,6 +507,14 @@
     "can_resume": false
   },
   {
+    "id": "ACT_MODERN_2D_INTERACT",
+    "type": "activity_type",
+    "activity_level": "NO_EXERCISE",
+    "verb": "interacting",
+    "based_on": "neither",
+    "can_resume": false
+  },
+  {
     "id": "ACT_MOVE_LOOT",
     "type": "activity_type",
     "activity_level": "MODERATE_EXERCISE",

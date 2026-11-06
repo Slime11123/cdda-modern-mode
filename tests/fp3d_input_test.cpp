@@ -12,6 +12,19 @@
 #include "path_info.h"
 #include "sdl_wrappers.h"
 
+TEST_CASE( "mode_settings_shortcuts_accept_classic_and_modern_key_events", "[fp3d][input]" )
+{
+    for( const int number : { 5, 6 } ) {
+        const int sdl_key = number == 5 ? SDLK_F5 : SDLK_F6;
+        CHECK( fp3d_input::is_mode_settings_key( input_event( sdl_key, input_event_t::keyboard_code ) ) );
+        CHECK( fp3d_input::is_mode_settings_key( input_event( KEY_F( number ), input_event_t::keyboard_char ) ) );
+        CHECK_FALSE( fp3d_input::is_mode_settings_key( input_event( KEY_F( number ), input_event_t::mouse ) ) );
+    }
+    CHECK_FALSE( fp3d_input::is_mode_settings_key( input_event( SDLK_F4, input_event_t::keyboard_code ) ) );
+    CHECK_FALSE( fp3d_input::is_mode_settings_key( input_event( '?', input_event_t::keyboard_char ) ) );
+    CHECK_FALSE( fp3d_input::is_mode_settings_key( input_event() ) );
+}
+
 TEST_CASE( "fp3d_three_modes_keep_2d_movement_independent", "[fp3d][input]" )
 {
     restore_on_out_of_scope restore_manager( inp_mngr );

@@ -680,7 +680,16 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         return result;
     }
     // The remaining layouts are specific to the Undead People artwork.
-    if( uses( "f_cupboard" ) ) {
+    if( uses( "f_coffee_table" ) ) {
+        // The artwork is a low table silhouette surrounded by transparency.
+        // Map the wooden top, apron and leg wood to their physical parts only.
+        const auto wood = crop( 3, 14, 5, 18 );
+        result.top = result.front = result.side = wood;
+        if( part_index == 0 ) {
+            result.top = crop( 3, 13, 28, 18 );
+            result.front = result.side = crop( 3, 19, 28, 19 );
+        }
+    } else if( uses( "f_cupboard" ) ) {
         result.top = crop( 1, 1, 30, 9 );
         result.front = crop( 1, 11, 30, 30 );
         result.side = crop( 1, 12, 3, 29 );

@@ -138,7 +138,7 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
             furniture.insert( furniture.end(),
             { "f_bed_frame", "f_bench", "f_bench_park", "f_armchair", "f_fireplace",
               "f_washer", "f_dryer", "f_dishwasher", "f_woodstove",
-              "f_stool", "f_glass_fridge", "f_chair" } );
+              "f_stool", "f_glass_fridge", "f_chair", "f_coffee_table" } );
         }
         for( const std::string &id : furniture ) {
             CAPTURE( id );
@@ -150,6 +150,21 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
             REQUIRE( tile.furniture );
             const auto model = render();
             CHECK( model != bare_floor );
+            if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_coffee_table" ) {
+                unsigned wood = 0;
+                unsigned pale = 0;
+                for( size_t i = 0; i < model.size(); ++i ) {
+                    const int red = model[i] >> 24;
+                    const int green = ( model[i] >> 16 ) & 0xff;
+                    const int blue = ( model[i] >> 8 ) & 0xff;
+                    if( model[i] != bare_floor[i] ) {
+                        wood += red > blue + 20 && red > green;
+                        pale += red > 100 && std::abs( red - green ) < 8 && std::abs( red - blue ) < 8;
+                    }
+                }
+                CHECK( wood > 100 );
+                CHECK( pale < 10 );
+            }
             if( pack == "UNDEAD_PEOPLE_BASE" && id == "f_oven" ) {
                 tile.appliance = "ap_oven";
                 const auto installed = render();

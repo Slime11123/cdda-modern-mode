@@ -138,6 +138,12 @@ class tab_manager
         std::vector<std::string> &tab_names;
         std::map<size_t, inclusive_rectangle<point>> tab_map;
         point window_pos;
+        struct click_target {
+            inclusive_rectangle<point> area;
+            std::string action;
+            std::function<void()> select;
+        };
+        std::vector<click_target> click_targets;
     public:
         bool complete = false;
         bool quit = false;
@@ -147,13 +153,17 @@ class tab_manager
             position( tab_names ) {
         }
 
-        void draw( const catacurses::window &w );
+        void draw( const catacurses::window &w, const input_context &ctxt );
         bool handle_input( const std::string &action, const input_context &ctxt );
         void set_up_tab_navigation( input_context &ctxt );
+        void add_click( const catacurses::window &w, const point &from, const point &to,
+                        const std::string &action, const std::function<void()> &select = {} );
+        std::string get_input( input_context &ctxt );
 };
 
-void tab_manager::draw( const catacurses::window &w )
+void tab_manager::draw( const catacurses::window &w, const input_context &ctxt )
 {
+    click_targets.clear();
     std::pair<std::vector<std::string>, size_t> fitted_tabs = fit_tabs_to_width( getmaxx( w ),
             position.cur_index(), tab_names );
     tab_map = draw_tabs( w, fitted_tabs.first, position.cur_index() - fitted_tabs.second,
@@ -166,6 +176,73 @@ void tab_manager::draw( const catacurses::window &w )
     mvwhline( w, point( 1, 5 ), LINE_OXOX, TERMX - 2 ); // -
     mvwaddch( w, point( TERMX - 1, 5 ), LINE_XOXX ); // -|
     wattroff( w, BORDER_COLOR );
+    int x = std::max( 2, getmaxx( w ) - 60 );
+    for( const auto &button : {
+             std::pair{ _( "Back" ), "QUIT" },
+             std::pair{ _( "上一页" ), "PREV_TAB" },
+             std::pair{ position.cur_index() + 1 == static_cast<int>( tab_names.size() ) ? _( "Finish" ) : _( "下一页" ), "NEXT_TAB" }
+         } ) {
+        const std::string label = "[ " + std::string( button.first ) + " ]";
+        const int width = utf8_width( label );
+        mvwprintz( w, point( x, getmaxy( w ) - 1 ), c_light_green, label );
+        add_click( w, point( x, getmaxy( w ) - 1 ), point( x + width - 1, getmaxy( w ) - 1 ),
+                   button.second );
+        x += width + 2;
+    }
+    x = 2;
+    for( const auto &button : {
+             std::pair{ _( "筛选" ), "FILTER" }, std::pair{ _( "排序" ), "SORT" },
+             std::pair{ _( "性别" ), "CHANGE_GENDER" }, std::pair{ _( "装束" ), "CHANGE_OUTFIT" },
+             std::pair{ _( "灾变日期" ), "CHANGE_START_OF_CATACLYSM" },
+             std::pair{ _( "开局日期" ), "CHANGE_START_OF_GAME" },
+             std::pair{ _( "重置日期" ), "RESET_CALENDAR" },
+             std::pair{ _( "随机" ), "RANDOMIZE" },
+             std::pair{ _( "保存模板" ), "SAVE_TEMPLATE" },
+             std::pair{ _( "随机姓名" ), "RANDOMIZE_CHAR_NAME" },
+             std::pair{ _( "随机外观" ), "RANDOMIZE_CHAR_DESCRIPTION" }
+         } ) {
+        if( !ctxt.is_registered_action( button.second ) ) {
+            continue;
+        }
+        if( ctxt.is_registered_action( "SAVE_TEMPLATE" ) &&
+            std::string( button.second ).compare( 0, 7, "CHANGE_" ) == 0 ) {
+            continue; // These fields can be edited directly in the summary.
+        }
+        const std::string label = "[ " + std::string( button.first ) + " ]";
+        const int width = utf8_width( label );
+        if( x + width >= getmaxx( w ) ) {
+            break;
+        }
+        mvwprintz( w, point( x, 2 ), c_light_green, label );
+        add_click( w, point( x, 2 ), point( x + width - 1, 2 ), button.second );
+        x += width + 1;
+    }
+}
+
+void tab_manager::add_click( const catacurses::window &w, const point &from, const point &to,
+                             const std::string &action, const std::function<void()> &select )
+{
+    const point origin( getbegx( w ), getbegy( w ) );
+    click_targets.push_back( { { origin + from, origin + to }, action, select } );
+}
+
+std::string tab_manager::get_input( input_context &ctxt )
+{
+    const std::string action = ctxt.handle_input();
+    if( action == "SELECT" ) {
+        const std::optional<point> coord = ctxt.get_coordinates_text( catacurses::stdscr );
+        if( coord ) {
+            for( const click_target &target : click_targets ) {
+                if( target.area.contains( *coord ) ) {
+                    if( target.select ) {
+                        target.select();
+                    }
+                    return target.action;
+                }
+            }
+        }
+    }
+    return action;
 }
 
 bool tab_manager::handle_input( const std::string &action, const input_context &ctxt )
@@ -179,7 +256,7 @@ bool tab_manager::handle_input( const std::string &action, const input_context &
     } else if( action == "SELECT" ) {
         std::optional<point> coord = ctxt.get_coordinates_text( catacurses::stdscr );
         if( coord.has_value() ) {
-            point local_coord = coord.value() + window_pos;
+            point local_coord = coord.value() - window_pos;
             for( const auto &entry : tab_map ) {
                 if( entry.second.contains( local_coord ) ) {
                     position.set_index( entry.first );
@@ -1137,7 +1214,7 @@ static void draw_filter_and_sorting_indicators( const catacurses::window &w,
         ? string_format( _( "[%s] filter" ), colorize( ctxt.get_desc( "FILTER" ), c_green ) )
         : std::string( filterstring );
     nc_color current_color = BORDER_COLOR;
-    print_colored_text( w, point( 2, getmaxy( w ) - 1 ), current_color, BORDER_COLOR,
+    trim_and_print( w, point( 2, getmaxy( w ) - 1 ), std::max( 1, getmaxx( w ) - 64 ), current_color,
                         string_format( "<%1s>-<%2s>", sorting_indicator, filter_indicator ) );
 }
 
@@ -1237,7 +1314,7 @@ void set_points( tab_manager &tabs, avatar &u, pool_type &pool )
             init_windows( ui );
         }
         werase( w );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
 
         std::string title = std::get<1>( opts[highlighted] );
         std::string description = std::get<2>( opts[highlighted] );
@@ -1271,6 +1348,8 @@ void set_points( tab_manager &tabs, avatar &u, pool_type &pool )
                 // The list of options only clutters up the screen in screen reader mode
             } else {
                 mvwprintz( w, opt_pos, color, std::get<1>( opts[i] ) );
+                tabs.add_click( w, point( 2, 6 + i ), point( iSecondColumn - 1, 6 + i ),
+                "CONFIRM", [&, i]() { highlighted = i; } );
             }
         }
 
@@ -1287,7 +1366,7 @@ void set_points( tab_manager &tabs, avatar &u, pool_type &pool )
     const int opts_length = static_cast<int>( opts.size() );
     do {
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         if( tabs.handle_input( action, ctxt ) ) {
             break; // Tab has changed or user has quit the screen
         } else if( navigate_ui_list( action, highlighted, 1, opts_length, true ) ) {
@@ -1542,7 +1621,7 @@ void set_stats( tab_manager &tabs, avatar &u, pool_type pool )
             init_windows( ui );
         }
         werase( w );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         mvwputch( w, point( iSecondColumn, iHeaderHeight - 1 ), BORDER_COLOR, LINE_OXXX );  // '┬'
         // Helptext stats tab
         fold_and_print( w, point( 2, TERMY - iHelpHeight - 1 ), getmaxx( w ) - 4, COL_NOTE_MINOR,
@@ -1556,8 +1635,17 @@ void set_stats( tab_manager &tabs, avatar &u, pool_type pool )
                 mvwprintz( w, point( 2, i + iHeaderHeight ), i == sel ? COL_SELECT : c_light_gray, "%s:",
                            stat_labels[i].translated() );
                 mvwprintz( w, point( 16, i + iHeaderHeight ), c_light_gray, "%2d", *stats[i] );
-                mvwprintz( w, point( 19, i + iHeaderHeight ), c_light_gray, "(%s)",
+                mvwprintz( w, point( 12, i + iHeaderHeight ), c_light_green, "[-]" );
+                mvwprintz( w, point( 20, i + iHeaderHeight ), c_light_green, "[+]" );
+                mvwprintz( w, point( 24, i + iHeaderHeight ), c_light_gray, "(%s)",
                            stat_level_description( *stats[i] ) );
+                const auto select_stat = [&, i]() { sel = i; details_recalc = true; };
+                tabs.add_click( w, point( 12, i + iHeaderHeight ), point( 14, i + iHeaderHeight ),
+                                "LEFT", select_stat );
+                tabs.add_click( w, point( 20, i + iHeaderHeight ), point( 22, i + iHeaderHeight ),
+                                "RIGHT", select_stat );
+                tabs.add_click( w, point( 2, i + iHeaderHeight ), point( 11, i + iHeaderHeight ),
+                                "", select_stat );
             }
         }
 
@@ -1613,7 +1701,7 @@ void set_stats( tab_manager &tabs, avatar &u, pool_type pool )
 
     do {
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         const int id_for_curr_description = sel;
 
         if( tabs.handle_input( action, ctxt ) ) {
@@ -1868,7 +1956,7 @@ void set_traits( tab_manager &tabs, avatar &u, pool_type pool )
     ui.on_redraw( [&]( ui_adaptor & ui ) {
         werase( w );
 
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         wattron( w, BORDER_COLOR );
         for( int i = 1; i < 3; ++i ) {
             mvwaddch( w, point( i * page_width, iHeaderHeight - 1 ), LINE_OXXX );  // '┬'
@@ -1977,6 +2065,12 @@ void set_traits( tab_manager &tabs, avatar &u, pool_type pool )
                 } else {
                     mvwprintz( w, opt_pos, cLine,
                                utf8_truncate( cur_trait->name(), page_width - 2 ) );
+                    tabs.add_click( w, opt_pos, point( cur_line_x + page_width - 3, cur_line_y ),
+                    "CONFIRM", [&, i, iCurrentPage]() {
+                        iCurWorkingPage = iCurrentPage;
+                        iCurrentLine[iCurrentPage] = i;
+                        details_recalc = true;
+                    } );
                 }
             }
 
@@ -2085,7 +2179,7 @@ void set_traits( tab_manager &tabs, avatar &u, pool_type pool )
         }
 
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         std::array< int, 3> cur_sb_pos = iStartPos;
         bool scrollbar_handled = false;
         const int iPrevWorkingPage = iCurWorkingPage;
@@ -2568,7 +2662,7 @@ void set_profession( tab_manager &tabs, avatar &u, pool_type pool )
 
     ui.on_redraw( [&]( ui_adaptor & ui ) {
         werase( w );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         mvwputch( w, point( TERMX / 2, iHeaderHeight - 1 ), BORDER_COLOR, LINE_OXXX );  // '┬'
         mvwputch( w, point( TERMX / 2, TERMY - 1 ), BORDER_COLOR, LINE_XXOX );  // '┴'
         draw_filter_and_sorting_indicators( w, ctxt, filterstring, profession_sorter );
@@ -2642,6 +2736,8 @@ void set_profession( tab_manager &tabs, avatar &u, pool_type pool )
                 const point opt_pos( 2, iHeaderHeight + i - iStartPos );
                 mvwprintz( w, opt_pos, col,
                            sorted_profs[i]->gender_appropriate_name( u.male ) );
+                tabs.add_click( w, opt_pos, point( TERMX / 2 - 1, opt_pos.y ),
+                "CONFIRM", [&, i]() { cur_id = i; details_recalc = true; } );
             }
         }
 
@@ -2676,7 +2772,7 @@ void set_profession( tab_manager &tabs, avatar &u, pool_type pool )
         }
 
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         const int recmax = profs_length;
         const int scroll_rate = recmax > 20 ? 10 : 2;
         const int id_for_curr_description = cur_id;
@@ -2924,7 +3020,7 @@ void set_hobbies( tab_manager &tabs, avatar &u, pool_type pool )
 
     ui.on_redraw( [&]( ui_adaptor & ui ) {
         werase( w );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         mvwputch( w, point( TERMX / 2, iHeaderHeight - 1 ), BORDER_COLOR, LINE_OXXX );  // '┬'
         mvwputch( w, point( TERMX / 2, TERMY - 1 ), BORDER_COLOR, LINE_XXOX );  // '┴'
         draw_filter_and_sorting_indicators( w, ctxt, filterstring, profession_sorter );
@@ -2984,6 +3080,8 @@ void set_hobbies( tab_manager &tabs, avatar &u, pool_type pool )
             } else {
                 mvwprintz( w, opt_pos, col,
                            sorted_hobbies[i]->gender_appropriate_name( u.male ) );
+                tabs.add_click( w, opt_pos, point( TERMX / 2 - 1, opt_pos.y ),
+                "CONFIRM", [&, i]() { cur_id = i; details_recalc = true; } );
             }
         }
 
@@ -3028,7 +3126,7 @@ void set_hobbies( tab_manager &tabs, avatar &u, pool_type pool )
 
         ui_manager::redraw();
         const int id_for_curr_description = cur_id;
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         const int recmax = hobbies_length;
         const int scroll_rate = recmax > 20 ? 10 : 2;
         int scrollbar_pos = iStartPos;
@@ -3227,7 +3325,7 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
     catacurses::window w_details_pane;
     scrolling_text_view details( w_details_pane );
     bool details_recalc = true;
-    const int iSecondColumn = 31;
+    const int iSecondColumn = 43;
     int iContentHeight = 0;
     const int iHeaderHeight = 6;
     // guessing most likely, but it doesn't matter, it will be recalculated if wrong
@@ -3301,7 +3399,7 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
         }
         werase( w );
         werase( w_list );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         mvwputch( w, point( iSecondColumn, iHeaderHeight - 1 ), BORDER_COLOR, LINE_OXXX );  // '┬'
         draw_points( w, pool, u );
         // Helptext skill tab
@@ -3365,7 +3463,23 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
                 // This list only clutters up the screen in screen reader mode
             } else {
                 nc_color dummy = c_light_gray;
-                print_colored_text( w_list, opt_pos, dummy, c_light_gray, skill_text );
+                trim_and_print( w_list, opt_pos, getmaxx( w_list ) - 10, dummy, skill_text );
+                if( !skill_list[i].is_header ) {
+                    const int minus_x = getmaxx( w_list ) - 8;
+                    const int plus_x = getmaxx( w_list ) - 4;
+                    mvwprintz( w_list, point( minus_x, y ), c_light_green, "[-]" );
+                    mvwprintz( w_list, point( plus_x, y ), c_light_green, "[+]" );
+                    const auto select_skill = [&, i]() {
+                        cur_pos = i;
+                        currentSkill = skill_list[i].skill;
+                        details_recalc = true;
+                    };
+                    tabs.add_click( w_list, point( minus_x, y ), point( minus_x + 2, y ),
+                                    "LEFT", select_skill );
+                    tabs.add_click( w_list, point( plus_x, y ), point( plus_x + 2, y ),
+                                    "RIGHT", select_skill );
+                    tabs.add_click( w_list, opt_pos, point( minus_x - 1, y ), "", select_skill );
+                }
             }
         }
 
@@ -3397,7 +3511,7 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
 
     do {
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         const int pos_for_curr_description = cur_pos;
         int scrollbar_pos = cur_offset;
 
@@ -3638,7 +3752,7 @@ void set_scenario( tab_manager &tabs, avatar &u, pool_type pool )
 
     ui.on_redraw( [&]( ui_adaptor & ui ) {
         werase( w );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         mvwputch( w, point( TERMX / 2, iHeaderHeight - 1 ), BORDER_COLOR, LINE_OXXX );  // '┬'
         mvwputch( w, point( TERMX / 2, TERMY - 1 ), BORDER_COLOR, LINE_XXOX );  // '┴'
         draw_filter_and_sorting_indicators( w, ctxt, filterstring, scenario_sorter );
@@ -3713,6 +3827,8 @@ void set_scenario( tab_manager &tabs, avatar &u, pool_type pool )
             } else {
                 mvwprintz( w, opt_pos, col,
                            sorted_scens[i]->gender_appropriate_name( u.male ) );
+                tabs.add_click( w, opt_pos, point( TERMX / 2 - 1, opt_pos.y ),
+                "CONFIRM", [&, i]() { cur_id = i; details_recalc = true; } );
             }
         }
 
@@ -3756,7 +3872,7 @@ void set_scenario( tab_manager &tabs, avatar &u, pool_type pool )
         }
 
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
         const int scroll_rate = scens_length > 20 ? 5 : 2;
         const int id_for_curr_description = cur_id;
         int scrollbar_pos = iStartPos;
@@ -4073,37 +4189,35 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
     catacurses::window w_blood;
     catacurses::window w_calendar;
     const auto init_windows = [&]( ui_adaptor & ui ) {
-        const int freeWidth = TERMX - FULL_SCREEN_WIDTH;
-        isWide = freeWidth > 15;
-        const int beginx2 = 52;
-        const int ncol2 = 40;
-        const int beginx3 = TERMX <= 88 ? TERMX - TERMX / 4 : 90;
-        const int ncol3 = TERMX - beginx3 - 2;
-        const int beginx4 = TERMX <= 130 ? TERMX - TERMX / 5 : 128;
-        const int ncol4 = TERMX - beginx4 - 2;
+        isWide = TERMX >= 100 && TERMY >= 38;
         const int ncol_small = ( TERMX / 2 ) - 2;
         const int begin_sncol = TERMX / 2;
         if( isWide ) {
+            const int column_width = ( TERMX - 8 ) / 3;
+            const int middle = column_width + 4;
+            const int right = column_width * 2 + 6;
+            const int bottom = std::max( 30, TERMY - iHelpHeight - 2 );
+            const int extra_height = std::max( 2, ( bottom - 22 ) / 3 );
             w = catacurses::newwin( TERMY, TERMX, point::zero );
-            w_name = catacurses::newwin( 2, ncol2 + 2, point( 2, 6 ) );
-            w_gender = catacurses::newwin( 1, ncol2 + 2, point( 2, 7 ) );
-            w_outfit = catacurses::newwin( 1, ncol2 + 1, point( 2, 8 ) );
-            w_location = catacurses::newwin( 1, ncol3, point( beginx3, 6 ) );
-            w_vehicle = catacurses::newwin( 1, ncol3, point( beginx3, 7 ) );
-            w_addictions = catacurses::newwin( 1, ncol3, point( beginx3, 8 ) );
-            w_stats = catacurses::newwin( 6, 20, point( 2, 10 ) );
-            w_traits = catacurses::newwin( TERMY - 11, ncol2, point( beginx2, 10 ) );
-            w_calendar = catacurses::newwin( 4, ncol3, point( beginx3, 10 ) );
-            w_bionics = catacurses::newwin( TERMY - 16, ncol3, point( beginx3, 15 ) );
-            w_proficiencies = catacurses::newwin( TERMY - 21, 19, point( 2, 16 ) );
-            // Extra - 11 to avoid overlap with long text in w_guide.
-            w_hobbies = catacurses::newwin( TERMY - 11 - 11, ncol4, point( beginx4, 10 ) );
-            w_scenario = catacurses::newwin( 1, ncol2, point( beginx2, 3 ) );
-            w_profession = catacurses::newwin( 1, ncol3, point( beginx3, 3 ) );
-            w_skills = catacurses::newwin( TERMY - 11, 27, point( 22, 10 ) );
-            w_height = catacurses::newwin( 1, ncol2, point( beginx2, 6 ) );
-            w_age = catacurses::newwin( 1, ncol2, point( beginx2, 7 ) );
-            w_blood = catacurses::newwin( 1, ncol2, point( beginx2, 8 ) );
+            w_name = catacurses::newwin( 1, column_width, point( 2, 8 ) );
+            w_gender = catacurses::newwin( 1, column_width, point( 2, 10 ) );
+            w_outfit = catacurses::newwin( 1, column_width, point( 2, 12 ) );
+            w_age = catacurses::newwin( 1, column_width, point( 2, 14 ) );
+            w_height = catacurses::newwin( 1, column_width, point( 2, 16 ) );
+            w_blood = catacurses::newwin( 1, column_width, point( 2, 18 ) );
+            w_traits = catacurses::newwin( extra_height, column_width, point( 2, 22 ) );
+            w_bionics = catacurses::newwin( extra_height, column_width, point( 2, 22 + extra_height ) );
+            w_proficiencies = catacurses::newwin( bottom - 22 - extra_height * 2, column_width,
+                                               point( 2, 22 + extra_height * 2 ) );
+            w_scenario = catacurses::newwin( 1, column_width, point( middle, 8 ) );
+            w_profession = catacurses::newwin( 1, column_width, point( middle, 10 ) );
+            w_location = catacurses::newwin( 1, column_width, point( middle, 12 ) );
+            w_calendar = catacurses::newwin( 4, column_width, point( middle, 14 ) );
+            w_vehicle = catacurses::newwin( 1, column_width, point( middle, 19 ) );
+            w_addictions = catacurses::newwin( 2, column_width, point( middle, 21 ) );
+            w_hobbies = catacurses::newwin( bottom - 25, column_width, point( middle, 25 ) );
+            w_stats = catacurses::newwin( 6, column_width, point( right, 8 ) );
+            w_skills = catacurses::newwin( bottom - 15, column_width, point( right, 15 ) );
             ui.position_from_window( w );
         } else {
             w = catacurses::newwin( TERMY, TERMX, point::zero );
@@ -4197,21 +4311,34 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
 
     bool no_name_entered = false;
     ui.on_redraw( [&]( ui_adaptor & ui ) {
-        const std::string help_text = assemble_description_help( ctxt, allow_reroll );
+        const std::string help_text = isWide ?
+                                     _( "点击基本信息或日期直接编辑；点击场景、职业、背景、属性、特性或技能可返回对应页面。\n完成调整后，点击右下角“完成”创建角色。" ) :
+                                     assemble_description_help( ctxt, allow_reroll );
         const int new_iHelpHeight = foldstring( help_text, getmaxx( w ) - 4 ).size();
         if( new_iHelpHeight != iHelpHeight ) {
             iHelpHeight = new_iHelpHeight;
             init_windows( ui );
         }
         werase( w );
-        tabs.draw( w );
+        tabs.draw( w, ctxt );
         draw_points( w, pool, you );
 
-        //Draw the line between editable and non-editable stuff.
+        // Group identity, starting conditions and abilities in reading order.
         wattron( w, BORDER_COLOR );
-        mvwaddch( w, point( 0,                9 ), LINE_XXXO ); // |-
-        mvwhline( w, point( 1,                9 ), LINE_OXOX, getmaxx( w ) - 2 ); // |
-        mvwaddch( w, point( getmaxx( w ) - 1, 9 ), LINE_XOXX );  // -|
+        if( isWide ) {
+            const int column_width = ( TERMX - 8 ) / 3;
+            const int bottom = TERMY - iHelpHeight - 2;
+            for( const int x : { column_width + 3, column_width * 2 + 5 } ) {
+                mvwvline( w, point( x, 6 ), LINE_XOXO, bottom - 6 );
+            }
+            mvwprintz( w, point( 2, 6 ), c_light_green, _( "基本信息 · 点击编辑" ) );
+            mvwprintz( w, point( column_width + 4, 6 ), c_light_green, _( "开局设置 · 点击调整" ) );
+            mvwprintz( w, point( column_width * 2 + 6, 6 ), c_light_green, _( "能力概览 · 点击调整" ) );
+        } else {
+            mvwaddch( w, point( 0, 9 ), LINE_XXXO );
+            mvwhline( w, point( 1, 9 ), LINE_OXOX, getmaxx( w ) - 2 );
+            mvwaddch( w, point( getmaxx( w ) - 1, 9 ), LINE_XOXX );
+        }
         wattroff( w, BORDER_COLOR );
         wnoutrefresh( w );
 
@@ -4243,7 +4370,8 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             if( current_traits.empty() ) {
                 wprintz( w_traits, c_light_red, _( "None!" ) );
             } else {
-                for( size_t i = 0; i < current_traits.size(); i++ ) {
+                for( size_t i = 0; i < current_traits.size() &&
+                     i + 1 < static_cast<size_t>( getmaxy( w_traits ) ); i++ ) {
                     const trait_and_var current_trait = current_traits[i];
                     trim_and_print( w_traits, point( 0, i + 1 ), getmaxx( w_traits ) - 1,
                                     current_trait.trait->get_display_color(), current_trait.name() );
@@ -4263,7 +4391,12 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
                                           std::make_pair( -level_b, b.name() ) );
             } );
 
-            int line = 1;
+            struct summary_skill {
+                const Skill *skill;
+                int level;
+                int experience;
+            };
+            std::vector<summary_skill> displayed_skills;
             bool has_skills = false;
             profession::StartingSkillList list_skills = you.prof->skills();
 
@@ -4306,12 +4439,24 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
 
                 if( level > 0 ) {
                     const int exp_percent = 100 * leftover_exp / exp_to_level;
-                    mvwprintz( w_skills, point( 0, line ), c_light_gray,
-                               elem->name() + ":" );
-                    right_print( w_skills, line, 1, c_light_gray, string_format( "%d(%2d%%)", level, exp_percent ) );
-                    line++;
+                    displayed_skills.push_back( { elem, level, exp_percent } );
                     has_skills = true;
                 }
+            }
+            std::sort( displayed_skills.begin(), displayed_skills.end(),
+            []( const summary_skill &a, const summary_skill &b ) {
+                return localized_compare( std::make_pair( -a.level, a.skill->name() ),
+                                          std::make_pair( -b.level, b.skill->name() ) );
+            } );
+            int line = 1;
+            for( const summary_skill &entry : displayed_skills ) {
+                if( line >= getmaxy( w_skills ) ) {
+                    break;
+                }
+                trim_and_print( w_skills, point( 0, line ), getmaxx( w_skills ) - 12,
+                                c_light_gray, entry.skill->name() + ":" );
+                right_print( w_skills, line++, 1, c_light_gray,
+                             string_format( "%d(%2d%%)", entry.level, entry.experience ) );
             }
 
             if( !has_skills ) {
@@ -4390,6 +4535,18 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
         char_creation::draw_height( ui, w_height, you, current_selector == char_creation::HEIGHT );
         char_creation::draw_blood( ui, w_blood, you, current_selector == char_creation::BLOOD );
         char_creation::draw_location( ui, w_location, you, current_selector == char_creation::LOCATION );
+        const auto edit_field = [&]( const catacurses::window &field,
+                                     char_creation::description_selector selector ) {
+            tabs.add_click( field, point::zero, point( getmaxx( field ) - 1, 0 ), "CONFIRM",
+            [&, selector]() { current_selector = selector; } );
+        };
+        edit_field( w_name, char_creation::NAME );
+        edit_field( w_gender, char_creation::GENDER );
+        edit_field( w_outfit, char_creation::OUTFIT );
+        edit_field( w_height, char_creation::HEIGHT );
+        edit_field( w_age, char_creation::AGE );
+        edit_field( w_blood, char_creation::BLOOD );
+        edit_field( w_location, char_creation::LOCATION );
 
         werase( w_vehicle );
         // Player vehicle description tab
@@ -4482,12 +4639,50 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
                 mvwprintz( w_hobbies, point::south, c_light_red, _( "None!" ) );
             } else {
                 wattron( w_hobbies, c_light_gray );
-                for( const profession *prof : you.hobbies ) {
+                std::vector<const profession *> hobbies( you.hobbies.begin(), you.hobbies.end() );
+                std::sort( hobbies.begin(), hobbies.end(), [&]( const profession *a, const profession *b ) {
+                    return localized_compare( a->gender_appropriate_name( you.male ),
+                                              b->gender_appropriate_name( you.male ) );
+                } );
+                int row = 1;
+                for( const profession *prof : hobbies ) {
+                    if( row++ >= getmaxy( w_hobbies ) ) {
+                        break;
+                    }
                     wprintw( w_hobbies, "\n%s", prof->gender_appropriate_name( you.male ) );
                 }
                 wattroff( w_hobbies, c_light_gray );
             }
             wnoutrefresh( w_hobbies );
+        }
+        const auto date_click = [&]( int first, const std::string &action ) {
+            tabs.add_click( w_calendar, point( 0, first ),
+                            point( getmaxx( w_calendar ) - 1, first + 1 ), action );
+        };
+        date_click( 0, "CHANGE_START_OF_CATACLYSM" );
+        date_click( 2, "CHANGE_START_OF_GAME" );
+
+        if( pool != pool_type::TRANSFER ) {
+            const auto edit_summary = [&]( const catacurses::window &field, const std::string &action ) {
+                if( !field ) {
+                    return;
+                }
+                mvwprintz( field, point( std::max( 0, getmaxx( field ) - 8 ), 0 ),
+                           c_light_green, _( "[编辑]" ) );
+                tabs.add_click( field, point::zero,
+                                point( getmaxx( field ) - 1, getmaxy( field ) - 1 ), action );
+                wnoutrefresh( field );
+            };
+            edit_summary( w_scenario, "EDIT_SCENARIO" );
+            edit_summary( w_profession, "EDIT_PROFESSION" );
+            edit_summary( w_stats, "EDIT_STATS" );
+            if( isWide ) {
+                edit_summary( w_traits, "EDIT_TRAITS" );
+                edit_summary( w_skills, "EDIT_SKILLS" );
+                edit_summary( w_hobbies, "EDIT_BACKGROUND" );
+                edit_summary( w_bionics, "EDIT_PROFESSION" );
+                edit_summary( w_proficiencies, "EDIT_BACKGROUND" );
+            }
         }
     } );
 
@@ -4499,7 +4694,16 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
 
     do {
         ui_manager::redraw();
-        const std::string action = ctxt.handle_input();
+        const std::string action = tabs.get_input( ctxt );
+        const std::map<std::string, int> summary_pages = {
+            { "EDIT_SCENARIO", 1 }, { "EDIT_PROFESSION", 2 }, { "EDIT_BACKGROUND", 3 },
+            { "EDIT_STATS", 4 }, { "EDIT_TRAITS", 5 }, { "EDIT_SKILLS", 6 }
+        };
+        const auto summary_page = summary_pages.find( action );
+        if( summary_page != summary_pages.end() ) {
+            tabs.position.set_index( summary_page->second );
+            break;
+        }
         if( action == "NEXT_TAB" ) {
             if( pool == pool_type::ONE_POOL ) {
                 if( points_used_total( you ) > point_pool_total() ) {

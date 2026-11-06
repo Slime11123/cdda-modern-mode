@@ -10,6 +10,7 @@
 #include "vehicle.h"
 #include "veh_type.h"
 #include "input_context.h"
+#include "input.h"
 #include "translations.h"
 #include "cata_imgui.h"
 #include "imgui/imgui.h"
@@ -26,6 +27,13 @@ bool editing_modifiers = false;
 bool modifier_binding_editor()
 {
     return editing_modifiers;
+}
+bool is_mode_settings_key( const input_event &event )
+{
+    const int key = event.get_first_input();
+    return ( event.type == input_event_t::keyboard_code &&
+             ( key == static_cast<int>( keycode::f5 ) || key == static_cast<int>( keycode::f6 ) ) ) ||
+           ( event.type == input_event_t::keyboard_char && ( key == KEY_F( 5 ) || key == KEY_F( 6 ) ) );
 }
 mode next_mode( mode controls )
 {

@@ -3167,6 +3167,7 @@ bool game::handle_action()
     fp3d_regression::turn_probe dispatch_probe( "dispatch_prepare" );
     fp3d_compositor::begin_action();
     fp3d_inventory::clear_pending();
+    std::optional<fp3d_interaction::request> arrival;
 #endif
     map &here = get_map();
 
@@ -3190,7 +3191,13 @@ bool game::handle_action()
     } else if( player_character.has_destination_activity() ) {
         // starts destination activity after the player successfully reached his destination
         player_character.start_destination_activity();
+#if defined(ENABLE_FP3D)
+        arrival = fp3d_interaction::take_2d_arrival();
+        if( !arrival ) { return false; }
+        action = action_ident( arrival->action );
+#else
         return false;
+#endif
     } else if( uistate.open_menu ) {
         // make a copy so that uistate.open_menu can be assigned a new function
         // during the execution of the copied old function
@@ -3225,6 +3232,12 @@ bool game::handle_action()
     bool targeted_pickup = false;
     bool targeted_melee = false;
 #if defined(ENABLE_FP3D)
+    if( arrival ) {
+        mouse_target = arrival->position;
+        quick_pickup = arrival->quick_pickup;
+        targeted_pickup = arrival->targeted_pickup;
+        targeted_melee = arrival->targeted_melee;
+    }
     if( action.compare( 0, 5, "FP3D_" ) == 0 ) {
         if( !fp3d_compositor::turn_based() &&
             !( ( action == "FP3D_PANEL" || action == "FP3D_ACTIONS" ) &&
@@ -3301,8 +3314,7 @@ bool game::handle_action()
 #if defined(ENABLE_FP3D)
             if( fp3d_compositor::requested() &&
                 ( fp3d_compositor::controls() != fp3d_input::mode::original_2d ||
-                  ctxt.get_raw_input().get_first_input() == static_cast<int>( keycode::f6 ) ||
-                  ctxt.get_raw_input().get_first_input() == static_cast<int>( keycode::f5 ) ) ) {
+                  fp3d_input::is_mode_settings_key( ctxt.get_raw_input() ) ) ) {
                 act = fp3d_input::display_bindings( ctxt );
             } else
 #endif

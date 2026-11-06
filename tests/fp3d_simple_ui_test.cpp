@@ -224,7 +224,8 @@ TEST_CASE( "fp3d_ability_controls_use_character_state_and_reject_unavailable_req
 TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_simple_ui]" )
 {
     const bool two_d = GENERATE( false, true );
-    CAPTURE( two_d );
+    const bool modern = GENERATE( false, true );
+    CAPTURE( two_d, modern );
     REQUIRE( fp3d_compositor::requested() );
     REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
     on_out_of_scope quit_video( []() {
@@ -260,7 +261,7 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
              ImGui::GetIO().Fonts->GetGlyphRangesChineseFull() ) );
     fp3d_compositor::attach( renderer.get(), window.get() );
     fp3d_compositor::set_input_context( "MAIN_MENU" );
-    fp3d_compositor::apply_modes( !two_d, true );
+    fp3d_compositor::apply_modes( !two_d, modern );
     CHECK_FALSE( fp3d_simple_ui::active() );
     fp3d_compositor::set_input_context( "DEFAULTMODE" );
     if( !two_d ) {
@@ -636,8 +637,10 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     CHECK( fp3d_simple_ui::text_color( c_white ).x == cataimgui::imvec4_from_color( white ).x );
     CHECK( fp3d_simple_ui::text_color( c_red ).y == cataimgui::imvec4_from_color( red ).y );
     fp3d_compositor::apply_modes( !two_d, false );
-    CHECK( fp3d_simple_ui::active() == !two_d );
+    CHECK( fp3d_simple_ui::active() );
     fp3d_compositor::apply_modes( false, false );
+    CHECK( fp3d_simple_ui::active() );
+    fp3d_compositor::set_input_context( "MAIN_MENU" );
     CHECK_FALSE( fp3d_simple_ui::active() );
     nc_color black = c_black;
     CHECK( fp3d_simple_ui::text_color( c_black ).x == cataimgui::imvec4_from_color( black ).x );
@@ -646,6 +649,7 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         CHECK( GImGui->ColorStack.Size == colors );
     }
     fp3d_compositor::apply_modes( false, true );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
     CHECK( fp3d_simple_ui::active() );
     fp3d_compositor::set_input_context( "MAIN_MENU" );
     fp3d_compositor::set_input_context( "TEST_MODAL" );

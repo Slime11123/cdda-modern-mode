@@ -2365,12 +2365,20 @@ void options_manager::add_options_graphics()
     [&]( const std::string & page_id ) {
         add( "TERMINAL_X", page_id, to_translation( "Terminal width" ),
              to_translation( "Set the size of the terminal along the X axis." ),
+#if defined(_WIN32) && defined(ENABLE_FP3D)
+             80, 960, 180, COPT_POSIX_CURSES_HIDE
+#else
              80, 960, 80, COPT_POSIX_CURSES_HIDE
+#endif
            );
 
         add( "TERMINAL_Y", page_id, to_translation( "Terminal height" ),
              to_translation( "Set the size of the terminal along the Y axis." ),
+#if defined(_WIN32) && defined(ENABLE_FP3D)
+             24, 270, 60, COPT_POSIX_CURSES_HIDE
+#else
              24, 270, 24, COPT_POSIX_CURSES_HIDE
+#endif
            );
     } );
 
@@ -2673,8 +2681,11 @@ void options_manager::add_options_graphics()
         add( "FULLSCREEN", page_id, to_translation( "Fullscreen" ),
              to_translation( "Starts Cataclysm in one of the fullscreen modes.  Requires restart." ),
         { { "no", to_translation( "No" ) }, { "maximized", to_translation( "Maximized" ) }, { "fullscreen", to_translation( "Fullscreen" ) }, { "windowedbl", to_translation( "Windowed borderless" ) } },
-        // Borderless window is bad for debugging in Visual Studio
-#if defined(_MSC_VER)
+        // Modern Mode Windows builds should open as a resizable window on first launch.
+        // Preserve the original defaults for non-FP3D configurations.
+#if defined(ENABLE_FP3D) && defined(_WIN32)
+        "no", COPT_CURSES_HIDE
+#elif defined(_MSC_VER)
         "maximized", COPT_CURSES_HIDE
 #else
         "windowedbl", COPT_CURSES_HIDE
@@ -3371,6 +3382,12 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
     if( world_generator->active_world == nullptr ) {
         ingame = false;
     }
+    const bool menu_layout = !ingame && !world_options_only;
+    bool apply_changes = false;
+    std::map<int, inclusive_rectangle<point>> footer_map;
+    int list_width = 0;
+    int row_height = 1;
+    int header_height = 1;
 
     size_t sel_worldgen_tab = 1;
     std::map<size_t, inclusive_rectangle<point>> worldgen_tab_map;
@@ -3418,6 +3435,7 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
     catacurses::window w_options_tooltip;
     catacurses::window w_options_header;
     catacurses::window w_options;
+    catacurses::window w_options_footer;
 
     const auto init_windows = [&]( ui_adaptor & ui ) {
         recalc_startpos = true;
@@ -3438,7 +3456,7 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
             }
         }
 
-        iMinScreenWidth = std::max( FULL_SCREEN_WIDTH, TERMX / 2 );
+        iMinScreenWidth = menu_layout ? TERMX : std::max( FULL_SCREEN_WIDTH, TERMX / 2 );
         const int iOffsetX = TERMX > FULL_SCREEN_WIDTH ? ( TERMX - iMinScreenWidth ) / 2 : 0;
         iContentHeight = TERMY - 3 - iTooltipHeight - iWorldOffset;
 
@@ -3450,6 +3468,26 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
                                                 point( 1 + iOffsetX, 1 + iTooltipHeight + iWorldOffset ) );
         w_options         = catacurses::newwin( iContentHeight, iMinScreenWidth - 2,
                                                 point( 1 + iOffsetX, iTooltipHeight + 2 + iWorldOffset ) );
+
+        if( menu_layout ) {
+            // Full-width tabs above a two-column settings / description body.
+            int tab_width = 0;
+            for( const Page &p : pages_ ) {
+                tab_width += utf8_width( p.name_.translated(), true ) + 4;
+            }
+            header_height = 2 + ( tab_width + iMinScreenWidth - 5 ) / ( iMinScreenWidth - 4 );
+            const int body_y = header_height + 1;
+            const int body_height = TERMY - body_y - 4;
+            row_height = body_height >= 30 ? 2 : 1;
+            iContentHeight = body_height / row_height;
+            list_width = ( iMinScreenWidth - 5 ) * 2 / 3;
+            w_options_header = catacurses::newwin( header_height, iMinScreenWidth - 4,
+                                                 point( 2, 1 ) );
+            w_options = catacurses::newwin( body_height, list_width, point( 2, body_y ) );
+            w_options_tooltip = catacurses::newwin( body_height, iMinScreenWidth - list_width - 7,
+                                                  point( list_width + 5, body_y ) );
+            w_options_footer = catacurses::newwin( 2, iMinScreenWidth - 4, point( 2, TERMY - 3 ) );
+        }
 
         ui.position_from_window( w_options_border );
     };
@@ -3474,9 +3512,16 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
             }
         }
 
-        draw_borders_external( w_options_border, iTooltipHeight + 1 + iWorldOffset, vert_lines,
+        if( menu_layout ) {
+            draw_border( w_options_border, BORDER_COLOR, _( "Options" ) );
+            mvwhline( w_options_border, point( 1, header_height ), LINE_OXOX, iMinScreenWidth - 2 );
+            mvwvline( w_options_border, point( list_width + 3, header_height + 1 ),
+                      LINE_XOXO, TERMY - header_height - 5 );
+        } else {
+            draw_borders_external( w_options_border, iTooltipHeight + 1 + iWorldOffset, vert_lines,
                                world_options_only );
-        draw_borders_internal( w_options_header, vert_lines );
+            draw_borders_internal( w_options_header, vert_lines );
+        }
 
         options_manager::options_container &cOPTIONS = ( ingame || world_options_only ) &&
                 iCurrentPage == iWorldOptPage ?
@@ -3556,7 +3601,7 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
 
         // Draw separation lines
         wattron( w_options, BORDER_COLOR );
-        for( const int &x : vert_lines ) {
+        for( const int &x : menu_layout ? std::set<int>() : vert_lines ) {
             mvwvline( w_options, point( x, 0 ), LINE_XOXO, iContentHeight );
         }
         wattroff( w_options, BORDER_COLOR );
@@ -3568,20 +3613,21 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
         }
 
         // where the column with the names starts
-        const size_t name_col = 5;
+        const size_t name_col = menu_layout ? 0 : 5;
         // where the column with the values starts
-        const size_t value_col = 62;
+        const size_t value_col = menu_layout ? list_width / 2 : 62;
         // 2 for the space between name and value column, 3 for the ">> "
         const size_t name_width = value_col - name_col - 2 - 3;
-        const size_t value_width = getmaxx( w_options ) - value_col;
+        const size_t value_width = getmaxx( w_options ) - value_col - ( menu_layout ? 3 : 0 );
         //Draw options
         for( int i = iStartPos;
-             i < iStartPos + ( iContentHeight > static_cast<int>( visible_items.size() ) ?
-                               static_cast<int>( visible_items.size() ) : iContentHeight ); i++ ) {
+             i < std::min( iStartPos + iContentHeight, static_cast<int>( visible_items.size() ) ); i++ ) {
 
-            int line_pos = i - iStartPos; // Current line position in window.
+            int line_pos = ( i - iStartPos ) * row_height;
 
-            mvwprintz( w_options, point( 1, line_pos ), c_white, "%d", visible_items[i] + 1 );
+            if( !menu_layout ) {
+                mvwprintz( w_options, point( 1, line_pos ), c_white, "%d", visible_items[i] + 1 );
+            }
 
             bool is_selected = visible_items[i] == iCurrentLine;
             if( is_selected ) {
@@ -3590,20 +3636,38 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
 
             const PageItem &curr_item = page_items[visible_items[i]];
             auto name_value = fmt_name_value( curr_item, is_selected );
+            if( menu_layout && is_selected ) {
+                mvwprintz( w_options, point( 0, line_pos ), hilite( c_white ),
+                           std::string( list_width, ' ' ) );
+                name_value.first.col = hilite( name_value.first.col );
+                mvwprintz( w_options, point( name_col, line_pos ), c_yellow, ">>" );
+            }
 
             const std::string name = utf8_truncate( name_value.first.s, name_width );
             mvwprintz( w_options, point( name_col + 3, line_pos ), name_value.first.col, name );
 
-            trim_and_print( w_options, point( value_col, line_pos ), value_width,
-                            name_value.second.col, name_value.second.s );
+            if( menu_layout && curr_item.type == ItemType::Option ) {
+                mvwprintz( w_options, point( value_col - 2, line_pos ), c_light_green, "<" );
+                mvwprintz( w_options, point( list_width - 2, line_pos ), c_light_green, ">" );
+                const int value_offset = std::max( 0, ( static_cast<int>( value_width ) -
+                                                  utf8_width( name_value.second.s ) ) / 2 );
+                trim_and_print( w_options, point( value_col + value_offset, line_pos ), value_width - value_offset,
+                                name_value.second.col, name_value.second.s );
+            } else {
+                trim_and_print( w_options, point( value_col, line_pos ), value_width,
+                                name_value.second.col, name_value.second.s );
+            }
+            if( menu_layout && row_height > 1 && curr_item.type != ItemType::BlankLine ) {
+                mvwhline( w_options, point( 0, line_pos + 1 ), LINE_OXOX, list_width );
+            }
 
             opt_line_map.emplace( visible_items[i], inclusive_rectangle<point>( point( name_col, line_pos ),
-                                  point( value_col + value_width - 1, line_pos ) ) );
+                                  point( getmaxx( w_options ) - 1, line_pos + row_height - 1 ) ) );
         }
 
         scrollbar()
-        .offset_x( 0 )
-        .offset_y( iTooltipHeight + 2 + iWorldOffset )
+        .offset_x( menu_layout ? list_width + 3 : 0 )
+        .offset_y( menu_layout ? header_height + 1 : iTooltipHeight + 2 + iWorldOffset )
         .content_size( static_cast<int>( visible_items.size() ) )
         .viewport_pos( iStartPos )
         .viewport_size( iContentHeight )
@@ -3613,7 +3677,25 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
 
         //Draw Tabs
         int tab_x = 0;
-        if( !world_options_only ) {
+        if( menu_layout ) {
+            int x = 0;
+            int y = 0;
+            for( int i = 0; i < static_cast<int>( pages_.size() ); ++i ) {
+                const std::string label = "[ " + pages_[i].name_.translated() + " ]";
+                const int width = utf8_width( label, true );
+                if( x + width > getmaxx( w_options_header ) ) {
+                    x = 0;
+                    ++y;
+                }
+                mvwprintz( w_options_header, point( x, y ),
+                           iCurrentPage == i ? hilite( c_light_green ) : c_light_green, label );
+                opt_tab_map.emplace( i, inclusive_rectangle<point>( point( x, y ),
+                                     point( x + width - 1, y ) ) );
+                x += width;
+            }
+            trim_and_print( w_options_header, point( 1, header_height - 1 ),
+                            getmaxx( w_options_header ) - 2, c_white, page.name_.translated() );
+        } else if( !world_options_only ) {
             mvwprintz( w_options_header, point( 7, 0 ), c_white, "" );
             for( int i = 0; i < static_cast<int>( pages_.size() ); i++ ) {
                 wprintz( w_options_header, c_white, "[" );
@@ -3638,7 +3720,28 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
 
         const PageItem &curr_item = page_items[iCurrentLine];
         std::string tooltip = curr_item.fmt_tooltip( curr_item.group, cOPTIONS );
-        fold_and_print( w_options_tooltip, point::zero, iMinScreenWidth - 2, c_white, tooltip );
+        if( menu_layout ) {
+            const auto name_value = fmt_name_value( curr_item, false );
+            fold_and_print( w_options_tooltip, point::zero, getmaxx( w_options_tooltip ),
+                            c_light_green, name_value.first.s );
+        }
+        fold_and_print( w_options_tooltip, point( 0, menu_layout ? 3 : 0 ),
+                        getmaxx( w_options_tooltip ), c_white, tooltip );
+
+        if( menu_layout ) {
+            werase( w_options_footer );
+            footer_map.clear();
+            const std::string back = std::string( "[ " ) + _( "Back" ) + " ]";
+            const std::string apply = std::string( "[ " ) + _( "Apply" ) + " ]";
+            const int apply_x = list_width / 2;
+            mvwprintz( w_options_footer, point::zero, c_white, back );
+            mvwprintz( w_options_footer, point( apply_x, 0 ), c_light_green, apply );
+            footer_map.emplace( 0, inclusive_rectangle<point>( point::zero,
+                                point( utf8_width( back ) - 1, 0 ) ) );
+            footer_map.emplace( 1, inclusive_rectangle<point>( point( apply_x, 0 ),
+                                point( apply_x + utf8_width( apply ) - 1, 0 ) ) );
+            wnoutrefresh( w_options_footer );
+        }
 
         if( ingame && iCurrentPage == iWorldOptPage ) {
             mvwprintz( w_options_tooltip, point( 3, 5 ), c_light_red, "%s", _( "Note: " ) );
@@ -3667,10 +3770,8 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
             return action;
         }
 
-        const PageItem &curr_item = page_items[iCurrentLine];
-
         const auto on_select_option = [&]() {
-            cOpt &current_opt = cOPTIONS[curr_item.data];
+            cOpt &current_opt = cOPTIONS[page_items[iCurrentLine].data];
 
 #if defined(LOCALIZE)
             if( current_opt.getName() == "USE_LANG" ) {
@@ -3729,6 +3830,20 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
         };
 
         if( action == "MOUSE_MOVE" || action == "SELECT" ) {
+            if( menu_layout && action == "SELECT" ) {
+                const std::optional<point> footer_coord = ctxt.get_coordinates_text( w_options_footer );
+                int button = -1;
+                if( footer_coord ) {
+                    run_for_point_in<int, point>( footer_map, *footer_coord,
+                    [&button]( const std::pair<int, inclusive_rectangle<point>> &p ) {
+                        button = p.first;
+                    } );
+                }
+                if( button >= 0 ) {
+                    apply_changes = button == 1;
+                    break;
+                }
+            }
             bool found_opt = false;
             sel_worldgen_tab = 1;
             std::optional<point> coord = ctxt.get_coordinates_text( w_options_border );
@@ -3770,7 +3885,8 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
                     iCurrentLine = clamp<int>( p.first, 0, psize - 1 );
                 } ) > 0;
                 if( found_opt && action == "SELECT" ) {
-                    action = "CONFIRM";
+                    action = menu_layout && coord->x == list_width / 2 - 2 ? "LEFT" :
+                             menu_layout && coord->x == list_width - 2 ? "RIGHT" : "CONFIRM";
                 }
             }
         }
@@ -3837,13 +3953,13 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
             }
             sfx::play_variant_sound( "menu_move", "default", 100 );
         } else if( action == "RIGHT" || action == "LEFT" || action == "CONFIRM" ) {
-            switch( curr_item.type ) {
+            switch( page_items[iCurrentLine].type ) {
                 case ItemType::Option: {
                     on_select_option();
                     break;
                 }
                 case ItemType::GroupHeader: {
-                    bool &state = groups_state[curr_item.data];
+                    bool &state = groups_state[page_items[iCurrentLine].data];
                     state = !state;
                     recalc_startpos = true;
                     break;
@@ -3902,7 +4018,7 @@ std::string options_manager::show( bool ingame, const bool world_options_only, b
     }
 
     if( options_changed ) {
-        if( query_yn( _( "Save changes?" ) ) ) {
+        if( apply_changes || query_yn( _( "Save changes?" ) ) ) {
             static_popup popup;
             popup.message( "%s", _( "Please wait…\nApplying option changes…" ) );
             ui_manager::redraw();

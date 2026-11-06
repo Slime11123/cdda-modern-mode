@@ -22,6 +22,7 @@ mode next_mode( mode controls );
 input_context modern_2d_context();
 input_context context();
 bool modifier_binding_editor();
+bool is_mode_settings_key( const input_event &event );
 void register_world_actions( input_context &world );
 // One physical press, classified at the input boundary. No world mutations.
 class gestures
