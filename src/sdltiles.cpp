@@ -1099,9 +1099,8 @@ static void draw_fp3d_hud()
                      point( value_x, y ), static_cast<unsigned char>( palette_index ) );
     }
 
-    const int log_h = std::max( font->height * 3, static_cast<int>( hud.messages.size() + 1 ) * font->height );
     const int log_x = status_box.x + status_box.w + pad;
-    SDL_Rect log_box{ log_x, hotbar_y - log_h - pad, std::max( 0, area[0] + area[2] - pad - log_x ), log_h };
+    SDL_Rect log_box{ log_x, status_box.y, std::max( 0, area[0] + area[2] - pad - log_x ), status_box.h };
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 150 );
     SDL_RenderFillRect( renderer.get(), &log_box );
     SDL_SetRenderDrawColor( renderer.get(), 220, 220, 220, 185 );
