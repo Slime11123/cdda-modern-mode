@@ -88,6 +88,10 @@ void draw( const state &weather, const tripoint_abs_ms &origin, float yaw,
            float daylight, std::uint64_t milliseconds )
 {
     if( weather.particles == precipitation::none || weather.columns.empty() ) { return; }
+    // Precipitation must not leak culling/alpha/depth state into glass, the
+    // held item or the compositor's screen quad (whose winding is reversed).
+    glPushAttrib( GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                  GL_LINE_BIT | GL_CURRENT_BIT );
     const bool rain = weather.particles == precipitation::rain;
     const bool anomaly = weather.particles == precipitation::anomaly;
     const float seconds = ( milliseconds % 600000 ) / 1000.0f;
@@ -138,11 +142,7 @@ void draw( const state &weather, const tripoint_abs_ms &origin, float yaw,
         if( count >= 1200 ) { break; }
     }
     glEnd();
-    glDepthMask( GL_TRUE );
-    glDisable( GL_BLEND );
-    glEnable( GL_LIGHTING );
-    glEnable( GL_CULL_FACE );
-    glEnable( GL_ALPHA_TEST );
+    glPopAttrib();
 }
 }
 #endif

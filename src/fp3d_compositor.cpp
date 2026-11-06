@@ -922,6 +922,12 @@ void compose()
         bind_framebuffer( GL_FRAMEBUFFER, saved.old_framebuffer );
         glViewport( 0, 0, width, height );
         glDisable( GL_DEPTH_TEST );
+        // World passes may use backface culling, cutout alpha, lighting or fog.
+        // The complete frame is an unlit screen quad with reversed Y winding.
+        glDisable( GL_CULL_FACE );
+        glDisable( GL_ALPHA_TEST );
+        glDisable( GL_LIGHTING );
+        glDisable( GL_FOG );
         glEnable( GL_TEXTURE_2D );
         glBindTexture( GL_TEXTURE_2D, color_texture );
         glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
