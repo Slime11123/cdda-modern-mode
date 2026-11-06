@@ -44,6 +44,10 @@
 #include "ui_manager.h"
 #include "vehicle.h"
 #include "vpart_position.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_compositor.h"
+#include "fp3d_quick_menu.h"
+#endif
 
 static const itype_id itype_swim_fins( "swim_fins" );
 
@@ -826,6 +830,9 @@ action_id handle_action_menu( map &here )
 
     // Default category is called "back"
     std::string category = "back";
+#if defined(TILES) && defined(ENABLE_FP3D)
+    std::map<std::string, int> wheel_pages;
+#endif
 
     while( true ) {
         std::vector<uilist_entry> entries;
@@ -1012,11 +1019,22 @@ action_id handle_action_menu( map &here )
             title += ": " + catgname;
         }
 
-        uilist smenu;
-        smenu.settext( title );
-        smenu.entries = entries;
-        smenu.query();
-        const int selection = smenu.ret;
+        int selection;
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( fp3d_compositor::view_3d() && fp3d_compositor::survival_menu_available() ) {
+            // Navigation lives in the centre; keep all sectors for native choices.
+            if( category != "back" ) { entries.pop_back(); }
+            const auto selected = fp3d_quick_menu::show_paged( entries, title, wheel_pages[category] );
+            selection = selected.value_or( category == "back" ? -1 : 2 * NUM_ACTIONS );
+        } else
+#endif
+        {
+            uilist smenu;
+            smenu.settext( title );
+            smenu.entries = entries;
+            smenu.query();
+            selection = smenu.ret;
+        }
 
         if( selection < 0 || selection == NUM_ACTIONS ) {
             return ACTION_NULL;

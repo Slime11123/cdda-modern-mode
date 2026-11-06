@@ -18,6 +18,7 @@
 #include "rng.h"
 #include "input_context.h"
 #include "input.h"
+#include "game.h"
 #include "avatar.h"
 #include "cata_imgui.h"
 #include "fp3d_modern_ui.h"
@@ -55,6 +56,7 @@
 #include "construction.h"
 #include "options.h"
 #include "options_helpers.h"
+#include "uilist.h"
 #include "messages.h"
 #include "sdl_geometry.h"
 #include "sdltiles.h"
@@ -2524,6 +2526,84 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 CHECK_FALSE( cancelled->get_is_open() );
                 CHECK_FALSE( cancelled->has_button_action() );
+                if( pack == "UNDEAD_PEOPLE_BASE" ) {
+                    const std::vector<action_id> actions{
+                        ACTION_CYCLE_MOVE, ACTION_RESET_MOVE, ACTION_TOGGLE_RUN, ACTION_TOGGLE_CROUCH,
+                        ACTION_TOGGLE_PRONE, ACTION_OPEN_MOVEMENT, ACTION_FIRE, ACTION_RELOAD_ITEM,
+                        ACTION_RELOAD_WEAPON, ACTION_RELOAD_WIELDED, ACTION_CAST_SPELL, ACTION_RECAST_SPELL,
+                        ACTION_SELECT_FIRE_MODE, ACTION_SELECT_DEFAULT_AMMO, ACTION_THROW, ACTION_THROW_WIELDED,
+                        ACTION_FIRE_BURST, ACTION_PICK_STYLE
+                    };
+                    std::vector<uilist_entry> choices;
+                    const auto context = get_default_mode_input_context();
+                    for( action_id action : actions ) {
+                        choices.emplace_back( action, true, -1, context.get_action_name( action_ident( action ) ) );
+                    }
+                    choices[8].enabled = false;
+                    auto paged = fp3d_quick_menu::create_paged( choices, "行动：战斗", layout[2] );
+                    const auto frame = [&]( cataimgui::window &menu, ImVec2 mouse, bool pressed = false ) {
+                        ImGui_ImplSDLRenderer2_NewFrame();
+                        ImGui_ImplSDL2_NewFrame();
+                        ImGui::GetIO().AddMousePosEvent( mouse.x, mouse.y );
+                        ImGui::GetIO().AddMouseButtonEvent( 0, pressed );
+                        ImGui::NewFrame();
+                        menu.draw();
+                        ImGui::Render();
+                        SDL_SetRenderDrawColor( renderer.get(), 12, 16, 20, 255 );
+                        SDL_RenderClear( renderer.get() );
+                        ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+                    };
+                    const auto click = [&]( cataimgui::window &menu, ImVec2 mouse ) {
+                        frame( menu, mouse );
+                        frame( menu, mouse, true );
+                        frame( menu, mouse );
+                        frame( menu, mouse );
+                        frame( menu, mouse );
+                    };
+                    for( int i = 0; i < 4; ++i ) { frame( *paged, center ); }
+                    const float font_size = ImGui::GetFontSize() * layout[2] / 100.0f;
+                    const float outer = std::min( std::min( wheel_area[2], wheel_area[3] ) * .38f,
+                                                 font_size * 11.5f );
+                    const float inner = outer * .36f;
+                    const ImVec2 next( center.x + inner * .45f, center.y + font_size * .65f );
+                    const ImVec2 previous( center.x - inner * .45f, next.y );
+                    const ImVec2 back( center.x, center.y + font_size * 2.1f );
+                    const ImVec2 top( center.x, center.y - ( inner + outer ) / 2 );
+                    click( *paged, next );
+                    REQUIRE( paged->get_is_open() );
+                    click( *paged, top ); // The first entry on page two is disabled.
+                    REQUIRE( paged->get_is_open() );
+                    CHECK_FALSE( paged->has_button_action() );
+                    click( *paged, next );
+                    REQUIRE( paged->get_is_open() );
+                    if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                        std::vector<std::uint32_t> pixels( layout[0] * layout[1] );
+                        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                       pixels.data(), layout[0] * 4 ) == 0 );
+                        SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                                     pixels.data(), layout[0], layout[1], 32, layout[0] * 4,
+                                                     SDL_PIXELFORMAT_RGBA8888 ) );
+                        REQUIRE( picture );
+                        const auto filename = std::filesystem::path( directory ) /
+                                              ( "UNDEAD-action-wheel-" + std::to_string( layout[0] ) + "-" +
+                                                std::to_string( layout[2] ) + ".png" );
+                        CHECK( IMG_SavePNG( picture.get(), filename.u8string().c_str() ) == 0 );
+                    }
+                    click( *paged, previous );
+                    click( *paged, next );
+                    click( *paged, top );
+                    CHECK_FALSE( paged->get_is_open() );
+                    CHECK( paged->get_button_action() == std::to_string( ACTION_FIRE_BURST ) );
+                    auto returning = fp3d_quick_menu::create_paged( choices, "行动：战斗", layout[2], 2 );
+                    for( int i = 0; i < 4; ++i ) { frame( *returning, center ); }
+                    click( *returning, back );
+                    CHECK_FALSE( returning->get_is_open() );
+                    CHECK_FALSE( returning->has_button_action() );
+                    auto remembered = fp3d_quick_menu::create_paged( choices, "行动：战斗", layout[2], 2 );
+                    for( int i = 0; i < 4; ++i ) { frame( *remembered, center ); }
+                    click( *remembered, top );
+                    CHECK( remembered->get_button_action() == std::to_string( ACTION_FIRE_BURST ) );
+                }
                 CHECK( calendar::turn == before_time );
                 CHECK( you.get_moves() == before_moves );
                 CHECK( you.pos_abs() == wheel_position );

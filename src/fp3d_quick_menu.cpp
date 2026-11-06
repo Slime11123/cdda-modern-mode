@@ -5,6 +5,7 @@
 #include <vector>
 #include <utility>
 #include "cata_imgui.h"
+#include "catacharset.h"
 #include "cata_scope_helpers.h"
 #include "fp3d_compositor.h"
 #include "fp3d_input.h"
@@ -12,8 +13,10 @@
 #include "game.h"
 #include "imgui/imgui.h"
 #include "input_context.h"
+#include "map.h"
 #include "sdltiles.h"
 #include "ui_manager.h"
+#include "uilist.h"
 
 namespace fp3d_quick_menu
 {
@@ -28,7 +31,7 @@ const std::array<entry, 8> default_options = {{
         { "装填", "装填手持武器，沿用原版弹药与耗时。", ACTION_RELOAD_WIELDED, nullptr },
         { "附近物品", "查看当前可见且可触及的物品与容器。", ACTION_NULL, "FP3D_PICKUP_LONG" },
         { "生存面板", "装备、背包、健康、制作与地图。", ACTION_NULL, "FP3D_PANEL" },
-        { "更多行动", "打开完整原版行动列表。", ACTION_ACTIONMENU, nullptr }
+        { "更多行动", "打开分类行动轮盘。", ACTION_ACTIONMENU, nullptr }
     }
 };
 
@@ -37,20 +40,34 @@ class wheel : public cataimgui::window
         SDL_Texture_Ptr background;
         float scale;
         std::vector<entry> options;
+        std::vector<uilist_entry> native_options;
+        int page = 0;
         std::string heading;
         int selected = -1;
         std::optional<int> chosen;
+
+        int page_size() const {
+            return std::min( 8, static_cast<int>( options.size() ) - page * 8 );
+        }
+        int pages() const {
+            return std::max( 1, ( static_cast<int>( options.size() ) + 7 ) / 8 );
+        }
+        void change_page( int direction ) {
+            page = ( page + direction + pages() ) % pages();
+            selected = -1;
+        }
 
         void choose( int index ) {
             if( index < 0 || index >= static_cast<int>( options.size() ) || !options[index].enabled ) {
                 return;
             }
-            if( options[index].action == ACTION_NULL && !options[index].command ) {
+            if( native_options.empty() && options[index].action == ACTION_NULL && !options[index].command ) {
                 is_open = false;
                 return;
             }
             chosen = index;
-            button_action = options[index].command ? options[index].command :
+            button_action = !native_options.empty() ? std::to_string( native_options[index].retval ) :
+                            options[index].command ? options[index].command :
                             action_ident( options[index].action );
             is_open = false;
         }
@@ -58,12 +75,12 @@ class wheel : public cataimgui::window
             if( options.empty() ) {
                 return;
             }
-            const int count = options.size();
-            int next = selected < 0 ? ( direction > 0 ? -1 : 0 ) : selected;
+            const int count = page_size();
+            int next = selected < 0 ? ( direction > 0 ? -1 : 0 ) : selected - page * 8;
             for( int step = 0; step < count; ++step ) {
                 next = ( next + direction + count ) % count;
-                if( options[next].enabled ) {
-                    selected = next;
+                if( options[page * 8 + next].enabled ) {
+                    selected = page * 8 + next;
                     return;
                 }
             }
@@ -84,8 +101,9 @@ class wheel : public cataimgui::window
             const float outer = std::min( std::min( viewport[2], viewport[3] ) * .38f, font * 11.5f );
             const float inner = outer * .36f;
             const auto mouse = ImGui::GetMousePos();
-            const int hovered = sector_at( mouse.x - center.x, mouse.y - center.y, inner, outer,
-                                           options.size() );
+            const int sector = sector_at( mouse.x - center.x, mouse.y - center.y, inner, outer,
+                                          page_size() );
+            const int hovered = sector < 0 ? -1 : page * 8 + sector;
             const auto delta = ImGui::GetIO().MouseDelta;
             if( delta.x != 0 || delta.y != 0 || selected < 0 ) {
                 selected = hovered;
@@ -97,9 +115,10 @@ class wheel : public cataimgui::window
             };
             const ImU32 white = IM_COL32( 255, 255, 255, 255 );
             const ImU32 gold = IM_COL32( 255, 220, 80, 255 );
-            const float step = options.empty() ? 0 : 2 * pi / options.size();
-            for( int index = 0; index < static_cast<int>( options.size() ); ++index ) {
-                const float angle = -pi / 2 + index * step;
+            const float step = page_size() == 0 ? 0 : 2 * pi / page_size();
+            for( int local = 0; local < page_size(); ++local ) {
+                const int index = page * 8 + local;
+                const float angle = -pi / 2 + local * step;
                 const float first = angle - step / 2 + .014f;
                 const float last = angle + step / 2 - .014f;
                 const auto path = [&]() {
@@ -114,24 +133,54 @@ class wheel : public cataimgui::window
                 draw->PathStroke( active ? gold : IM_COL32( 220, 220, 220, 160 ),
                                   ImDrawFlags_Closed, active ? 2 : 1 );
                 const float radius = ( inner + outer ) / 2;
-                text( options[index].label, center.x + std::cos( angle ) * radius,
-                      center.y + std::sin( angle ) * radius, !options[index].enabled ?
-                      gold : active ? gold : white );
+                const float wrap = ( outer - inner ) * 1.05f;
+                std::string label = options[index].label;
+                bool shortened = false;
+                while( !label.empty() && ImGui::CalcTextSize(
+                           ( label + ( shortened ? "…" : "" ) ).c_str(), nullptr, false, wrap ).y > font * 2.1f ) {
+                    label = utf8_truncate( label, utf8_width( label ) - 1 );
+                    shortened = true;
+                }
+                if( shortened ) { label += "…"; }
+                const auto extent = ImGui::CalcTextSize( label.c_str(), nullptr, false, wrap );
+                draw->AddText( ImGui::GetFont(), font,
+                               ImVec2( center.x + std::cos( angle ) * radius - extent.x / 2,
+                                       center.y + std::sin( angle ) * radius - extent.y / 2 ),
+                               !options[index].enabled ? gold : active ? gold : white,
+                               label.c_str(), nullptr, wrap );
             }
             draw->AddCircleFilled( center, inner - 3, IM_COL32( 16, 15, 14, 205 ), 48 );
-            text( heading.c_str(), center.x, center.y - font * .6f, white );
-            text( "Esc 返回", center.x, center.y + font * .9f, white );
-            if( selected >= 0 ) {
-                text( options[selected].description, center.x, center.y + outer + font, white );
+            text( heading.c_str(), center.x, center.y - font * ( pages() > 1 ? 1.9f : .8f ), white );
+            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
+            ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .15f, .14f, .12f, .9f ) );
+            ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( .35f, .29f, .14f, 1 ) );
+            ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( .45f, .35f, .16f, 1 ) );
+            if( pages() > 1 ) {
+                const std::string counter = std::to_string( page + 1 ) + " / " + std::to_string( pages() );
+                text( counter.c_str(), center.x, center.y - font * .8f, white );
+                const float width = inner * .88f;
+                ImGui::SetCursorScreenPos( ImVec2( center.x - width - 2, center.y ) );
+                if( ImGui::Button( "上一页", ImVec2( width, font * 1.3f ) ) ) { change_page( -1 ); }
+                ImGui::SetCursorScreenPos( ImVec2( center.x + 2, center.y ) );
+                if( ImGui::Button( "下一页", ImVec2( width, font * 1.3f ) ) ) { change_page( 1 ); }
             }
-            text( "点击执行 / 方向键选择 / Enter 确认", center.x, center.y + outer + font * 2.3f,
+            ImGui::SetCursorScreenPos( ImVec2( center.x - inner * .65f,
+                                              center.y + font * ( pages() > 1 ? 1.5f : .3f ) ) );
+            if( ImGui::Button( "返回", ImVec2( inner * 1.3f, font * 1.4f ) ) ) { is_open = false; }
+            ImGui::PopStyleColor( 4 );
+            if( selected >= 0 ) {
+                text( native_options.empty() ? options[selected].description : options[selected].label,
+                      center.x, center.y + outer + font, white );
+            }
+            text( pages() > 1 ? "点击执行 / PgUp、PgDn 翻页 / Esc 返回" :
+                  "点击执行 / 方向键选择 / Enter 确认 / Esc 返回", center.x, center.y + outer + font * 2.3f,
                   white );
             if( ImGui::IsMouseClicked( ImGuiMouseButton_Right ) ) {
                 is_open = false;
             } else if( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) ) {
                 if( hovered >= 0 ) {
                     choose( hovered );
-                } else {
+                } else if( std::hypot( mouse.x - center.x, mouse.y - center.y ) > inner ) {
                     is_open = false;
                 }
             }
@@ -149,6 +198,19 @@ class wheel : public cataimgui::window
                 }
             }
         }
+        wheel( const std::vector<uilist_entry> &choices, const std::string &caption,
+               int percent, int initial_page ) : wheel( std::array<entry, 8>{}, caption, percent ) {
+            options.clear();
+            native_options = choices;
+            for( const auto &choice : native_options ) {
+                options.push_back( { choice.txt.c_str(), choice.desc.c_str(), ACTION_NULL, nullptr, choice.enabled } );
+            }
+            page = std::clamp( initial_page, 0, pages() - 1 );
+        }
+        std::optional<int> native_result() const {
+            return chosen ? std::optional<int>( native_options[*chosen].retval ) : std::nullopt;
+        }
+        int current_page() const { return page; }
         void draw() override {
             if( !is_open ) {
                 return;
@@ -171,7 +233,7 @@ class wheel : public cataimgui::window
             input_context context( "FP3D_WHEEL", keyboard_mode::keycode );
             for( const char *action : {
                      "QUIT", "CONFIRM", "UP", "DOWN", "LEFT", "RIGHT",
-                     "SELECT", "MOUSE_MOVE", "ANY_INPUT"
+                     "SELECT", "MOUSE_MOVE", "ANY_INPUT", "PAGE_UP", "PAGE_DOWN"
                  } ) {
                 context.register_action( action );
             }
@@ -190,6 +252,8 @@ class wheel : public cataimgui::window
                     move_selection( 1 );
                 } else if( action == "UP" || action == "LEFT" ) {
                     move_selection( -1 );
+                } else if( action == "PAGE_UP" || action == "PAGE_DOWN" ) {
+                    change_page( action == "PAGE_UP" ? -1 : 1 );
                 } else if( action == "CONFIRM" && selected >= 0 ) {
                     choose( selected );
                 }
@@ -345,7 +409,16 @@ std::unique_ptr<cataimgui::window> create( const std::array<entry, 8> &choices,
 }
 std::optional<entry> show()
 {
-    return show( entries(), "快捷行动" );
+    while( true ) {
+        const auto choice = show( entries(), "快捷行动" );
+        if( !choice || choice->action != ACTION_ACTIONMENU || !fp3d_compositor::view_3d() ) {
+            return choice;
+        }
+        const auto action = handle_action_menu( get_map() );
+        if( action != ACTION_NULL ) {
+            return entry{ "行动", "", action, nullptr };
+        }
+    }
 }
 std::optional<entry> show( const std::array<entry, 8> &choices, const std::string &heading )
 {
@@ -372,6 +445,33 @@ std::optional<entry> show( const std::array<entry, 8> &choices, const std::strin
     } );
     wheel menu( choices, heading, fp3d_modern_ui::scale_percent() );
     return menu.run();
+}
+
+std::unique_ptr<cataimgui::window> create_paged( const std::vector<uilist_entry> &choices,
+        const std::string &heading, int scale_percent, int page )
+{
+    return std::make_unique<wheel>( choices, heading, scale_percent, page );
+}
+
+std::optional<int> show_paged( const std::vector<uilist_entry> &choices,
+                             const std::string &heading, int &page )
+{
+    if( !fp3d_compositor::survival_menu_available() || choices.empty() ) { return std::nullopt; }
+    fp3d_input::world_gestures().cancel();
+    fp3d_compositor::set_input_context( "FP3D_WHEEL" );
+    auto &io = ImGui::GetIO();
+    const bool no_mouse = io.ConfigFlags & ImGuiConfigFlags_NoMouse;
+    io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    on_out_of_scope restore( [&]() {
+        if( no_mouse ) { io.ConfigFlags |= ImGuiConfigFlags_NoMouse; }
+        fp3d_input::world_gestures().cancel();
+        fp3d_compositor::set_input_context( "DEFAULTMODE" );
+        if( g ) { g->invalidate_main_ui_adaptor(); }
+    } );
+    wheel menu( choices, heading, fp3d_modern_ui::scale_percent(), page );
+    menu.run();
+    page = menu.current_page();
+    return menu.native_result();
 }
 
 std::unique_ptr<cataimgui::window> create_dropdown( const std::vector<entry> &choices,
