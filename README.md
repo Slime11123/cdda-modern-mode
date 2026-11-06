@@ -6,18 +6,36 @@
 
 **CDDA Modern Mode** is an unofficial modernization project based on **Cataclysm: Dark Days Ahead (CDDA) 0.I-1 / Ito-1**. It adds experimental first-person 3D presentation, modern 2D controls, and mouse-friendly interfaces while preserving the original game's turn-based world, action-point costs, combat, and save mechanics.
 
-> **Status: experimental Windows preview (November 4, 2026).** Development builds may have crashes, compatibility issues, and inconsistent performance. This is not an official CDDA product, and full manual gameplay validation is still in progress.
+> **Status: experimental Windows preview (November 2026).** Development builds may have crashes, compatibility issues, and inconsistent performance. This is not an official CDDA product, and full manual gameplay validation is still in progress.
 
 ## Download and play
 
 Visit the [Releases page](https://github.com/Slime11123/cdda-modern-mode/releases) to see whether a Windows ZIP preview is available. Choose an asset labeled **Windows-x64**. GitHub's automatically generated **Source code** archives are *not* ready-to-play Windows builds.
 
 1. **Extract the entire ZIP** to a writable folder outside `Program Files`. Do not launch the executable from inside the ZIP.
-2. Double-click `Play-CDDA-Modern-Mode.cmd`. Keep the executable, DLLs, `data/`, and `gfx/` folders together.
+2. **Double-click `cataclysm-tiles.exe`** (the real game executable). No CMD or second EXE is needed in the Alpha.4 Windows package. Keep the DLLs, `data/`, `gfx/`, and `lang/` folders together.
 3. Create a new world and character in-game. Saves and settings are stored under the extracted `user/` folder; back them up before upgrading.
 4. Press **F5 or F6** to open the unified settings menu. Select the 2D/3D view, classic/modern controls, and classic sidebar/modern HUD independently, then apply and save.
 
-The first public ZIP uses the licensed assets included with the upstream-derived source tree; it does not bundle separately downloaded third-party tilesets. Please report issues in [GitHub Issues](https://github.com/Slime11123/cdda-modern-mode/issues).
+The Windows package includes redistributable assets from the upstream-derived source tree, but does not bundle separately downloaded third-party tilesets. Please report issues in [GitHub Issues](https://github.com/Slime11123/cdda-modern-mode/issues).
+
+## Recommended tileset: UndeadPeople
+
+For the **best visual experience**, we recommend pairing CDDA Modern Mode with **UndeadPeople (MSX++UnDeadPeopleEdition)**, especially for 3D buildings, furniture, and item sprites.
+
+> **The UndeadPeople tileset is not included, provided, or redistributed by this project.** It is a separate third-party resource. Download it yourself from its maintainers and follow its licensing and attribution terms. Since this project is based on CDDA 0.I-1, tileset compatibility may vary by version.
+
+**Tileset repository and download:** [Xenikos / UndeadPeopleTileset on GitHub](https://github.com/Xenikos/UndeadPeopleTileset).
+
+To install, copy the downloaded `MSX++UnDeadPeopleEdition` folder into the game's `gfx/` directory. In-game, go to **Options → Graphics → Choose Tileset** and select **UNDEAD_PEOPLE** (or its corresponding name). Restart the game if necessary.
+
+## In-game demonstration
+
+Actual first-person 3D gameplay screenshot supplied by the project developer:
+
+![CDDA Modern Mode — first-person 3D kitchen gameplay](docs/images/ingame-demo-kitchen-3d.png)
+
+*Development screenshot. Visual appearance depends on your selected tileset and game version.*
 
 ## Features
 
