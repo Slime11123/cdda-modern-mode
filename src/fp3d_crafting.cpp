@@ -5,6 +5,7 @@
 #include "avatar.h"
 #include "calendar.h"
 #include "crafting.h"
+#include "color.h"
 #include "crafting_gui.h"
 #include "uistate.h"
 #include "scoped_rng.h"
@@ -72,8 +73,8 @@ std::string details( const recipe_id &id )
     }
     // Native requirement formatting constructs temporary component items too.
     scoped_rng_restore restore_rng;
-    return remove_color_tags( id->description.translated() + "\n" +
-                              id->simple_requirements().list_all() );
+    return id->description.translated() + "\n" +
+           id->simple_requirements().list_all();
 }
 std::string details( const recipe_id &id, const avatar &crafter, int batch_size )
 {
@@ -109,8 +110,8 @@ std::string details( const recipe_id &id, const avatar &crafter, int batch_size 
     const auto deduped = id->deduped_requirements();
     const bool materials = deduped.can_make_with_inventory( available, filter, batch_size,
                            craft_flags::start_only );
-    result += materials ? "开工材料与工具：已满足。\n" :
-              "开工材料与工具：尚未满足。\n";
+    result += materials ? colorize( "开工材料与工具：已满足。", c_green ) + "\n" :
+              colorize( "开工材料与工具：尚未满足。", c_red ) + "\n";
     if( !materials ) {
         const auto needed = id->simple_requirements() * static_cast<unsigned>( batch_size );
         needed.can_make_with_inventory( available, filter, 1, craft_flags::start_only );
@@ -121,10 +122,19 @@ std::string details( const recipe_id &id, const avatar &crafter, int batch_size 
     if( deduped.is_too_complex() ) {
         result += "复杂材料组合仍需原版确认。\n";
     }
-    const std::string requirements = batch_size == 1 ? details( id ) :
-                                     id->description.translated() + "\n" +
-                                     ( id->simple_requirements() * static_cast<unsigned>( batch_size ) ).list_all();
-    return remove_color_tags( result + "\n" + requirements );
+    // The native crafting menu colorizes each alternative using the
+    // current inventory. Keep its color tags and reuse that same logic.
+    std::string requirements = id->description.translated() + "\n";
+    constexpr int preview_width = 76;
+    for( const std::string &line : id->simple_requirements().get_folded_tools_list(
+             preview_width, c_light_gray, available, batch_size ) ) {
+        requirements += line + "\n";
+    }
+    for( const std::string &line : id->simple_requirements().get_folded_components_list(
+             preview_width, c_light_gray, available, filter, batch_size ) ) {
+        requirements += line + "\n";
+    }
+    return result + "\n" + requirements;
 }
 
 bool start( avatar &you, const recipe_id &id, int batch_size, std::string &error,

@@ -11,11 +11,14 @@
 #include "character_martial_arts.h"
 #include "fp3d_compositor.h"
 #include "fp3d_crafting.h"
+#include "fp3d_bestiary.h"
 #include "fp3d_abilities.h"
 #include "fp3d_construction.h"
 #include "fp3d_journal.h"
 #include "fp3d_input.h"
 #include "fp3d_materials.h"
+#include "game.h"
+#include "kill_tracker.h"
 #include "fp3d_map.h"
 #include "fp3d_hud.h"
 #include "catacharset.h"
@@ -51,6 +54,7 @@ int scale_choice = 0;
 constexpr int mutations_page = 9;
 constexpr int bionics_page = 10;
 constexpr int styles_page = 11;
+constexpr int bestiary_page_index = 12;
 
 using fp3d_abilities::ability_request;
 using fp3d_abilities::bionic_control;
@@ -69,6 +73,13 @@ class panel : public cataimgui::window
         std::string mine_search;
         std::string near_search;
         std::string skill_search;
+        bool bestiary_loaded = false;
+        std::vector<fp3d_bestiary::record> bestiary;
+        int bestiary_category = 0;
+        std::string bestiary_search;
+        std::string bestiary_selected_id;
+        SDL_Texture_Ptr bestiary_icon;
+        std::string bestiary_icon_id;
         std::vector<std::pair<std::string, std::string>> needs;
         std::vector<std::pair<std::string, std::string>> effects;
         struct skill_row {
@@ -1033,7 +1044,7 @@ class panel : public cataimgui::window
                     is_open = false;
                 }
                 ImGui::Separator();
-                ImGui::TextWrapped( "%s", project_details.c_str() );
+                cataimgui::draw_colored_text( project_details, ImGui::GetContentRegionAvail().x );
             }
             ImGui::EndChild();
             compatible( ACTION_CONSTRUCT, "完整建造菜单（原版兼容）" );
@@ -1423,7 +1434,7 @@ class panel : public cataimgui::window
                     }
                 }
                 ImGui::Separator();
-                ImGui::TextWrapped( "%s", recipe_details.c_str() );
+                cataimgui::draw_colored_text( recipe_details, ImGui::GetContentRegionAvail().x );
             } else {
                 ImGui::TextWrapped( recipes.empty() ? "当前没有可用配方。" : "没有匹配的配方。" );
             }
@@ -1768,6 +1779,159 @@ class panel : public cataimgui::window
             }
             ImGui::EndChild();
         }
+        void bestiary_page() {
+            if( !bestiary_loaded ) {
+                bestiary = fp3d_bestiary::load_catalog();
+                bestiary_loaded = true;
+            }
+            ImGui::TextUnformatted( "怪物图鉴 / 当前世界已加载的怪物" );
+            ImGui::SameLine();
+            ImGui::TextDisabled( "(%d 种，包含动物、机械与模组生物)", static_cast<int>( bestiary.size() ) );
+            ImGui::SetNextItemWidth( std::min( 450 * scale, ImGui::GetContentRegionAvail().x ) );
+            ImGui::InputTextWithHint( "##图鉴搜索", "搜索当前语言的怪物名称或 monster ID", &bestiary_search );
+
+            std::array<int, 12> counts{};
+            counts[0] = static_cast<int>( bestiary.size() );
+            std::vector<size_t> filtered;
+            filtered.reserve( bestiary.size() );
+            for( size_t i = 0; i < bestiary.size(); ++i ) {
+                const auto &entry = bestiary[i];
+                ++counts[entry.category];
+                if( ( bestiary_category == 0 || entry.category == bestiary_category ) &&
+                    ( bestiary_search.empty() || lcmatch( entry.name, bestiary_search ) ||
+                      lcmatch( entry.id, bestiary_search ) ) ) {
+                    filtered.push_back( i );
+                }
+            }
+
+            const ImVec2 area = ImGui::GetContentRegionAvail();
+            const bool narrow = area.x < 800 * scale;
+            if( narrow ) {
+                ImGui::SetNextItemWidth( -1 );
+                if( ImGui::BeginCombo( "##图鉴分类", fp3d_bestiary::category_name( bestiary_category ) ) ) {
+                    for( int category = 0; category < 12; ++category ) {
+                        const std::string label = std::string( fp3d_bestiary::category_name( category ) ) +
+                                                  " (" + std::to_string( counts[category] ) + ")";
+                        if( ImGui::Selectable( label.c_str(), bestiary_category == category ) ) {
+                            bestiary_category = category;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            } else {
+                ImGui::BeginChild( "图鉴分类", ImVec2( 155 * scale, area.y ), true );
+                for( int category = 0; category < 12; ++category ) {
+                    const std::string label = std::string( fp3d_bestiary::category_name( category ) ) +
+                                              " (" + std::to_string( counts[category] ) + ")";
+                    if( ImGui::Selectable( label.c_str(), bestiary_category == category ) ) {
+                        bestiary_category = category;
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::SameLine();
+            }
+
+            if( !filtered.empty() && std::none_of( filtered.begin(), filtered.end(), [&]( size_t index ) {
+            return bestiary[index].id == bestiary_selected_id;
+            } ) ) {
+                bestiary_selected_id = bestiary[filtered.front()].id;
+            }
+
+            const ImVec2 content = ImGui::GetContentRegionAvail();
+            const bool vertical = content.x < 640 * scale;
+            const float list_height = vertical ? std::max( 95.f, content.y * .38f ) : content.y;
+            ImGui::BeginChild( "怪物目录", ImVec2( vertical ? 0 : content.x * .39f, list_height ), true );
+            ImGui::Text( "筛选结果 %d", static_cast<int>( filtered.size() ) );
+            ImGui::Separator();
+            if( filtered.empty() ) {
+                ImGui::TextDisabled( "没有匹配的怪物" );
+            }
+            // Use the base game's saved kill tracker, keyed by monster type ID.
+            // This includes kills credited to the player and their followers.
+            const kill_tracker &kill_stats = g->get_kill_tracker();
+            const float line_height = ImGui::GetTextLineHeightWithSpacing();
+            const float row_height = line_height * 2 + 6 * scale;
+            ImGuiListClipper clipper;
+            clipper.Begin( static_cast<int>( filtered.size() ), row_height + ImGui::GetStyle().ItemSpacing.y );
+            while( clipper.Step() ) {
+                for( int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row ) {
+                    const auto &entry = bestiary[filtered[row]];
+                    ImGui::PushID( entry.id.c_str() );
+                    if( ImGui::Selectable( "##怪物", bestiary_selected_id == entry.id, 0,
+                                           ImVec2( 0, row_height ) ) ) {
+                        bestiary_selected_id = entry.id;
+                    }
+                    const ImVec2 item_min = ImGui::GetItemRectMin();
+                    ImDrawList *draw = ImGui::GetWindowDrawList();
+                    draw->AddText( ImVec2( item_min.x + 6 * scale, item_min.y + 2 * scale ),
+                                   ImGui::GetColorU32( ImGuiCol_Text ), entry.name.c_str() );
+                    const std::string count_text = "击杀数：" +
+                                                   std::to_string( kill_stats.kill_count( entry.type->id ) );
+                    draw->AddText( ImVec2( item_min.x + 6 * scale,
+                                            item_min.y + 2 * scale + line_height ),
+                                   IM_COL32( 245, 70, 70, 255 ), count_text.c_str() );
+                    if( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip( "%s", entry.id.c_str() );
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+
+            if( !vertical ) {
+                ImGui::SameLine();
+            }
+            ImGui::BeginChild( "怪物档案", ImVec2( 0, 0 ), true );
+            const auto selected = std::find_if( bestiary.begin(), bestiary.end(), [&]( const auto &entry ) {
+                return entry.id == bestiary_selected_id;
+            } );
+            if( selected != bestiary.end() &&
+                std::find( filtered.begin(), filtered.end(), static_cast<size_t>( selected - bestiary.begin() ) ) != filtered.end() ) {
+                const mtype &mon = *selected->type;
+                if( bestiary_icon_id != selected->id ) {
+                    fp3d_snapshot::sprite sprite;
+                    sprite.kind = fp3d_snapshot::sprite_kind::monster;
+                    sprite.id = selected->id;
+                    bestiary_icon = fp3d_materials::item_icon( sprite );
+                    bestiary_icon_id = selected->id;
+                }
+                if( bestiary_icon ) {
+                    ImGui::Image( reinterpret_cast<ImTextureID>( bestiary_icon.get() ),
+                                  ImVec2( 110 * scale, 110 * scale ) );
+                    ImGui::SameLine();
+                }
+                ImGui::BeginGroup();
+                ImGui::TextWrapped( "%s", selected->name.c_str() );
+                ImGui::TextColored( ImVec4( 245.f / 255.f, 70.f / 255.f, 70.f / 255.f, 1.f ),
+                                    "击杀数：%d", kill_stats.kill_count( mon.id ) );
+                ImGui::TextDisabled( "%s", selected->id.c_str() );
+                ImGui::Text( "分类：%s", fp3d_bestiary::category_name( selected->category ) );
+                ImGui::EndGroup();
+                ImGui::Separator();
+                const std::string description = remove_color_tags( mon.get_description() );
+                ImGui::TextWrapped( "%s", description.empty() ? "此怪物没有说明文本。" : description.c_str() );
+                ImGui::Separator();
+                ImGui::Text( "生命值 %d     速度 %d", mon.hp, mon.speed );
+                ImGui::Text( "内部难度 %d     攻击倾向 %d", mon.difficulty, mon.agro );
+                ImGui::Text( "近战技能 %d     闪避 %d", mon.melee_skill, mon.sk_dodge );
+                ImGui::Text( "日间视觉 %d     夜间视觉 %d", mon.vision_day, mon.vision_night );
+                ImGui::TextWrapped( "默认阵营：%s", mon.default_faction.str().c_str() );
+                if( !mon.special_attacks_names.empty() ) {
+                    ImGui::Separator();
+                    ImGui::TextUnformatted( "特殊攻击 / 行为标识" );
+                    for( const std::string &ability : mon.special_attacks_names ) {
+                        ImGui::BulletText( "%s", ability.c_str() );
+                    }
+                }
+                ImGui::Separator();
+                ImGui::TextDisabled( "数值来自当前世界加载完成后的怪物定义；包含模组覆盖、JSON 继承。" );
+                ImGui::TextDisabled( "此页仅供查询，不消耗回合；不代表当前目标的实时生命值。" );
+            } else {
+                ImGui::TextDisabled( "从左侧列表选择一个怪物以查看资料。" );
+            }
+            ImGui::EndChild();
+        }
+
         void sidebar_page() {
             const auto hud = fp3d_compositor::hud_data();
             ImGui::BeginChild( "侧栏信息内容", ImVec2( 0, 0 ), true );
@@ -1813,14 +1977,14 @@ class panel : public cataimgui::window
             if( !action_message.empty() ) {
                 ImGui::TextColored( ImVec4( 1, .86f, .18f, 1 ), "%s", action_message.c_str() );
             }
-            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏", "变异", "仿生插件", "武术" };
+            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏", "变异", "仿生插件", "武术", "图鉴" };
             if( pickup_target ) {
                 ImGui::TextUnformatted( "拾取物品" );
             }
             if( crafting_position ) {
                 ImGui::TextUnformatted( "简易制作" );
             }
-            for( int i = 0; !pickup_target && !crafting_position && i <= styles_page; ++i ) {
+            for( int i = 0; !pickup_target && !crafting_position && i <= bestiary_page_index; ++i ) {
                 const float tab_width = ( i == 1 ? 110 : i == bionics_page ? 95 : 65 ) * scale;
                 if( i && ImGui::GetItemRectMax().x + tab_width + 50 * scale <
                     ImGui::GetWindowPos().x + ImGui::GetWindowWidth() ) {
@@ -1924,6 +2088,8 @@ class panel : public cataimgui::window
                 map_page();
             } else if( remembered_page == 7 ) {
                 more();
+            } else if( remembered_page == bestiary_page_index ) {
+                bestiary_page();
             } else if( remembered_page >= mutations_page ) {
                 ability_pages();
             } else {
@@ -2094,7 +2260,7 @@ class panel : public cataimgui::window
                 open_use = true;
             }
             if( initial_page >= 0 ) {
-                remembered_page = std::clamp( initial_page, 0, styles_page );
+                remembered_page = std::clamp( initial_page, 0, bestiary_page_index );
             }
             refresh_character();
             if( nearby ) {

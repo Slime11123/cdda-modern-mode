@@ -108,6 +108,46 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_wardrobe" ) {
             return model{ id, kind::locker };
         }
+        // These sprites use several 2D pseudo-3D views; the geometry below
+        // reconstructs real top/front/side surfaces rather than extruding them.
+        if( appearance == "f_displaycase" || appearance == "f_displaycase_b" ) {
+            return model{ id, kind::display_case };
+        }
+        if( appearance == "f_filing_cabinet" ) {
+            return model{ id, kind::file_cabinet };
+        }
+        if( appearance == "f_vending_c" || appearance == "f_vending_o" ||
+            appearance == "f_vending_reinforced" ) {
+            return model{ id, kind::vending_machine };
+        }
+        if( appearance == "f_workbench" ) {
+            return model{ id, kind::workbench };
+        }
+        if( appearance == "f_piano" ) {
+            return model{ id, kind::piano };
+        }
+        if( appearance == "f_pool_table" ) {
+            return model{ id, kind::pool_table };
+        }
+        if( appearance == "f_anvil" ) {
+            return model{ id, kind::anvil };
+        }
+        if( appearance == "f_kiln_empty" || appearance == "f_kiln_full" ||
+            appearance == "f_clay_kiln" ) {
+            return model{ id, kind::kiln };
+        }
+        if( appearance == "f_kiln_metal_empty" || appearance == "f_kiln_metal_full" ||
+            appearance == "f_kiln_portable_empty" || appearance == "f_kiln_portable_full" ) {
+            return model{ id, kind::metal_kiln };
+        }
+        if( appearance == "f_tablesaw" ) {
+            return model{ id, kind::table_saw };
+        }
+        if( appearance == "f_planter" || appearance == "f_planter_harvest" ||
+            appearance == "f_planter_mature" || appearance == "f_planter_seed" ||
+            appearance == "f_planter_seedling" ) {
+            return model{ id, kind::planter };
+        }
         appearance = definition->looks_like;
     }
     return std::nullopt;
@@ -300,6 +340,163 @@ const std::vector<part> &parts( kind shape )
     static const std::vector<part> dresser{
         { 0, 0, .93f, .72f, 0, .90f }
     };
+    // UndeadPeople: build real volume from each tile's silhouette.  The 2D
+    // pixel art is only a material source, never an extruded 2D plane.
+    // Two-level low display counter, matching the *lower two drawers* of
+    // the UndeadPeople tile.  Its painted blue upper area is NOT a glass
+    // showcase: never build glass panes or elevated posts for this variant.
+    static const std::vector<part> display_case{
+        { 0, 0, .95f, .82f, 0, .72f },            // two-drawer carcass
+        { 0, .420f, .86f, .027f, .39f, .69f },   // upper real drawer
+        { 0, .420f, .86f, .027f, .06f, .35f },   // lower real drawer
+        { 0, 0, .99f, .86f, .72f, .79f }        // flat top
+    };
+    // Four front-facing metal drawers, including the bottom one previously
+    // missing. The drawer plates project slightly beyond the cabinet front.
+    static const std::vector<part> file_cabinet{
+        { 0, 0, .84f, .78f, 0, 1.78f },          // side steel casing
+        { 0, 0, .88f, .82f, 1.78f, 1.82f },     // top
+        { 0, .405f, .71f, .034f, 1.37f, 1.73f }, // drawer 1
+        { 0, .405f, .71f, .034f, .96f, 1.32f },  // drawer 2
+        { 0, .405f, .71f, .034f, .55f, .91f },   // drawer 3
+        { 0, .405f, .71f, .034f, .14f, .50f }    // drawer 4 (bottom)
+    };
+    // Vending machine: red chassis, large raised display, separate coin
+    // control column, lower collection hatch, and a proper header.
+    static const std::vector<part> vending_machine{
+        { 0, 0, .94f, .84f, 0, 1.85f },
+        { 0, 0, .98f, .88f, 1.85f, 1.98f },
+        { -.125f, .436f, .61f, .028f, .79f, 1.73f },
+        { .337f, .438f, .19f, .028f, .83f, 1.55f },
+        { -.10f, .439f, .43f, .03f, .27f, .60f },
+        { 0, .432f, .89f, .023f, .05f, .18f }
+    };
+    static const std::vector<part> workbench{
+        { 0, 0, .96f, .85f, .76f, .89f },
+        { -.39f, -.35f, .10f, .10f, 0, .76f },
+        { .39f, -.35f, .10f, .10f, 0, .76f },
+        { -.39f, .35f, .10f, .10f, 0, .76f },
+        { .39f, .35f, .10f, .10f, 0, .76f },
+        { 0, -.35f, .88f, .08f, .15f, .29f }
+    };
+    static const std::vector<part> piano{
+        { 0, -.11f, .90f, .69f, .49f, 1.24f },
+        { 0, .27f, .92f, .24f, .76f, .90f },
+        { 0, -.11f, .94f, .73f, 1.24f, 1.30f },
+        { -.35f, .23f, .10f, .10f, 0, .76f },
+        { .35f, .23f, .10f, .10f, 0, .76f },
+        { -.35f, -.34f, .10f, .10f, 0, .49f },
+        { .35f, -.34f, .10f, .10f, 0, .49f }
+    };
+    static const std::vector<part> pool_table{
+        { 0, 0, .98f, .98f, .73f, .81f },
+        { 0, 0, .83f, .83f, .81f, .83f },
+        { -.39f, -.39f, .12f, .12f, 0, .73f },
+        { .39f, -.39f, .12f, .12f, 0, .73f },
+        { -.39f, .39f, .12f, .12f, 0, .73f },
+        { .39f, .39f, .12f, .12f, 0, .73f }
+    };
+    // Anvil's unmistakable overhanging horn and hardy face, forged waist and
+    // broad foot. The source 2D sprite's dark painted shadow is not a model.
+    static const std::vector<part> anvil{
+        { 0, 0, .47f, .40f, .06f, .21f },        // cast iron foot
+        { 0, 0, .29f, .25f, .21f, .52f },        // narrow waist
+        { 0, 0, .57f, .34f, .52f, .63f },        // flared shoulder
+        { 0, 0, .65f, .42f, .63f, .76f },        // wide flat working face
+        { -.38f, 0, .26f, .27f, .62f, .71f },   // tapered horn root
+        { -.54f, 0, .12f, .14f, .65f, .685f }, // horn tip
+        { .36f, 0, .21f, .30f, .62f, .70f }    // square heel
+    };
+    // A primitive, hand-stacked small-stone dome. Rings of staggered,
+    // irregular masonry follow a curved profile; the front is deliberately
+    // missing stones in a narrowing arch, exposing an actual hollow cavity.
+    // No large slabs, vertical walls, closed roof, or 2D pseudo-3D sprite.
+    // The entire model is static/deterministic for display-list caching and
+    // part-level mouse picking. Parts 0/1 are the sooty interior, 2+ stones.
+    static const std::vector<part> kiln = [] {
+        std::vector<part> pieces;
+        pieces.reserve( 140 );
+        pieces.push_back( { 0, .075f, .60f, .58f, .065f, .105f } ); // hearth floor
+        pieces.push_back( { 0, -.235f, .46f, .045f, .10f, .53f } ); // interior soot
+        constexpr std::array<float, 8> ring_x{
+            .427f, .418f, .403f, .375f, .337f, .287f, .224f, .148f
+        };
+        constexpr std::array<float, 8> ring_z{
+            .427f, .415f, .399f, .373f, .332f, .279f, .216f, .144f
+        };
+        constexpr std::array<int, 8> counts{
+            18, 18, 17, 16, 15, 13, 11, 9
+        };
+        constexpr float two_pi = 6.28318530718f;
+        for( int course = 0; course < 8; ++course ) {
+            const int count = counts[course];
+            const float low = .020f + course * .103f;
+            const float high = low + .122f;
+            const float level = ( low + high ) * .5f;
+            // Broad vertical jambs and a rounded arch. The opening narrows
+            // above the shoulder rather than ending with a square lintel.
+            const float mouth = level < .48f ? .234f :
+                                level < .60f ? .211f :
+                                level < .70f ? .167f :
+                                level < .78f ? .085f : 0.0f;
+            for( int i = 0; i < count; ++i ) {
+                const float angle = two_pi * ( i + ( course % 2 ? .5f : 0.0f ) ) / count;
+                const float cx = std::cos( angle ) * ring_x[course];
+                const float cz = std::sin( angle ) * ring_z[course];
+                // The front (+z) of the shell has a genuine empty entrance.
+                if( cz > .18f && std::abs( cx ) < mouth ) {
+                    continue;
+                }
+                const float drift = .004f * ( ( course * 3 + i * 7 ) % 5 - 2 );
+                const float jitter = .003f * ( ( course + i * 3 ) % 5 - 2 );
+                const float width = .139f + .010f * ( ( i + course ) % 4 );
+                const float depth = .143f + .008f * ( ( i * 3 + course ) % 4 );
+                pieces.push_back( { cx + drift * std::cos( angle ),
+                                    cz + drift * std::sin( angle ), width, depth,
+                                    low + jitter, high + jitter } );
+            }
+        }
+        // A few loose stones along the hearth lip and a crown stone over
+        // the arch; neither fills the entrance or seals the interior floor.
+        pieces.push_back( { -.31f, .386f, .145f, .15f, .018f, .126f } );
+        pieces.push_back( { .31f, .382f, .155f, .14f, .024f, .133f } );
+        pieces.push_back( { -.102f, .405f, .108f, .126f, .014f, .084f } );
+        pieces.push_back( { .121f, .400f, .116f, .13f, .012f, .077f } );
+        pieces.push_back( { 0, .018f, .183f, .176f, .848f, .934f } );
+        return pieces;
+    }();
+    // Industrial/portable kiln artwork is a *different object*: metal drum,
+    // vent pipe, door and control lights. Do not share the clay kiln model.
+    static const std::vector<part> metal_kiln{
+        { 0, 0, .72f, .68f, .12f, .89f, true },
+        { 0, 0, .77f, .74f, .89f, .98f, true },
+        { 0, 0, .54f, .51f, .98f, 1.01f, true },
+        { .27f, -.18f, .15f, .15f, .88f, 1.60f, true },
+        { .27f, -.18f, .20f, .20f, 1.60f, 1.68f, true },
+        { 0, .355f, .40f, .032f, .33f, .63f }, // dark access hatch
+        { -.25f, .354f, .12f, .027f, .46f, .69f },
+        { -.24f, -.25f, .07f, .07f, 0, .13f },
+        { .24f, -.25f, .07f, .07f, 0, .13f },
+        { -.24f, .25f, .07f, .07f, 0, .13f },
+        { .24f, .25f, .07f, .07f, 0, .13f }
+    };
+    static const std::vector<part> table_saw{
+        { 0, 0, .98f, .83f, .71f, .83f },
+        { -.38f, -.30f, .09f, .09f, 0, .71f },
+        { .38f, -.30f, .09f, .09f, 0, .71f },
+        { -.38f, .30f, .09f, .09f, 0, .71f },
+        { .38f, .30f, .09f, .09f, 0, .71f },
+        // A thin blade rising out of the top; not the 2D blade/shadow image.
+        { 0, -.10f, .045f, .45f, .83f, 1.03f }
+    };
+    static const std::vector<part> planter{
+        { 0, 0, .94f, .94f, 0, .36f },
+        { 0, 0, .80f, .80f, .36f, .39f },
+        { -.45f, 0, .07f, .94f, .36f, .45f },
+        { .45f, 0, .07f, .94f, .36f, .45f },
+        { 0, -.45f, .94f, .07f, .36f, .45f },
+        { 0, .45f, .94f, .07f, .36f, .45f }
+    };
     switch( shape ) {
         case kind::coffee_table:
             return coffee_table;
@@ -361,6 +558,28 @@ const std::vector<part> &parts( kind shape )
             return mini_fridge;
         case kind::dresser:
             return dresser;
+        case kind::display_case:
+            return display_case;
+        case kind::file_cabinet:
+            return file_cabinet;
+        case kind::vending_machine:
+            return vending_machine;
+        case kind::workbench:
+            return workbench;
+        case kind::piano:
+            return piano;
+        case kind::pool_table:
+            return pool_table;
+        case kind::anvil:
+            return anvil;
+        case kind::kiln:
+            return kiln;
+        case kind::metal_kiln:
+            return metal_kiln;
+        case kind::table_saw:
+            return table_saw;
+        case kind::planter:
+            return planter;
     }
     return table;
 }
@@ -424,6 +643,28 @@ float item_surface( kind shape )
             return .19f;
         case kind::dresser:
             return .25f;
+        case kind::display_case:
+            return .79f;
+        case kind::file_cabinet:
+            return 1.82f;
+        case kind::vending_machine:
+            return 1.98f;
+        case kind::workbench:
+            return .89f;
+        case kind::piano:
+            return 1.30f;
+        case kind::pool_table:
+            return .83f;
+        case kind::anvil:
+            return .77f;
+        case kind::kiln:
+            return .934f;
+        case kind::metal_kiln:
+            return 1.01f;
+        case kind::table_saw:
+            return .83f;
+        case kind::planter:
+            return .39f;
     }
     return 0;
 }
@@ -452,10 +693,15 @@ unsigned facing( kind shape, const std::array<bool, 4> &walls,
         return 2;
     }
     if( !shows_contents( shape ) && shape != kind::cabinet && shape != kind::counter &&
-        shape != kind::desk && shape != kind::sofa && shape != kind::sink && shape != kind::oven &&
+        shape != kind::bench && shape != kind::desk && shape != kind::sofa &&
+        shape != kind::sink && shape != kind::oven &&
         shape != kind::bathtub && shape != kind::toilet && shape != kind::armchair &&
         shape != kind::fireplace && shape != kind::park_bench && shape != kind::washer &&
-        shape != kind::dishwasher && shape != kind::wood_stove ) {
+        shape != kind::dishwasher && shape != kind::wood_stove &&
+        shape != kind::display_case && shape != kind::file_cabinet &&
+        shape != kind::vending_machine && shape != kind::workbench &&
+        shape != kind::piano && shape != kind::table_saw &&
+        shape != kind::kiln && shape != kind::metal_kiln ) {
         return 0;
     }
     // Preserve the established orientation in free space. Prefer a wall behind

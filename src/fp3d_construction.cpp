@@ -5,6 +5,7 @@
 #include "avatar.h"
 #include "cata_scope_helpers.h"
 #include "construction.h"
+#include "color.h"
 #include "construction_group.h"
 #include "construction_category.h"
 #include "output.h"
@@ -49,8 +50,8 @@ std::string details( const construction_group_str_id &group, avatar *crafter )
         result += "阶段 " + std::to_string( ++stage ) + "\n";
         if( crafter ) {
             result += player_can_build( *crafter, *available, entry, true ) ?
-                      "材料、工具与知识：已满足该阶段需求。\n" :
-                      "材料、工具与知识：尚未满足该阶段需求。\n";
+                      colorize( "材料、工具与知识：已满足该阶段需求。", c_green ) + "\n" :
+                      colorize( "材料、工具与知识：尚未满足该阶段需求。", c_red ) + "\n";
         }
         for( const auto &line : entry.get_folded_time_string( 60 ) ) {
             result += line + "\n";
@@ -58,12 +59,27 @@ std::string details( const construction_group_str_id &group, avatar *crafter )
         for( const auto &skill : entry.required_skills ) {
             result += skill.first->name() + " " + std::to_string( skill.second ) + "\n";
         }
-        result += entry.pre_note.translated() + "\n" + entry.requirements->list_all() + "\n";
+        result += entry.pre_note.translated() + "\n";
+        if( available ) {
+            // Match the original construction menu's green/red material and tool
+            // alternatives, rather than printing an uncolored requirement list.
+            constexpr int preview_width = 76;
+            for( const std::string &line : entry.requirements->get_folded_tools_list(
+                     preview_width, c_light_gray, *available ) ) {
+                result += line + "\n";
+            }
+            for( const std::string &line : entry.requirements->get_folded_components_list(
+                     preview_width, c_light_gray, *available, is_crafting_component ) ) {
+                result += line + "\n";
+            }
+        } else {
+            result += entry.requirements->list_all() + "\n";
+        }
     }
     if( crafter && !result.empty() ) {
         result += "位置与光照在选择施工位置时检查。\n";
     }
-    return remove_color_tags( result );
+    return result;
 }
 bool preview_allowed( avatar &you, map &here, const construction &project,
                       const fp3d_targeting::target &target )

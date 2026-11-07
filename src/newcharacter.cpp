@@ -133,6 +133,27 @@ static bool isWide = false;
 
 static int skill_increment_cost( const Character &u, const skill_id &skill );
 
+struct list_scroll_state {
+    int selection = -1;
+    int count = -1;
+
+    void update( int &offset, int current, int height, int size ) {
+        if( selection != current || count != size ) {
+            calcStartPos( offset, current, height, size );
+        }
+        offset = std::clamp( offset, 0, std::max( 0, size - height ) );
+        selection = current;
+        count = size;
+    }
+};
+
+static bool navigate_chargen_list( const std::string &action, int &selection, int step,
+                                  int count, bool wrap )
+{
+    return action != "SCROLL_UP" && action != "SCROLL_DOWN" &&
+           navigate_ui_list( action, selection, step, count, wrap );
+}
+
 class tab_manager
 {
         std::vector<std::string> &tab_names;
@@ -144,6 +165,11 @@ class tab_manager
             std::function<void()> select;
         };
         std::vector<click_target> click_targets;
+        struct scroll_target {
+            inclusive_rectangle<point> area;
+            std::function<void( int )> scroll;
+        };
+        std::vector<scroll_target> scroll_targets;
     public:
         bool complete = false;
         bool quit = false;
@@ -159,11 +185,14 @@ class tab_manager
         void add_click( const catacurses::window &w, const point &from, const point &to,
                         const std::string &action, const std::function<void()> &select = {} );
         std::string get_input( input_context &ctxt );
+        void add_scroll( const catacurses::window &w, const point &from, const point &to,
+                         int &offset, int height, int count );
 };
 
 void tab_manager::draw( const catacurses::window &w, const input_context &ctxt )
 {
     click_targets.clear();
+    scroll_targets.clear();
     std::pair<std::vector<std::string>, size_t> fitted_tabs = fit_tabs_to_width( getmaxx( w ),
             position.cur_index(), tab_names );
     tab_map = draw_tabs( w, fitted_tabs.first, position.cur_index() - fitted_tabs.second,
@@ -197,12 +226,16 @@ void tab_manager::draw( const catacurses::window &w, const input_context &ctxt )
              std::pair{ _( "开局日期" ), "CHANGE_START_OF_GAME" },
              std::pair{ _( "重置日期" ), "RESET_CALENDAR" },
              std::pair{ _( "随机" ), "RANDOMIZE" },
-             std::pair{ _( "保存模板" ), "SAVE_TEMPLATE" },
+             std::pair{ _( "保存预设角色" ), "SAVE_TEMPLATE" },
              std::pair{ _( "随机姓名" ), "RANDOMIZE_CHAR_NAME" },
              std::pair{ _( "随机外观" ), "RANDOMIZE_CHAR_DESCRIPTION" }
          } ) {
         if( !ctxt.is_registered_action( button.second ) ) {
             continue;
+        }
+        if( std::string( button.second ) == "SAVE_TEMPLATE" &&
+            getmaxx( w ) >= 100 && getmaxy( w ) >= 38 ) {
+            continue; // The description page has a separate save button.
         }
         if( ctxt.is_registered_action( "SAVE_TEMPLATE" ) &&
             std::string( button.second ).compare( 0, 7, "CHANGE_" ) == 0 ) {
@@ -229,6 +262,17 @@ void tab_manager::add_click( const catacurses::window &w, const point &from, con
 std::string tab_manager::get_input( input_context &ctxt )
 {
     const std::string action = ctxt.handle_input();
+    if( action == "SCROLL_UP" || action == "SCROLL_DOWN" ) {
+        const std::optional<point> coord = ctxt.get_coordinates_text( catacurses::stdscr );
+        if( coord ) {
+            for( const scroll_target &target : scroll_targets ) {
+                if( target.area.contains( *coord ) ) {
+                    target.scroll( action == "SCROLL_DOWN" ? 3 : -3 );
+                    return "";
+                }
+            }
+        }
+    }
     if( action == "SELECT" ) {
         const std::optional<point> coord = ctxt.get_coordinates_text( catacurses::stdscr );
         if( coord ) {
@@ -243,6 +287,17 @@ std::string tab_manager::get_input( input_context &ctxt )
         }
     }
     return action;
+}
+
+void tab_manager::add_scroll( const catacurses::window &w, const point &from, const point &to,
+                             int &offset, int height, int count )
+{
+    const point origin( getbegx( w ), getbegy( w ) );
+    scroll_targets.push_back( { { origin + from, origin + to },
+        [ &offset, height, count ]( int rows ) {
+            offset = std::clamp( offset + rows, 0, std::max( 0, count - height ) );
+        }
+    } );
 }
 
 bool tab_manager::handle_input( const std::string &action, const input_context &ctxt )
@@ -1369,7 +1424,7 @@ void set_points( tab_manager &tabs, avatar &u, pool_type &pool )
         const std::string action = tabs.get_input( ctxt );
         if( tabs.handle_input( action, ctxt ) ) {
             break; // Tab has changed or user has quit the screen
-        } else if( navigate_ui_list( action, highlighted, 1, opts_length, true ) ) {
+        } else if( navigate_chargen_list( action, highlighted, 1, opts_length, true ) ) {
         } else if( action == "CONFIRM" ) {
             const auto &cur_opt = opts[highlighted];
             pool = std::get<0>( cur_opt );
@@ -1707,7 +1762,7 @@ void set_stats( tab_manager &tabs, avatar &u, pool_type pool )
         if( tabs.handle_input( action, ctxt ) ) {
             break; // Tab has changed or user has quit the screen
         } else if( details.handle_navigation( action, ctxt )
-                   || navigate_ui_list( action, sel, 1, 4, true ) ) {
+                   || navigate_chargen_list( action, sel, 1, 4, true ) ) {
             // NO FURTHER ACTION REQUIRED
         } else if( action == "LEFT" ) {
             if( *stats[sel] > min_stat_points ) {
@@ -1862,6 +1917,7 @@ void set_traits( tab_manager &tabs, avatar &u, pool_type pool )
 
     int iCurWorkingPage = 0;
     std::array<int, 3> iStartPos = { 0, 0, 0 };
+    std::array<list_scroll_state, 3> scroll_states;
     std::array<int, 3> iCurrentLine = { 0, 0, 0 };
     std::array<size_t, 3> traits_size;
     bool recalc_traits = false;
@@ -2011,7 +2067,10 @@ void set_traits( tab_manager &tabs, avatar &u, pool_type pool )
 
             int &start = iStartPos[iCurrentPage];
             int current = iCurrentLine[iCurrentPage];
-            calcStartPos( start, current, iContentHeight, traits_size[iCurrentPage] );
+            scroll_states[iCurrentPage].update( start, current, iContentHeight, traits_size[iCurrentPage] );
+            tabs.add_scroll( w, point( iCurrentPage * page_width, iHeaderHeight ),
+                             point( ( iCurrentPage + 1 ) * page_width - 1, iHeaderHeight + iContentHeight - 1 ),
+                             start, iContentHeight, traits_size[iCurrentPage] );
             int end = start + static_cast<int>( std::min( traits_size[iCurrentPage], iContentHeight ) );
 
             for( int i = start; i < end; i++ ) {
@@ -2201,7 +2260,7 @@ void set_traits( tab_manager &tabs, avatar &u, pool_type pool )
             iCurWorkingPage = next_avail_page( action == "LEFT" );
         } else if( scrollbar_handled
                    || details.handle_navigation( action, ctxt )
-                   || navigate_ui_list( action, iCurrentLine[iCurWorkingPage], 10,
+                   || navigate_chargen_list( action, iCurrentLine[iCurWorkingPage], 10,
                                         traits_size[iCurWorkingPage], true ) ) {
             // No additional action required
         } else if( action == "CONFIRM" ) {
@@ -2620,6 +2679,7 @@ void set_profession( tab_manager &tabs, avatar &u, pool_type pool )
     int cur_id = 0;
     size_t iContentHeight = 0;
     int iStartPos = 0;
+    list_scroll_state scroll_state;
 
     const bool screen_reader_mode = get_option<bool>( "SCREEN_READER_MODE" );
 
@@ -2701,7 +2761,10 @@ void set_profession( tab_manager &tabs, avatar &u, pool_type pool )
         }
 
         //Draw options
-        calcStartPos( iStartPos, cur_id, iContentHeight, profs_length );
+        scroll_state.update( iStartPos, cur_id, iContentHeight, profs_length );
+        tabs.add_scroll( w, point( 0, iHeaderHeight ),
+                         point( TERMX / 2 - 1, iHeaderHeight + iContentHeight - 1 ),
+                         iStartPos, iContentHeight, profs_length );
         const int end_pos = iStartPos + std::min( { iContentHeight, profs_length, sorted_profs.size() } );
         std::string cur_prof_notes;
         for( int i = iStartPos; i < end_pos; i++ ) {
@@ -2781,7 +2844,7 @@ void set_profession( tab_manager &tabs, avatar &u, pool_type pool )
         if( tabs.handle_input( action, ctxt ) ) {
             break; // Tab has changed or user has quit the screen
         } else if( details.handle_navigation( action, ctxt )
-                   || navigate_ui_list( action, cur_id, scroll_rate, recmax, true ) ) {
+                   || navigate_chargen_list( action, cur_id, scroll_rate, recmax, true ) ) {
             // NO FURTHER ACTION REQUIRED
         } else if( list_sb.handle_dragging( action, ctxt.get_coordinates_text( catacurses::stdscr ),
                                             scrollbar_pos ) ) {
@@ -2977,6 +3040,7 @@ void set_hobbies( tab_manager &tabs, avatar &u, pool_type pool )
     int cur_id = 0;
     size_t iContentHeight = 0;
     int iStartPos = 0;
+    list_scroll_state scroll_state;
 
     const bool screen_reader_mode = get_option<bool>( "SCREEN_READER_MODE" );
 
@@ -3058,7 +3122,10 @@ void set_hobbies( tab_manager &tabs, avatar &u, pool_type pool )
         }
 
         //Draw options
-        calcStartPos( iStartPos, cur_id, iContentHeight, hobbies_length );
+        scroll_state.update( iStartPos, cur_id, iContentHeight, hobbies_length );
+        tabs.add_scroll( w, point( 0, iHeaderHeight ),
+                         point( TERMX / 2 - 1, iHeaderHeight + iContentHeight - 1 ),
+                         iStartPos, iContentHeight, hobbies_length );
         const int end_pos = iStartPos + std::min( { iContentHeight, hobbies_length, sorted_hobbies.size() } );
         std::string cur_hob_notes;
         for( int i = iStartPos; i < end_pos; i++ ) {
@@ -3134,7 +3201,7 @@ void set_hobbies( tab_manager &tabs, avatar &u, pool_type pool )
         if( tabs.handle_input( action, ctxt ) ) {
             break; // Tab has changed or user has quit the screen
         } else if( details.handle_navigation( action, ctxt )
-                   || navigate_ui_list( action, cur_id, scroll_rate, recmax, true ) ) {
+                   || navigate_chargen_list( action, cur_id, scroll_rate, recmax, true ) ) {
             // NO FURTHER ACTION REQUIRED
         } else if( list_sb.handle_dragging( action, ctxt.get_coordinates_text( catacurses::stdscr ),
                                             scrollbar_pos ) ) {
@@ -3370,6 +3437,7 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
 
     const int num_skills = skill_list.size();
     int cur_offset = 1;
+    list_scroll_state scroll_state;
     int cur_pos = 0;
     const Skill *currentSkill = nullptr;
 
@@ -3424,7 +3492,10 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
                        currentSkill->name(), upgrade_levels_s, cost );
         }
 
-        calcStartPos( cur_offset, cur_pos, iContentHeight, num_skills );
+        scroll_state.update( cur_offset, cur_pos, iContentHeight, num_skills );
+        tabs.add_scroll( w_list, point::zero,
+                         point( getmaxx( w_list ) - 1, getmaxy( w_list ) - 1 ),
+                         cur_offset, iContentHeight, num_skills );
         for( int i = cur_offset; i < num_skills && i - cur_offset < iContentHeight; ++i ) {
             const int y = i - cur_offset;
             const Skill *thisSkill = skill_list[i].skill;
@@ -3529,7 +3600,7 @@ void set_skills( tab_manager &tabs, avatar &u, pool_type pool )
                     get_next( true ); // Go back to where we were to ensure we can drag to the top
                 }
             }
-        } else if( navigate_ui_list( action, cur_pos, scroll_rate, skill_list.size(), true ) ) {
+        } else if( navigate_chargen_list( action, cur_pos, scroll_rate, skill_list.size(), true ) ) {
             // omitting action == "PAGE_UP", because that shouldn't wrap
             const bool go_up = action == "UP" || action == "SCROLL_UP";
             get_next( go_up );
@@ -3706,6 +3777,7 @@ void set_scenario( tab_manager &tabs, avatar &u, pool_type pool )
     int cur_id = 0;
     size_t iContentHeight = 0;
     int iStartPos = 0;
+    list_scroll_state scroll_state;
 
     ui_adaptor ui;
     catacurses::window w;
@@ -3791,7 +3863,10 @@ void set_scenario( tab_manager &tabs, avatar &u, pool_type pool )
         }
 
         //Draw options
-        calcStartPos( iStartPos, cur_id, iContentHeight, scens_length );
+        scroll_state.update( iStartPos, cur_id, iContentHeight, scens_length );
+        tabs.add_scroll( w, point( 0, iHeaderHeight ),
+                         point( TERMX / 2 - 1, iHeaderHeight + iContentHeight - 1 ),
+                         iStartPos, iContentHeight, scens_length );
         const int end_pos = iStartPos + std::min( { iContentHeight, scens_length, sorted_scens.size() } );
         std::string current_scenario_notes;
         for( int i = iStartPos; i < end_pos; i++ ) {
@@ -3880,7 +3955,7 @@ void set_scenario( tab_manager &tabs, avatar &u, pool_type pool )
         if( tabs.handle_input( action, ctxt ) ) {
             break; // Tab has changed or user has quit the screen
         } else if( details.handle_navigation( action, ctxt )
-                   || navigate_ui_list( action, cur_id, scroll_rate, scens_length, true ) ) {
+                   || navigate_chargen_list( action, cur_id, scroll_rate, scens_length, true ) ) {
             // NO FURTHER ACTION REQUIRED
         } else if( list_sb.handle_dragging( action, ctxt.get_coordinates_text( catacurses::stdscr ),
                                             scrollbar_pos ) ) {
@@ -4188,11 +4263,13 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
     catacurses::window w_age;
     catacurses::window w_blood;
     catacurses::window w_calendar;
+    catacurses::window w_save_preset;
     const auto init_windows = [&]( ui_adaptor & ui ) {
         isWide = TERMX >= 100 && TERMY >= 38;
         const int ncol_small = ( TERMX / 2 ) - 2;
         const int begin_sncol = TERMX / 2;
         if( isWide ) {
+            w_save_preset = catacurses::newwin( 3, 26, point( TERMX - 28, TERMY - 5 ) );
             const int column_width = ( TERMX - 8 ) / 3;
             const int middle = column_width + 4;
             const int right = column_width * 2 + 6;
@@ -4220,6 +4297,7 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             w_skills = catacurses::newwin( bottom - 15, column_width, point( right, 15 ) );
             ui.position_from_window( w );
         } else {
+            w_save_preset = catacurses::window();
             w = catacurses::newwin( TERMY, TERMX, point::zero );
             w_name = catacurses::newwin( 1, ncol_small, point( 2, 5 ) );
             w_gender = catacurses::newwin( 1, ncol_small, point( 2, 6 ) );
@@ -4241,7 +4319,8 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             w_skills = catacurses::window();
             ui.position_from_window( w );
         }
-        w_guide = catacurses::newwin( iHelpHeight, TERMX - 4, point( 2, TERMY - iHelpHeight - 1 ) );
+        w_guide = catacurses::newwin( iHelpHeight, isWide ? TERMX - 34 : TERMX - 4,
+                                      point( 2, TERMY - iHelpHeight - 1 ) );
     };
     init_windows( ui );
     ui.on_screen_resize( init_windows );
@@ -4314,7 +4393,7 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
         const std::string help_text = isWide ?
                                      _( "点击基本信息或日期直接编辑；点击场景、职业、背景、属性、特性或技能可返回对应页面。\n完成调整后，点击右下角“完成”创建角色。" ) :
                                      assemble_description_help( ctxt, allow_reroll );
-        const int new_iHelpHeight = foldstring( help_text, getmaxx( w ) - 4 ).size();
+        const int new_iHelpHeight = foldstring( help_text, isWide ? TERMX - 34 : TERMX - 4 ).size();
         if( new_iHelpHeight != iHelpHeight ) {
             iHelpHeight = new_iHelpHeight;
             init_windows( ui );
@@ -4541,6 +4620,27 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             [&, selector]() { current_selector = selector; } );
         };
         edit_field( w_name, char_creation::NAME );
+        // Register the individual choices before the whole-row edit target.
+        const auto direct_choice = [&]( const catacurses::window &field, const std::string &label,
+                                        char_creation::description_selector selector, bool &value ) {
+            const int male_x = 1 + utf8_width( label );
+            const int female_x = male_x + 2 + utf8_width( _( "Male" ) );
+            bool *selected_value = &value;
+            tabs.add_click( field, point( male_x, 0 ),
+                            point( male_x + utf8_width( _( "Male" ) ) - 1, 0 ), "",
+            [&, selector, selected_value]() {
+                current_selector = selector;
+                *selected_value = true;
+            } );
+            tabs.add_click( field, point( female_x, 0 ),
+                            point( female_x + utf8_width( _( "Female" ) ) - 1, 0 ), "",
+            [&, selector, selected_value]() {
+                current_selector = selector;
+                *selected_value = false;
+            } );
+        };
+        direct_choice( w_gender, _( "Gender:" ), char_creation::GENDER, you.male );
+        direct_choice( w_outfit, _( "Outfit:" ), char_creation::OUTFIT, outfit );
         edit_field( w_gender, char_creation::GENDER );
         edit_field( w_outfit, char_creation::OUTFIT );
         edit_field( w_height, char_creation::HEIGHT );
@@ -4683,6 +4783,15 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
                 edit_summary( w_bionics, "EDIT_PROFESSION" );
                 edit_summary( w_proficiencies, "EDIT_BACKGROUND" );
             }
+        }
+        if( w_save_preset ) {
+            werase( w_save_preset );
+            draw_border( w_save_preset, c_light_green );
+            center_print( w_save_preset, 1, c_light_green, _( "保存预设角色" ) );
+            tabs.add_click( w_save_preset, point::zero,
+                            point( getmaxx( w_save_preset ) - 1, getmaxy( w_save_preset ) - 1 ),
+                            "SAVE_TEMPLATE" );
+            wnoutrefresh( w_save_preset );
         }
     } );
 

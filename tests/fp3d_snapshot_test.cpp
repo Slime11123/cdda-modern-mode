@@ -918,6 +918,14 @@ TEST_CASE( "fp3d_upstairs_atrium_does_not_cover_the_visible_lower_room", "[fp3d]
     REQUIRE( floor );
     CHECK( floor->floor_present );
     CHECK_FALSE( floor->ceiling_present );
+    for( int y = -4; y <= -1; ++y ) {
+        for( int x = -1; x <= 1; ++x ) {
+            const auto *surface = find_cell( scene, here.get_abs( origin + tripoint_rel_ms( x, y, 0 ) ) );
+            REQUIRE( surface );
+            CHECK( surface->floor_present );
+            CHECK_FALSE( surface->ceiling_present );
+        }
+    }
     CHECK( std::any_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto &image ) {
         return image.position == here.get_abs( lower ) && image.id == "rock";
     } ) );

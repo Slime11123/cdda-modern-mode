@@ -655,7 +655,14 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                           !here.is_outside( p ) &&
                                           here.access_cache( z ).seen_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID + .1f &&
                                           here.sees( player, p, you.unimpaired_range() );
-                tile.exterior_only = fresh && !visible && ( room_surface ||
+                // The first solid boundary below visible shaft air is visible
+                // geometry even when cross-level shadowcasting drops its endpoint.
+                // This fallback never copies the room's furniture or contents.
+                const bool lower_surface = fresh && !visible && !blind && p.z() < player.z() &&
+                                           ( perception[index( p + tripoint_rel_ms::above )] & air_bit ) &&
+                                           !you.cant_see( p ) && square_dist( player, p ) <= you.unimpaired_range() &&
+                                           here.has_floor( p );
+                tile.exterior_only = fresh && !visible && ( room_surface || lower_surface ||
                                      exposed_surface( you, here, p, beside_visible_air, blind ) );
                 if( visible || tile.exterior_only ) {
                     tile.terrain = here.ter( p ).id().str();

@@ -713,7 +713,9 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         result.side = crop( 4, 2, 26, 6 );
     } else if( uses( "f_bookcase" ) ) {
         result.top = crop( 2, 1, 29, 6 );
-        result.front = result.side = crop( 1, 10, 3, 29 );
+        // The books are the front of the case, not the side or top.
+        result.front = crop( 3, 9, 29, 29 );
+        result.side = crop( 1, 10, 3, 29 );
     } else if( uses( "f_rack" ) ) {
         result.top = crop( 2, 1, 29, 8 );
         result.front = result.side = crop( 1, 10, 2, 28 );
@@ -806,6 +808,176 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         if( part_index == 0 ) {
             result.top = crop( 8, 10, 25, 19 );
             result.front = result.side = crop( 12, 16, 18, 18 );
+        }
+    } else if( uses( "f_table" ) ) {
+        // Flat overhead grain. Side/legs use a small neutral grain patch.
+        result.top = crop( 1, 1, 30, 30 );
+        result.front = result.side = crop( 12, 13, 16, 18 );
+    } else if( uses( "f_desk" ) ) {
+        result.top = crop( 2, 2, 29, 29 );
+        result.front = result.side = crop( 9, 12, 13, 18 );
+    } else if( uses( "f_counter" ) ) {
+        result.top = crop( 2, 2, 29, 29 );
+        result.front = result.side = crop( 11, 10, 16, 15 );
+    } else if( uses( "f_bed" ) ) {
+        // The entire quilt is a bird's-eye view, not a front-facing wall.
+        result.top = crop( 1, 1, 30, 30 );
+        result.front = result.side = crop( 12, 12, 17, 17 );
+    } else if( uses( "f_workbench" ) ) {
+        // Workbench sprite: top-down patterned surface plus a fake shadow.
+        const auto wood = crop( 5, 8, 9, 12 );
+        result.top = result.front = result.side = wood;
+        if( part_index == 0 ) {
+            result.top = crop( 2, 2, 27, 27 );
+        }
+    } else if( uses( "f_displaycase" ) || uses( "f_displaycase_b" ) ) {
+        // The actual 2D sprite is front-elevation art: its upper blue area
+        // must NOT be turned into an extra glass cabinet. Use only the
+        // lower pair of drawers (pixel rows 15..30).
+        const auto painted_metal = crop( 11, 16, 16, 20 );
+        result.top = result.front = result.side = painted_metal;
+        if( part_index == 1 ) {
+            result.front = crop( 2, 15, 29, 23 ); // upper drawer
+        } else if( part_index == 2 ) {
+            result.front = crop( 2, 24, 29, 30 ); // lower drawer
+        } else if( part_index == 3 ) {
+            result.top = crop( 3, 16, 6, 17 );   // plain cabinet paint; no drawer handles
+        }
+    } else if( uses( "f_filing_cabinet" ) ) {
+        // The 2D sprite contains three drawn drawers, while the desired 3D
+        // cabinet has four. Repeat the drawn handle motif on every separate
+        // front slab: do not sample the sprite's black left-side shadow.
+        const auto steel = crop( 10, 7, 15, 10 );
+        result.top = result.front = result.side = steel;
+        if( part_index == 1 ) {
+            result.top = crop( 8, 5, 23, 9 );
+        } else if( part_index >= 2 && part_index <= 5 ) {
+            result.front = crop( 8, 13, 22, 17 );
+            result.top = crop( 10, 9, 20, 11 );
+        }
+    } else if( uses( "f_vending_c" ) || uses( "f_vending_o" ) ||
+               uses( "f_vending_reinforced" ) ) {
+        const bool reinforced = uses( "f_vending_reinforced" );
+        // All images are front-elevation 2D drawings with black outside
+        // x=6..24. Extract painted chassis, red header, real product window,
+        // coin controls and the delivery hatch as distinct 3D faces.
+        const auto shell = reinforced ? crop( 9, 3, 14, 5 ) :
+                           crop( 10, 3, 15, 5 );
+        result.top = result.front = result.side = shell;
+        if( part_index == 1 ) {
+            result.top = crop( 8, 2, 22, 5 );
+            result.front = crop( 8, 3, 22, 6 );
+        } else if( part_index == 2 ) {
+            result.front = reinforced ? crop( 8, 10, 21, 19 ) :
+                           crop( 8, 10, 19, 20 );
+            result.top = crop( 9, 9, 19, 11 );
+        } else if( part_index == 3 ) {
+            result.front = reinforced ? crop( 19, 17, 23, 24 ) :
+                           crop( 19, 18, 23, 24 );
+        } else if( part_index == 4 ) {
+            result.front = crop( 9, 24, 20, 27 );
+        } else if( part_index == 5 ) {
+            result.front = crop( 8, 27, 23, 29 );
+        }
+    } else if( uses( "f_piano" ) ) {
+        // The sprite is an oblique miniature piano; never stamp the whole
+        // isometric drawing onto the top or the vertical body.
+        const auto black = crop( 7, 12, 10, 16 );
+        result.top = result.front = result.side = black;
+        if( part_index == 1 ) {
+            result.top = crop( 10, 22, 23, 25 ); // actual white-key strip
+            result.front = crop( 10, 24, 23, 25 );
+        } else if( part_index == 2 ) {
+            result.top = crop( 7, 6, 22, 12 ); // black polished lid
+        }
+    } else if( uses( "f_pool_table" ) ) {
+        // One pure green overhead felt tile; never map the full square as a
+        // vertical elevation. The wood is inferred from darker pixel patches.
+        const auto rail = crop( 2, 23, 4, 26 );
+        result.top = result.front = result.side = rail;
+        if( part_index == 1 ) {
+            result.top = crop( 3, 3, 28, 28 );
+        }
+    } else if( uses( "f_anvil" ) ) {
+        // Actual forged grey lies in the silhouette's y=17..27 region.
+        // Old y=13..17 crops sampled transparent black above the anvil.
+        const auto steel = crop( 13, 19, 17, 22 );
+        result.top = result.front = result.side = steel;
+        if( part_index == 0 || part_index == 1 ) {
+            result.front = result.side = crop( 13, 24, 18, 27 );
+        } else if( part_index == 3 || part_index == 4 || part_index == 5 ) {
+            result.top = crop( 11, 18, 21, 21 );
+        }
+    } else if( uses( "f_kiln_empty" ) || uses( "f_kiln_full" ) ||
+               uses( "f_clay_kiln" ) ) {
+        // The source art is a 32x32 2D overhead/oblique sprite. Sample only
+        // its actual hand-laid rock pixels for 3D blocks, not the black
+        // sprite border or the painted fake hole. Index 0 is the coal bed
+        // and 1 is the sooty inner backing; every other part is one stone.
+        const auto pale = crop( 22, 18, 27, 21 );
+        const auto mid = crop( 4, 19, 8, 22 );
+        const auto highlight = crop( 24, 19, 28, 22 );
+        if( part_index == 0 ) {
+            result.top = crop( 12, 25, 19, 28 );
+            result.front = result.side = crop( 11, 22, 20, 24 );
+        } else if( part_index == 1 ) {
+            result.top = result.front = result.side = crop( 11, 22, 20, 24 );
+        } else {
+            switch( part_index % 4 ) {
+                case 0:
+                    result.top = highlight;
+                    result.front = mid;
+                    result.side = pale;
+                    break;
+                case 1:
+                    result.top = pale;
+                    result.front = highlight;
+                    result.side = mid;
+                    break;
+                case 2:
+                    result.top = pale;
+                    result.front = mid;
+                    result.side = highlight;
+                    break;
+                default:
+                    result.top = highlight;
+                    result.front = pale;
+                    result.side = mid;
+                    break;
+            }
+        }
+    } else if( uses( "f_kiln_metal_empty" ) || uses( "f_kiln_metal_full" ) ||
+               uses( "f_kiln_portable_empty" ) || uses( "f_kiln_portable_full" ) ) {
+        // The steel kiln is a taller appliance with a vent/chimney, not
+        // the short round stone brazier. No black background patches.
+        const auto shell = crop( 12, 14, 17, 18 );
+        result.top = result.front = result.side = shell;
+        if( part_index == 5 ) {
+            result.front = crop( 8, 20, 15, 26 ); // furnace opening
+        } else if( part_index == 6 ) {
+            result.front = crop( 5, 17, 7, 24 ); // indicator LEDs
+        } else if( part_index == 3 || part_index == 4 ) {
+            result.top = result.front = result.side = crop( 19, 7, 21, 13 );
+        }
+    } else if( uses( "f_tablesaw" ) ) {
+        const auto metal = crop( 5, 11, 9, 16 );
+        result.top = result.front = result.side = metal;
+        if( part_index == 0 ) {
+            result.top = crop( 3, 3, 28, 9 );
+            result.front = crop( 3, 12, 28, 24 );
+        } else if( part_index == 5 ) {
+            result.top = result.front = result.side = crop( 13, 3, 18, 8 );
+        }
+    } else if( uses( "f_planter" ) || uses( "f_planter_harvest" ) ||
+               uses( "f_planter_mature" ) || uses( "f_planter_seed" ) ||
+               uses( "f_planter_seedling" ) ) {
+        // Dark dirt inside a wooden top-down planter, framed with real rails.
+        const auto wood = crop( 3, 26, 6, 29 );
+        result.top = result.front = result.side = wood;
+        if( part_index == 1 ) {
+            result.top = crop( 6, 7, 26, 22 );
+        } else if( part_index >= 2 ) {
+            result.top = crop( 2, 3, 29, 5 );
         }
     } else if( uses( "f_chair" ) ) {
         const auto wood = crop( 6, 23, 7, 29 );

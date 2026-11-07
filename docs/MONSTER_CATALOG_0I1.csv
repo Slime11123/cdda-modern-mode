@@ -1,0 +1,1124 @@
+﻿id,english_name,category,species,hp,speed,copy_from
+mon_XEDRA_officer,mercenary officer,丧尸,"ZOMBIE, HUMAN",150,95,mon_zombie_base
+mon_XEDRA_soldier,mercenary ghost,丧尸,"ZOMBIE, HUMAN",120,90,mon_zombie_soldier_blackops_1
+mon_afs_headless_horror,headless horror,丧尸,"ZOMBIE, HUMAN",300,130,mon_zombie_base
+mon_amalgamation_breather,breather,丧尸,"ZOMBIE, ABERRATION",100,100,
+mon_amalgamation_breather_hub,breather,丧尸,"ZOMBIE, ABERRATION",100,100,
+mon_amalgamation_corroder,caustic amalgamation,丧尸,"ZOMBIE, ABERRATION",160,110,mon_amalgamation_abstract_small
+mon_amalgamation_jumper,leaping amalgamation,丧尸,"ZOMBIE, ABERRATION",135,100,mon_amalgamation_abstract_med
+mon_amalgamation_soldier,brutish amalgamation,丧尸,"ZOMBIE, ABERRATION",180,100,mon_amalgamation_abstract_med
+mon_amalgamation_spotter,vigilant amalgamation,丧尸,"ZOMBIE, ABERRATION",160,110,mon_amalgamation_abstract_small
+mon_amalgamation_swarmer,swarming amalgamation,丧尸,"ZOMBIE, ABERRATION",35,120,mon_amalgamation_abstract_small
+mon_amalgamation_zapper,charged amalgamation,丧尸,"ZOMBIE, ABERRATION",180,95,mon_amalgamation_abstract_med
+mon_beekeeper,scarred zombie,丧尸,"ZOMBIE, HUMAN",70,60,mon_zombie_base
+mon_beekeeper_dusted,dusted scarred zombie,丧尸,"ZOMBIE, HUMAN",70,60,mon_beekeeper
+mon_beekeeper_fungal,scarred fungal zombie,丧尸,"ZOMBIE, HUMAN, FUNGUS",70,60,mon_beekeeper
+mon_beekeeper_fungalize,fungalizing scarred zombie,丧尸,"ZOMBIE, HUMAN",70,60,mon_beekeeper
+mon_bestial_stalker,bestial stalker,丧尸,ZOMBIE,150,110,mon_zombie_marine_upgrade
+mon_blood_sacrifice,blood sacrifice,丧尸,"ZOMBIE, HUMAN",40,200,
+mon_boomer,boomer,丧尸,"ZOMBIE, HUMAN",40,55,mon_zombie_base
+mon_boomer_claymore,bombardier boomer,丧尸,"ZOMBIE, HUMAN",150,95,mon_boomer
+mon_boomer_dusted,dusted boomer,丧尸,"ZOMBIE, HUMAN",40,55,mon_boomer
+mon_boomer_fungalize,fungal stalk boomer,丧尸,"ZOMBIE, HUMAN",40,55,mon_boomer
+mon_boomer_fungus,fungal boomer,丧尸,"ZOMBIE, HUMAN, FUNGUS",40,55,mon_boomer
+mon_boomer_glutton,boomer glutton,丧尸,"ZOMBIE, HUMAN",200,75,mon_boomer
+mon_boomer_huge,huge boomer,丧尸,"ZOMBIE, HUMAN",110,85,mon_boomer
+mon_brute_pupa,pupating brute,丧尸,ZOMBIE,120,95,mon_brute_pupa_decoy
+mon_brute_pupa_decoy,pupating brute,丧尸,ZOMBIE,120,95,mon_zombie_brute
+mon_child,child,丧尸,"ZOMBIE, HUMAN",40,65,mon_zombie_child
+mon_debug_dragger,debug dragger,丧尸,ZOMBIE,1,100,mon_debug_grabber
+mon_debug_grabber,weak debug grabber,丧尸,ZOMBIE,1,100,
+mon_debug_grabber_left,weak debug grabber,丧尸,ZOMBIE,1,100,mon_debug_grabber
+mon_debug_grabber_mid,middle-strength debug grabber,丧尸,ZOMBIE,1,100,mon_debug_grabber
+mon_debug_grabber_right,weak debug grabber,丧尸,ZOMBIE,1,100,mon_debug_grabber
+mon_debug_grabber_strong,strong debug grabber,丧尸,ZOMBIE,1,100,mon_debug_grabber
+mon_debug_puller_incompetent,incompetent debug puller,丧尸,ZOMBIE,1,100,mon_debug_puller_strong
+mon_debug_puller_strong,strong debug puller,丧尸,ZOMBIE,1,100,mon_debug_puller_weak
+mon_debug_puller_weak,weak debug puller,丧尸,ZOMBIE,1,100,mon_debug_grabber
+mon_dementia,dementia,丧尸,ZOMBIE,80,100,
+mon_devourer,dissoluted devourer,丧尸,"ZOMBIE, HUMAN",112,60,
+mon_devourer_lab_sec,melded task force,丧尸,"ZOMBIE, HUMAN",550,110,mon_devourer
+mon_dog_cuspated,cuspated dog,丧尸,ZOMBIE,30,65,mon_zombie_dog
+mon_dog_howling,howling dog,丧尸,ZOMBIE,34,85,mon_zombie_dog
+mon_dog_scorched,scorched dog,丧尸,ZOMBIE,27,72,mon_zombie_dog
+mon_dog_scorched_hulk,scorched hulking dog,丧尸,ZOMBIE,24,105,mon_dog_zombie_hulk
+mon_dog_skeleton,skeletal dog,丧尸,ZOMBIE,12,100,mon_zombie_dog
+mon_dog_skeleton_brute,boneplate wolf,丧尸,ZOMBIE,70,100,mon_dog_skeleton
+mon_dog_zombie_brute,barghest,丧尸,ZOMBIE,24,105,mon_dog_zombie_rot
+mon_dog_zombie_cop,Z-9,丧尸,ZOMBIE,42,105,mon_zombie_dog
+mon_dog_zombie_hulk,hulking horror,丧尸,ZOMBIE,24,105,mon_dog_zombie_brute
+mon_dog_zombie_rot,rot-weiler,丧尸,ZOMBIE,24,105,mon_zombie_dog
+mon_frog_dad,colossal zombie bullfrog,丧尸,ZOMBIE,500,60,mon_proxy_frog_zombie
+mon_frog_husk,leaping husk,丧尸,ZOMBIE,45,80,mon_proxy_frog_zombie
+mon_frog_mother,frog mother,丧尸,ZOMBIE,400,60,mon_proxy_frog_zombie
+mon_frog_mummy,batrachian mummy,丧尸,ZOMBIE,80,75,mon_proxy_frog_zombie
+mon_frog_shadow,shadow leaper,丧尸,ZOMBIE,120,110,mon_proxy_frog_zombie
+mon_frog_shocker,zapping zombfrog,丧尸,ZOMBIE,160,75,mon_proxy_frog_zombie
+mon_frog_smoker_hulk,batrachian smoker,丧尸,ZOMBIE,200,60,mon_proxy_frog_zombie
+mon_fungal_raptor,fungal raptor,丧尸,"ZOMBIE, FUNGUS",20,140,mon_spawn_raptor
+mon_fungal_wretch,fungal wretch,丧尸,"ZOMBIE, HUMAN, FUNGUS",40,20,mon_zombie_wretch
+mon_gasbag_dusted,dusted gasbag zombie,丧尸,"ZOMBIE, HUMAN",15,80,mon_zombie_gasbag
+mon_gasbag_fungalize,fungal cherry bomb,丧尸,"ZOMBIE, HUMAN",15,80,mon_zombie_gasbag
+mon_gastro_bufo,gastro bufo,丧尸,ZOMBIE,200,75,mon_proxy_frog_zombie
+mon_hulk_pupa,hive hulk,丧尸,ZOMBIE,300,85,mon_hulk_pupa_decoy
+mon_hulk_pupa_decoy,hive hulk,丧尸,ZOMBIE,300,85,mon_zombie_hulk
+mon_human,human,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_human_scorched,charred human,丧尸,"ZOMBIE, HUMAN",60,55,mon_zombie_scorched
+mon_lieutenant_shadow,A shadow?,丧尸,"ZOMBIE, HUMAN",250,200,
+mon_meat_cocoon_large,gigantic meat cocoon,丧尸,"ZOMBIE, ABERRATION",600,100,mon_meat_cocoon_small
+mon_meat_cocoon_med,large meat cocoon,丧尸,"ZOMBIE, ABERRATION",200,100,mon_meat_cocoon_small
+mon_meat_cocoon_small,small meat cocoon,丧尸,"ZOMBIE, ABERRATION",100,100,
+mon_meat_cocoon_tiny,tiny meat cocoon,丧尸,"ZOMBIE, ABERRATION",100,100,mon_meat_cocoon_small
+mon_ocean_zhark,abyssal terror,丧尸,ZOMBIE,600,175,
+mon_plague_nymph,plague nymph,丧尸,"INSECT, ZOMBIE",3,100,mon_larva_abstract
+mon_pseudo_dormant_zombie,zombie,丧尸,"ZOMBIE, HUMAN",5,1,mon_zombie
+mon_skeleton,skeletal zombie,丧尸,ZOMBIE,80,60,mon_zombie_base
+mon_skeleton_brute,skeletal brute,丧尸,ZOMBIE,175,60,mon_zombie_brute
+mon_skeleton_brute_dusted,dusted skeletal brute,丧尸,ZOMBIE,175,60,mon_skeleton_brute
+mon_skeleton_brute_fungalize,fungalizing bone brute,丧尸,ZOMBIE,175,60,mon_skeleton_brute
+mon_skeleton_brute_fungus,fungal bone brute,丧尸,"ZOMBIE, FUNGUS",175,60,mon_skeleton_brute
+mon_skeleton_dusted,dusted skeletal zombie,丧尸,ZOMBIE,80,60,mon_skeleton
+mon_skeleton_electric,skeletal shocker,丧尸,ZOMBIE,105,60,mon_zombie_base
+mon_skeleton_executioner,skeletal executioner,丧尸,ZOMBIE,150,70,mon_skeleton
+mon_skeleton_fungalize,fungal stalk skeleton,丧尸,ZOMBIE,80,60,mon_skeleton
+mon_skeleton_fungus,fungal skeletal zombie,丧尸,"ZOMBIE, FUNGUS",80,60,mon_skeleton
+mon_skeleton_hulk,skeletal juggernaut,丧尸,ZOMBIE,480,60,mon_zombie_hulk
+mon_skeleton_hulk_dusted,dusted skeletal hulk,丧尸,ZOMBIE,480,60,mon_skeleton_hulk
+mon_skeleton_hulk_fungalize,fungal stalk juggernaut,丧尸,ZOMBIE,480,60,mon_skeleton_hulk
+mon_skeleton_hulk_fungus,fungal juggernaut,丧尸,"ZOMBIE, FUNGUS",480,60,mon_skeleton_hulk
+mon_skeleton_master,skeletal master,丧尸,ZOMBIE,90,60,mon_zombie_master
+mon_skeleton_medical,sawbones,丧尸,ZOMBIE,80,60,mon_skeleton
+mon_skeleton_necro,zombie lich,丧尸,ZOMBIE,100,70,mon_zombie_necro
+mon_skeleton_reaper,skeletal reaper,丧尸,ZOMBIE,250,80,mon_skeleton
+mon_skeleton_slasher,skeletal slasher,丧尸,ZOMBIE,100,70,mon_skeleton
+mon_smoker_brute,ashen brawler,丧尸,"ZOMBIE, HUMAN",150,110,mon_zombie_brute
+mon_spawn_raptor,flesh-raptor,丧尸,ZOMBIE,20,140,
+mon_spawn_raptor_dusted,dusted raptor,丧尸,ZOMBIE,20,140,mon_spawn_raptor
+mon_spawn_raptor_electric,zaptor,丧尸,ZOMBIE,20,140,mon_spawn_raptor
+mon_spawn_raptor_fungalize,fungal stalk raptor,丧尸,ZOMBIE,20,140,mon_spawn_raptor
+mon_spawn_raptor_shady,shadow raptor,丧尸,ZOMBIE,20,140,mon_spawn_raptor
+mon_spawn_raptor_unstable,unstable flesh-raptor,丧尸,ZOMBIE,20,100,mon_spawn_raptor
+mon_tadpole_grabber,tadpole constrictor,丧尸,ZOMBIE,20,200,
+mon_toad_bloat,bloated zombie toad,丧尸,ZOMBIE,30,60,mon_proxy_frog_zombie
+mon_toad_bone,death mask zombie toad,丧尸,ZOMBIE,400,60,mon_proxy_frog_zombie
+mon_toad_wart,warted monstrosity,丧尸,ZOMBIE,200,50,mon_proxy_frog_zombie
+mon_toad_zombie,zombie toad,丧尸,ZOMBIE,160,60,mon_proxy_frog_zombie
+mon_wolf_skeleton,skeletal wolf,丧尸,ZOMBIE,18,100,mon_zolf
+mon_zeer,woodland wight,丧尸,ZOMBIE,100,200,
+mon_zeer_fungus,fungal wight,丧尸,"ZOMBIE, FUNGUS",100,200,mon_zeer
+mon_zeindeer,zombie reindeer,丧尸,ZOMBIE,160,200,
+mon_zeindeer_fungus,fungal reindeer,丧尸,"ZOMBIE, FUNGUS",160,200,mon_zeindeer
+mon_zhark,jawed terror,丧尸,ZOMBIE,250,200,
+mon_ziger,tiger wight,丧尸,ZOMBIE,200,110,mon_zougar
+mon_ziger_fungus,tiger fungal wight,丧尸,"ZOMBIE, FUNGUS",200,110,mon_ziger
+mon_zllama,zombie llama,丧尸,ZOMBIE,90,90,
+mon_zolf,grim howler,丧尸,ZOMBIE,48,116,mon_zombie_dog
+mon_zombear,zombear,丧尸,ZOMBIE,180,120,
+mon_zombear_acidic,acidic zombear,丧尸,ZOMBIE,145,135,mon_zombear
+mon_zombear_skeleton,skeletal zombear,丧尸,ZOMBIE,170,100,mon_zombear
+mon_zombeaver,zombeaver,丧尸,ZOMBIE,30,80,
+mon_zombie,zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie_base
+mon_zombie_acidic,acidic zombie,丧尸,"ZOMBIE, HUMAN",65,70,mon_zombie_base
+mon_zombie_acidic_dusted,dusted acidic zombie,丧尸,"ZOMBIE, HUMAN",65,70,mon_zombie_acidic
+mon_zombie_acidic_fungalize,fungalizing acid zombie,丧尸,"ZOMBIE, HUMAN",65,70,mon_zombie_acidic
+mon_zombie_anklebiter,anklebiter,丧尸,"ZOMBIE, HUMAN",35,105,mon_zombie_child_base
+mon_zombie_armored,armored zombie,丧尸,"ZOMBIE, HUMAN",120,50,mon_zombie_base
+mon_zombie_biter,slavering biter,丧尸,"ZOMBIE, HUMAN",100,110,mon_zombie_base
+mon_zombie_brainless,brainless zombie,丧尸,"ZOMBIE, HUMAN",60,65,mon_zombie_base
+mon_zombie_bruiser,bruiser zombie,丧尸,"ZOMBIE, HUMAN",110,80,mon_zombie_base
+mon_zombie_brute,zombie brute,丧尸,"ZOMBIE, HUMAN",120,105,mon_zombie_base
+mon_zombie_brute_dusted,dusted brute zombie,丧尸,"ZOMBIE, HUMAN",120,105,mon_zombie_brute
+mon_zombie_brute_fungal,fungal brute,丧尸,"ZOMBIE, HUMAN, FUNGUS",120,105,mon_zombie_brute
+mon_zombie_brute_fungalize,fungal stalk brute,丧尸,"ZOMBIE, HUMAN",120,105,mon_zombie_brute
+mon_zombie_brute_grappler,zombie wrestler,丧尸,ZOMBIE,220,95,mon_zombie_brute
+mon_zombie_brute_ninja,zombie nightstalker,丧尸,"ZOMBIE, HUMAN",200,90,mon_zombie_brute
+mon_zombie_brute_shocker,shocker brute,丧尸,"ZOMBIE, HUMAN",145,110,mon_zombie_brute
+mon_zombie_brute_winged,garghoul,丧尸,ZOMBIE,70,65,mon_zombie_base
+mon_zombie_child,zombie child,丧尸,"ZOMBIE, HUMAN",40,65,mon_zombie_child_base
+mon_zombie_child_base,zombie child,丧尸,"ZOMBIE, HUMAN",40,65,mon_zombie_base
+mon_zombie_child_dusted,dusted zombie child,丧尸,"ZOMBIE, HUMAN",40,65,mon_zombie_child_base
+mon_zombie_child_fungalize,fungal stalk child,丧尸,"ZOMBIE, HUMAN",40,65,mon_zombie_child_base
+mon_zombie_child_fungus,fungal child,丧尸,"ZOMBIE, HUMAN, FUNGUS",40,65,mon_zombie_child_base
+mon_zombie_child_scorched,scorched zombie child,丧尸,"ZOMBIE, HUMAN",30,45,mon_zombie_child_base
+mon_zombie_cop,zombie cop,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_corrosive,corrosive zombie,丧尸,ZOMBIE,140,75,mon_zombie_base
+mon_zombie_crawler,crawling zombie,丧尸,"ZOMBIE, HUMAN",60,20,mon_zombie
+mon_zombie_crawler_dusted,dusted crawling zombie,丧尸,"ZOMBIE, HUMAN",60,20,mon_zombie_crawler
+mon_zombie_crawler_fungal,fungal zombie crawler,丧尸,"ZOMBIE, HUMAN, FUNGUS",60,20,mon_zombie_crawler
+mon_zombie_crawler_fungalize,fungal stalk crawler,丧尸,"ZOMBIE, HUMAN",60,20,mon_zombie_crawler
+mon_zombie_crawler_pupa,pupating zombie crawler,丧尸,ZOMBIE,60,20,mon_zombie_crawler_pupa_decoy
+mon_zombie_crawler_pupa_decoy,pupating zombie crawler,丧尸,ZOMBIE,60,20,mon_zombie_crawler
+mon_zombie_creepy,creepy crawler,丧尸,"ZOMBIE, HUMAN",25,55,mon_zombie_child_base
+mon_zombie_crushed_giant,trapped tendril,丧尸,ZOMBIE,500,100,
+mon_zombie_dog,zombie dog,丧尸,ZOMBIE,36,105,
+mon_zombie_dog_acidic,acidic zombie dog,丧尸,ZOMBIE,24,85,
+mon_zombie_dog_brute_acidic,blistered horror,丧尸,ZOMBIE,24,85,mon_zombie_dog_acidic
+mon_zombie_dog_fungus,fungal dog,丧尸,"ZOMBIE, FUNGUS",36,105,mon_zombie_dog
+mon_zombie_dusted,dusted zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie_base
+mon_zombie_ears,listener zombie,丧尸,ZOMBIE,90,70,mon_zombie_base
+mon_zombie_electric,shocker zombie,丧尸,"ZOMBIE, HUMAN",85,105,mon_zombie_base
+mon_zombie_fat,fat zombie,丧尸,"ZOMBIE, HUMAN",95,55,mon_zombie
+mon_zombie_fat_dusted,dusted fat zombie,丧尸,"ZOMBIE, HUMAN",95,55,mon_zombie_fat
+mon_zombie_fat_fungalize,fungal stalk feeder,丧尸,"ZOMBIE, HUMAN",95,55,mon_zombie_fat
+mon_zombie_fat_fungus,fungal feeder,丧尸,"ZOMBIE, HUMAN, FUNGUS",95,55,mon_zombie_fat
+mon_zombie_fiend,fiend,丧尸,ZOMBIE,275,125,mon_zombie_base
+mon_zombie_fiend_rust,scorched zombie brute,丧尸,ZOMBIE,95,85,mon_zombie_scorched_brute
+mon_zombie_fireman,firefighter zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_fireproof,fireproof zombie,丧尸,ZOMBIE,120,110,mon_zombie_hunter
+mon_zombie_fireproof_brute,fireproof brute,丧尸,"ZOMBIE, HUMAN",130,105,mon_zombie_brute
+mon_zombie_fireproof_grappler,fireproof grappler,丧尸,"ZOMBIE, HUMAN",120,85,mon_zombie_grappler
+mon_zombie_fungalize,fungal stalk zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie_base
+mon_zombie_fungus,fungal zombie,丧尸,"ZOMBIE, HUMAN, FUNGUS",80,70,mon_zombie_fungalize
+mon_zombie_fungus_acidic,acidic fungal zombie,丧尸,"ZOMBIE, HUMAN, FUNGUS",65,70,mon_zombie_acidic
+mon_zombie_fursuit,fursuited zombie,丧尸,"ZOMBIE, HUMAN",80,50,mon_zombie
+mon_zombie_gasbag,bloated zombie,丧尸,"ZOMBIE, HUMAN",15,80,mon_boomer
+mon_zombie_gasbag_crawler,gangrenous crawler,丧尸,ZOMBIE,15,90,
+mon_zombie_gasbag_fungus,bloated fungal zombie,丧尸,"ZOMBIE, HUMAN, FUNGUS",15,80,mon_zombie_gasbag
+mon_zombie_gasbag_immobile,gangrenous flesh,丧尸,ZOMBIE,5,80,
+mon_zombie_gasbag_impaler,gangrenous impaler,丧尸,ZOMBIE,30,12,
+mon_zombie_giant_heart,spasming lump,丧尸,ZOMBIE,3,100,
+mon_zombie_goat,zombie goat,丧尸,ZOMBIE,70,140,
+mon_zombie_grabber,grabber zombie,丧尸,"ZOMBIE, HUMAN",95,80,mon_zombie_base
+mon_zombie_grappler,grappler zombie,丧尸,"ZOMBIE, HUMAN",110,85,mon_zombie_base
+mon_zombie_grue,zombie prowler,丧尸,ZOMBIE,160,115,mon_zombie_base
+mon_zombie_hammer_hands,rust fist brute,丧尸,"ZOMBIE, HUMAN",120,75,mon_zombie_base
+mon_zombie_hanging_innards,hanging innards,丧尸,ZOMBIE,200,110,
+mon_zombie_hazmat,hazmat zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_hollow,zombie hollow,丧尸,ZOMBIE,100,70,mon_zombie_base
+mon_zombie_horse,zombie horse,丧尸,ZOMBIE,70,200,
+mon_zombie_horse_black,smoldering stallion,丧尸,ZOMBIE,75,200,mon_zombie_horse
+mon_zombie_horse_fungus, rotten fungal horse,丧尸,"ZOMBIE, FUNGUS",70,200,mon_zombie_horse
+mon_zombie_horse_pale,pale charger,丧尸,ZOMBIE,90,200,mon_zombie_horse
+mon_zombie_horse_red,sinewy warhorse,丧尸,ZOMBIE,90,200,mon_zombie_horse
+mon_zombie_horse_white,acidic zombie horse,丧尸,ZOMBIE,75,195,mon_zombie_horse
+mon_zombie_hulk,zombie hulk,丧尸,ZOMBIE,480,130,mon_zombie_base
+mon_zombie_hulk_dusted,dusted zombie hulk,丧尸,ZOMBIE,480,130,mon_zombie_hulk
+mon_zombie_hulk_fungal,fungal hulk,丧尸,"ZOMBIE, FUNGUS",480,130,mon_zombie_hulk
+mon_zombie_hulk_fungalize,fungal stalk hulk,丧尸,ZOMBIE,480,130,mon_zombie_hulk
+mon_zombie_hunter,zombie hunter,丧尸,ZOMBIE,90,110,mon_zombie_base
+mon_zombie_kevlar_0,Kevlar zombie,丧尸,"ZOMBIE, HUMAN",120,80,mon_zombie_base
+mon_zombie_kevlar_1,Kevlar brute,丧尸,"ZOMBIE, HUMAN",150,80,mon_zombie_brute
+mon_zombie_kevlar_2,Kevlar hulk,丧尸,ZOMBIE,300,75,mon_zombie_hulk
+mon_zombie_labsecurity,zombie security guard,丧尸,"ZOMBIE, HUMAN",100,85,mon_zombie_base
+mon_zombie_lashing,lashing zombie,丧尸,"ZOMBIE, HUMAN",90,70,mon_zombie_base
+mon_zombie_living_wall,flesh wall,丧尸,ZOMBIE,3,100,
+mon_zombie_mancroc,zombie snapper,丧尸,ZOMBIE,120,100,mon_zombie_base
+mon_zombie_marine,zombie marine,丧尸,"ZOMBIE, HUMAN",100,80,mon_zombie_soldier
+mon_zombie_marine_upgrade,bestial stalker,丧尸,"ZOMBIE, HUMAN",150,110,mon_zombie_marine
+mon_zombie_master,zombie master,丧尸,"ZOMBIE, HUMAN",180,90,mon_zombie_base
+mon_zombie_medical,zombie medic,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_medical_acidic,doctor burns,丧尸,"ZOMBIE, HUMAN",65,70,mon_zombie_acidic
+mon_zombie_medical_brute,medical horror,丧尸,"ZOMBIE, HUMAN",120,105,mon_zombie_brute
+mon_zombie_medical_pupa,pupating zombie,丧尸,ZOMBIE,95,55,mon_zombie_pupa
+mon_zombie_medical_regenerating,regenerating zombie medic,丧尸,"ZOMBIE, HUMAN",60,90,mon_zombie_regenerating
+mon_zombie_milbase_personnel,uniformed zombie,丧尸,"ZOMBIE, HUMAN",90,75,mon_zombie_military_pilot
+mon_zombie_military_pilot,zombie military pilot,丧尸,"ZOMBIE, HUMAN",90,75,mon_zombie_base
+mon_zombie_miner,zombie miner,丧尸,"ZOMBIE, HUMAN",85,75,mon_zombie_base
+mon_zombie_necro,zombie necromancer,丧尸,ZOMBIE,100,100,mon_zombie_base
+mon_zombie_necro_boomer,zombie necro-boomer,丧尸,ZOMBIE,100,100,mon_zombie_necro
+mon_zombie_nemesis,relentless hulk,丧尸,ZOMBIE,480,95,mon_zombie_base
+mon_zombie_nomex,Nomex zombie,丧尸,"ZOMBIE, HUMAN",100,70,mon_zombie_fireman
+mon_zombie_nullfield,incandescent husk,丧尸,"ZOMBIE, HUMAN",200,50,mon_zombie_base
+mon_zombie_ocular,ocular zombie,丧尸,"ZOMBIE, HUMAN",90,80,mon_zombie_base
+mon_zombie_officer,zombie officer,丧尸,"ZOMBIE, HUMAN",90,75,mon_zombie_sailor
+mon_zombie_paramilitary,paramilitary zombie,丧尸,"ZOMBIE, HUMAN",120,85,mon_zombie_survivor
+mon_zombie_pig,festering boar,丧尸,ZOMBIE,55,70,
+mon_zombie_pig_gas,trench pig,丧尸,ZOMBIE,55,70,mon_zombie_pig
+mon_zombie_plated,rust plated zombie,丧尸,"ZOMBIE, HUMAN",145,60,mon_zombie_base
+mon_zombie_predator,zombie predator,丧尸,ZOMBIE,90,140,mon_zombie_hunter
+mon_zombie_prisoner,prisoner zombie,丧尸,"ZOMBIE, HUMAN",90,70,mon_zombie
+mon_zombie_prisoner_brute,prisoner zombie brute,丧尸,"ZOMBIE, HUMAN",120,105,mon_zombie_brute
+mon_zombie_prisoner_fat,fat prisoner zombie,丧尸,"ZOMBIE, HUMAN",95,55,mon_zombie_fat
+mon_zombie_prisoner_tough,tough prisoner zombie,丧尸,"ZOMBIE, HUMAN",100,85,mon_zombie_tough
+mon_zombie_pupa,pupating zombie,丧尸,ZOMBIE,95,55,mon_zombie_pupa_decoy
+mon_zombie_pupa_decoy,pupating zombie,丧尸,ZOMBIE,95,55,mon_zombie_fat
+mon_zombie_pupa_decoy_shady,shady pupating zombie,丧尸,ZOMBIE,95,55,mon_zombie_fat
+mon_zombie_pupa_medical_decoy,pupating zombie,丧尸,ZOMBIE,95,55,mon_zombie_pupa_decoy
+mon_zombie_pupa_shady,shady pupating zombie,丧尸,ZOMBIE,95,55,mon_zombie_pupa_decoy_shady
+mon_zombie_reenactor,ravenous reenactor,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_regenerating,regenerating zombie,丧尸,"ZOMBIE, HUMAN",60,90,mon_zombie_base
+mon_zombie_regenerating_final,regenerating abomination,丧尸,ZOMBIE,100,140,mon_zombie_predator
+mon_zombie_regenerating_hunter,fleshy hunter,丧尸,ZOMBIE,90,110,mon_zombie_hunter
+mon_zombie_relax_gasbag,sleepwalker zombie,丧尸,"ZOMBIE, HUMAN",40,70,mon_zombie_gasbag
+mon_zombie_resort_bouncer,bouncer zombie,丧尸,"ZOMBIE, HUMAN",100,85,mon_zombie_tough
+mon_zombie_resort_dancer,sleek zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_resort_staff,zombie,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie
+mon_zombie_rot,decayed zombie,丧尸,"ZOMBIE, HUMAN",55,60,mon_zombie_base
+mon_zombie_rot_dusted,dusted decayed zombie,丧尸,"ZOMBIE, HUMAN",55,60,mon_zombie_rot
+mon_zombie_rot_fungal,fungal rotter,丧尸,"ZOMBIE, HUMAN, FUNGUS",55,60,mon_zombie_rot
+mon_zombie_rot_fungalize,fungal stalk rotter,丧尸,"ZOMBIE, HUMAN",55,60,mon_zombie_rot
+mon_zombie_runner,zombie runner,丧尸,"ZOMBIE, HUMAN",80,105,mon_zombie_base
+mon_zombie_runner_dusted,dusted zombie runner,丧尸,"ZOMBIE, HUMAN",80,105,mon_zombie_runner
+mon_zombie_runner_fungal,fungal runner,丧尸,"ZOMBIE, HUMAN, FUNGUS",80,105,mon_zombie_runner
+mon_zombie_runner_fungalize,fungal stalk runner,丧尸,"ZOMBIE, HUMAN",80,105,mon_zombie_runner
+mon_zombie_rust,rust zombie,丧尸,"ZOMBIE, HUMAN",80,65,mon_zombie_base
+mon_zombie_sailor,zombie mariner,丧尸,"ZOMBIE, HUMAN",90,75,mon_zombie_milbase_personnel
+mon_zombie_scientist,zombie scientist,丧尸,"ZOMBIE, HUMAN",80,70,mon_zombie_base
+mon_zombie_scissorlimbs,scissorlimbs,丧尸,ZOMBIE,10,250,
+mon_zombie_scorched,scorched zombie,丧尸,"ZOMBIE, HUMAN",60,55,mon_zombie_base
+mon_zombie_scorched_brute,scorched zombie brute,丧尸,"ZOMBIE, HUMAN",95,85,mon_zombie_brute
+mon_zombie_scorched_lasher,scorched lasher,丧尸,"ZOMBIE, HUMAN",60,50,mon_zombie_base
+mon_zombie_scorched_rust,scorched zombie,丧尸,"ZOMBIE, HUMAN",60,55,mon_zombie_scorched
+mon_zombie_screecher,screecher zombie,丧尸,"ZOMBIE, HUMAN",85,100,mon_zombie_base
+mon_zombie_shady,shady zombie,丧尸,ZOMBIE,80,70,mon_zombie_base
+mon_zombie_sheep,zombie sheep,丧尸,ZOMBIE,65,50,
+mon_zombie_shell,rust shell zombie,丧尸,"ZOMBIE, HUMAN",100,50,mon_zombie_base
+mon_zombie_shrieker,shrieker zombie,丧尸,"ZOMBIE, HUMAN",60,95,mon_zombie_base
+mon_zombie_shriekling,shriekling,丧尸,"ZOMBIE, HUMAN",20,95,mon_zombie_child_base
+mon_zombie_skull,skull zombie,丧尸,"ZOMBIE, HUMAN",135,100,mon_zombie_base
+mon_zombie_smoker,smoker zombie,丧尸,"ZOMBIE, HUMAN",75,110,mon_zombie_base
+mon_zombie_smoker_dusted,dusted smoker zombie,丧尸,"ZOMBIE, HUMAN",75,110,mon_zombie_smoker
+mon_zombie_smoker_fungalize,fungal stalk smoker,丧尸,"ZOMBIE, HUMAN",75,110,mon_zombie_smoker
+mon_zombie_smoker_fungus,pollinator zombie,丧尸,"ZOMBIE, HUMAN, FUNGUS",75,110,mon_zombie_smoker
+mon_zombie_snotgobbler,snotgobbler,丧尸,"ZOMBIE, HUMAN",25,65,mon_zombie_child_base
+mon_zombie_soldier,zombie soldier,丧尸,"ZOMBIE, HUMAN",100,80,mon_zombie_base
+mon_zombie_soldier_acid_1,bilious soldier zombie,丧尸,"ZOMBIE, HUMAN",100,80,mon_zombie_soldier
+mon_zombie_soldier_acid_2,caustic soldier zombie,丧尸,"ZOMBIE, HUMAN",100,80,mon_zombie_soldier
+mon_zombie_soldier_blackops_1,black-ops zombie,丧尸,"ZOMBIE, HUMAN",120,90,mon_zombie_base
+mon_zombie_soldier_blackops_2,hunter-killer zombie,丧尸,"ZOMBIE, HUMAN",120,90,mon_zombie_soldier_blackops_1
+mon_zombie_soldier_lixa_police,zombie military police,丧尸,"ZOMBIE, HUMAN",100,80,mon_zombie_soldier
+mon_zombie_soldier_no_weakpoints,zombie soldier test only,丧尸,"ZOMBIE, HUMAN",100,80,mon_zombie_soldier
+mon_zombie_spitter,spitter zombie,丧尸,"ZOMBIE, HUMAN",70,95,mon_zombie_base
+mon_zombie_sproglodyte,sproglodyte,丧尸,"ZOMBIE, HUMAN",30,85,mon_zombie_child_base
+mon_zombie_static,zapper zombie,丧尸,"ZOMBIE, HUMAN",60,75,mon_zombie_base
+mon_zombie_strider,zombie strider,丧尸,ZOMBIE,180,60,mon_zombie_base
+mon_zombie_survivor,survivor zombie,丧尸,"ZOMBIE, HUMAN",120,85,mon_zombie_base
+mon_zombie_survivor_elite,veteran survivor zombie,丧尸,"ZOMBIE, HUMAN",120,90,mon_zombie_survivor
+mon_zombie_survivor_no_weakpoints,zombie survivor test only,丧尸,"ZOMBIE, HUMAN",120,90,mon_zombie_survivor
+mon_zombie_swat,SWAT zombie,丧尸,"ZOMBIE, HUMAN",90,75,mon_zombie_cop
+mon_zombie_swimmer,webbed zombie,丧尸,"ZOMBIE, HUMAN",70,95,mon_zombie_base
+mon_zombie_swimmer_base,swimmer zombie,丧尸,"ZOMBIE, HUMAN",60,90,mon_zombie_base
+mon_zombie_tear_gasbag,swollen tearjerker,丧尸,"ZOMBIE, HUMAN",45,60,mon_zombie_gasbag
+mon_zombie_technician,zombie technician,丧尸,"ZOMBIE, HUMAN",85,75,mon_zombie_base
+mon_zombie_tentacle,tentacled zombie,丧尸,"ZOMBIE, HUMAN",95,70,mon_zombie_base
+mon_zombie_thorny,thorny shambler,丧尸,"ZOMBIE, PLANT",80,50,mon_zombie_base
+mon_zombie_tough,tough zombie,丧尸,"ZOMBIE, HUMAN",100,85,mon_zombie_base
+mon_zombie_tough_dusted,dusted tough zombie,丧尸,"ZOMBIE, HUMAN",100,85,mon_zombie_tough
+mon_zombie_tough_fungal,fungal bulk,丧尸,"ZOMBIE, HUMAN, FUNGUS",100,85,mon_zombie_tough
+mon_zombie_tough_fungalize,fungal stalk bulk,丧尸,"ZOMBIE, HUMAN",100,85,mon_zombie_tough
+mon_zombie_urchin,rust urchin,丧尸,ZOMBIE,100,60,mon_zombie_base
+mon_zombie_waif,howling waif,丧尸,"ZOMBIE, HUMAN",15,65,mon_zombie_child_base
+mon_zombie_winged,batwing zombie,丧尸,ZOMBIE,64,70,mon_zombie_base
+mon_zombie_wretch,wretched hatchery,丧尸,"ZOMBIE, HUMAN",40,20,mon_zombie_child_base
+mon_zombie_wretch_dusted,dusted zombie wretch,丧尸,"ZOMBIE, HUMAN",40,20,mon_zombie_wretch
+mon_zombie_wretch_fungalize,fungal stalk wretch,丧尸,"ZOMBIE, HUMAN",40,20,mon_zombie_wretch
+mon_zombie_wretched,wretched puker,丧尸,"ZOMBIE, HUMAN",55,65,mon_zombie_base
+mon_zomborg,zomborg,丧尸,"CYBORG, ZOMBIE",125,60,
+mon_zomborg_devourer,zomborg devourer,丧尸,"CYBORG, ZOMBIE",112,60,
+mon_zombtreefrog,zombie treefrog,丧尸,ZOMBIE,90,90,mon_proxy_frog_zombie
+mon_zombull,zombull,丧尸,ZOMBIE,210,120,
+mon_zombullfrog,giant zombie bullfrog,丧尸,ZOMBIE,160,60,mon_proxy_frog_zombie
+mon_zoose,antlered horror,丧尸,ZOMBIE,210,140,
+mon_zoose_brute,antlered hammer,丧尸,ZOMBIE,315,200,mon_zoose
+mon_zoose_fungus,antlered fungal horror,丧尸,"ZOMBIE, FUNGUS",210,140,mon_zoose
+mon_zoose_thorny,thorny moose shambler,丧尸,"ZOMBIE, PLANT",210,100,mon_zoose
+mon_zougar,decayed pouncer,丧尸,ZOMBIE,65,126,
+mon_zougar_fungus,fungal pouncer,丧尸,"ZOMBIE, FUNGUS",65,126,mon_zougar
+mon_zougar_hunter,spearcat hunter,丧尸,ZOMBIE,200,190,mon_zougar
+mon_zougar_shady,shadowcat,丧尸,ZOMBIE,65,126,mon_zougar
+mon_zow,zombie cow,丧尸,ZOMBIE,166,104,
+mon_zpig_brute,skull pig,丧尸,ZOMBIE,55,70,mon_zombie_pig
+pseudo_debug_mon,debug monster,丧尸,ZOMBIE,10000,100,
+pseudo_weakpoint_mon,weakpoint monster,丧尸,ZOMBIE,10000,100,
+mon_chud,feral troglobite,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_civilian_icu,hospitalized person,人类与狂暴者,HUMAN,75,0,mon_civilian_stationary
+mon_civilian_panic,panicked person,人类与狂暴者,HUMAN,75,90,
+mon_civilian_parent,terrified parent,人类与狂暴者,HUMAN,75,90,mon_civilian_panic
+mon_civilian_police,overconfident officer,人类与狂暴者,HUMAN,75,90,mon_civilian_panic
+mon_civilian_police_rifle,overconfident officer,人类与狂暴者,HUMAN,75,90,mon_civilian_panic
+mon_civilian_stationary,petrified person,人类与狂暴者,HUMAN,75,20,mon_civilian_panic
+mon_civilian_zombiefighter,futile fighter,人类与狂暴者,HUMAN,75,90,mon_civilian_panic
+mon_civilian_zombiegunner,armed fighter,人类与狂暴者,HUMAN,75,90,mon_civilian_panic
+mon_feral_armored_battleaxe,armored feral,人类与狂暴者,"FERAL, HUMAN",84,75,mon_feral_armored_mace
+mon_feral_armored_mace,armored feral,人类与狂暴者,"FERAL, HUMAN",84,75,mon_feral_maid_broom
+mon_feral_cop,feral cop,人类与狂暴者,"FERAL, HUMAN",84,95,mon_feral_human_pipe
+mon_feral_fancy_rapier,well dressed feral,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_maid_broom
+mon_feral_fancy_rapier_fake,well dressed feral,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_fancy_rapier
+mon_feral_human_axe,deranged axeman,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_human_axe_fungal_corpse,deranged axeman,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_axe
+mon_feral_human_crowbar,feral human,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_human_crowbar_fungal_corpse,feral human,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_crowbar
+mon_feral_human_pipe,feral human,人类与狂暴者,"FERAL, HUMAN",84,100,
+mon_feral_human_pipe_fungal_corpse,feral human,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_human_tool,feral mechanic,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_jackboot,feral biker,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_labsecurity_9mm,feral security guard,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_labsecurity_flashlight,feral security guard,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_labsecurity_9mm
+mon_feral_maid_broom,feral servant,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_maid_candlestick,feral servant,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_maid_broom
+mon_feral_maid_knife,feral servant,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_maid_broom
+mon_feral_marine_bayonet,feral marine,人类与狂暴者,"FERAL, HUMAN",84,85,mon_feral_human_pipe
+mon_feral_militia,mad militia,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_officer,feral officer,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_sailor_wrench
+mon_feral_prepper_knife,feral prepper,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_prepper_mace
+mon_feral_prepper_mace,feral prepper,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_prisoner,feral prisoner,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_sailor_axe,feral crewman,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_sailor_wrench
+mon_feral_sailor_lug_wrench,feral crewman,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_sailor_wrench
+mon_feral_sailor_mop,feral crewman,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_sailor_wrench
+mon_feral_sailor_wrench,feral crewman,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_sapien_spear,cunning feral,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_scientist_scalpel,mad scientist,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_feral_soldier,feral soldier,人类与狂暴者,"FERAL, HUMAN",84,85,mon_feral_human_pipe
+mon_feral_survivalist,crazed survivalist,人类与狂暴者,"FERAL, HUMAN",90,110,mon_feral_human_pipe
+mon_feral_swimmer_kickboard,feral swimmer,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_starer_axe,starer,人类与狂暴者,"FERAL, HUMAN",84,100,mon_starer_pipe
+mon_starer_crowbar,starer,人类与狂暴者,"FERAL, HUMAN",84,100,mon_starer_pipe
+mon_starer_pipe,starer,人类与狂暴者,"FERAL, HUMAN",84,100,mon_feral_human_pipe
+mon_dragon_dummy,ancient red dragon,其他,,1,,
+mon_generator,generator,其他,UNKNOWN,500,100,
+mon_halloween_dragon,inflatable dragon,其他,UNKNOWN,1,150,
+mon_halloween_ghost,inflatable ghost,其他,UNKNOWN,1,150,
+mon_hologram,hologram,其他,UNKNOWN,1,130,
+mon_kraken_guard,kraken,其他,KRAKEN,325,110,mon_octupus_stalker
+mon_kraken_queen,scylla,其他,KRAKEN,850,120,mon_kraken_guard
+mon_mannequin_decoy,mannequin decoy,其他,UNKNOWN,20,1,
+mon_nether_cucumber,waterbed skulker,其他,,50,80,
+mon_nether_spearfisher,spearfisher,其他,,40,100,
+mon_nether_unviable_bug,strange bug,其他,,20,110,
+mon_nether_unviable_butterfly,veiled butterfly,其他,,20,85,
+mon_nether_unviable_chunk,chunk of alien flesh,其他,,20,,
+mon_nether_unviable_root,writhing root,其他,,20,20,
+mon_nether_unviable_stomper,eldritch stomper,其他,,80,80,
+mon_octupus_stalker,stalker octopus,其他,KRAKEN,100,70,
+mon_octupus_stalker_spawn,octopus spawn,其他,KRAKEN,20,90,mon_octupus_stalker
+mon_unseen_hunter,unseen hunter,其他,,150,100,
+mon_void_spider,void weaver,其他,,600,87,
+mon_void_spider_limb,hanging limb,其他,,20,87,mon_void_spider
+mon_void_spider_maw,hanging maw,其他,,15,87,mon_void_spider
+mon_void_spider_spiderling,weaver juvenile,其他,,10,87,mon_void_spider
+mon_void_spider_spiderling_skewered,skewered juvenile,其他,,10,87,mon_void_spider_spiderling
+mon_vortex,vortex,其他,UNKNOWN,20,120,
+mon_yrax_quadraphract,Yrax quadraphract,其他,,2400,60,
+mon_yrax_quadraphract_leg,quadraphract leg,其他,,400,60,mon_yrax_quadraphract
+mon_yugg,yugg,其他,NETHER_BURROWING,320,80,
+mon_bat,bat,动物,MAMMAL,10,230,
+mon_bear,black bear,动物,MAMMAL,100,140,
+mon_bear_cub,black bear cub,动物,MAMMAL,20,90,mon_bear
+mon_bear_mutant_3headed,Cerbearus,动物,MAMMAL,180,120,
+mon_beaver,beaver,动物,MAMMAL,31,80,
+mon_beaver_kit,beaver kit,动物,MAMMAL,1,40,mon_beaver
+mon_beaver_mutant_avian,feaver,动物,MAMMAL,31,80,mon_beaver
+mon_beaver_mutant_avian_kit,bald beaver kit,动物,MAMMAL,1,40,mon_beaver_kit
+mon_beaver_mutant_huge,dambreaker,动物,MAMMAL,71,80,mon_beaver
+mon_beaver_mutant_huge_kit,dambreaker kit,动物,MAMMAL,4,40,mon_beaver_kit
+mon_black_rat,black rat,动物,MAMMAL,6,100,
+mon_black_ratkin,black rat,动物,MAMMAL,6,100,mon_black_rat
+mon_bluejay,blue jay,动物,BIRD,1,200,mon_bird_flying_base
+mon_bluejay_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_boar_wild,wild boar,动物,MAMMAL,60,110,
+mon_boar_wild_piglet,wild boar piglet,动物,MAMMAL,5,90,
+mon_bobcat,bobcat,动物,MAMMAL,16,150,
+mon_bullfrog_frog,bullfrog,动物,AMPHIBIAN,4,80,mon_proxy_frog
+mon_bullfrog_tadpole,tadpole,动物,AMPHIBIAN,2,70,mon_proxy_tadpole
+mon_cardinal,cardinal,动物,BIRD,1,200,mon_bird_flying_base
+mon_cardinal_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_cat,shorthair cat,动物,MAMMAL,12,150,
+mon_cat_bengal,Bengal cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_bengal_kitten,Bengal kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_black,black cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_black_kitten,black kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_calico,calico cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_calico_kitten,calico kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_chonker,golden chonker,动物,MAMMAL,20,100,mon_cat
+mon_cat_chonker_kitten,yellow kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_devon_rex,Devon Rex cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_devon_rex_kitten,Devon Rex kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_isherwood,shorthair cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_kitten,shorthair kitten,动物,MAMMAL,6,150,mon_cat
+mon_cat_liquid,liquid cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_longhair,longhair cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_longhair_kitten,longhair kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_maine_coon,Maine Coon,动物,MAMMAL,16,150,mon_cat
+mon_cat_maine_coon_kitten,Maine Coon kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_mutant_prism,iridescent cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_persian,Persian cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_persian_kitten,Persian kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_siamese,Siamese cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_siamese_kitten,Siamese kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_sphynx,Sphynx cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_sphynx_kitten,Sphynx kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_tabby,tabby cat,动物,MAMMAL,12,150,mon_cat
+mon_cat_tabby_kitten,tabby kitten,动物,MAMMAL,6,150,mon_cat_kitten
+mon_cat_void,void cat,动物,MAMMAL,12,150,mon_cat
+mon_chickadee,black-capped chickadee,动物,BIRD,1,200,mon_bird_flying_base
+mon_chickadee_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_chicken,chicken,动物,BIRD,5,95,mon_bird_flightless_base
+mon_chicken_chick,yellow chick,动物,BIRD,1,40,mon_generic_chick
+mon_chipmunk,chipmunk,动物,MAMMAL,4,110,
+mon_coot,American coot,动物,BIRD,1,85,mon_bird_water_base
+mon_coot_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_cormorant,double-crested cormorant,动物,BIRD,5,110,mon_bird_water_base
+mon_cormorant_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_cougar,cougar,动物,MAMMAL,60,180,
+mon_cougar_kitten,cougar kitten,动物,MAMMAL,10,98,mon_cougar
+mon_cow,cow,动物,MAMMAL,100,130,
+mon_cow_calf,calf,动物,MAMMAL,40,120,
+mon_coyote,coyote,动物,MAMMAL,34,155,
+mon_coyote_mutant_shark,grinning coyote,动物,MAMMAL,34,155,mon_coyote
+mon_coyote_mutant_venom,slavering coyote,动物,MAMMAL,34,155,mon_coyote
+mon_coyote_pup,coyote pup,动物,MAMMAL,2,98,mon_coyote
+mon_coyote_pup_mutant_shark,grinning coyote pup,动物,MAMMAL,2,98,mon_coyote_pup
+mon_coyote_pup_mutant_venom,slavering coyote pup,动物,MAMMAL,2,98,mon_coyote_pup
+mon_crow,American crow,动物,BIRD,1,200,mon_bird_flying_base
+mon_crow_chick,brown chick,动物,BIRD,1,40,mon_generic_chick
+mon_crow_mutant_small,oversized crow,动物,BIRD,8,110,
+mon_deer,deer,动物,MAMMAL,65,300,
+mon_deer_fawn,fawn,动物,MAMMAL,20,200,
+mon_deer_mutant_spider,spideer,动物,MAMMAL,70,450,
+mon_deer_mutant_spider_fawn,spideer fawn,动物,MAMMAL,20,150,
+mon_dermatik_incubator_deer,motionless deer,动物,MAMMAL,40,20,mon_deer
+mon_dermatik_incubator_dog,helpless dog,动物,MAMMAL,40,20,mon_dermatik_incubator_deer
+mon_dog,Labrador mutt,动物,MAMMAL,30,150,
+mon_dog_antimemetic,unknowable dog,动物,MAMMAL,30,150,mon_dog
+mon_dog_auscattle,cattle dog,动物,MAMMAL,20,200,mon_dog
+mon_dog_auscattle_pup,cattle dog puppy,动物,MAMMAL,5,130,mon_dog_pup
+mon_dog_bcollie,border collie,动物,MAMMAL,19,200,mon_dog
+mon_dog_bcollie_pup,border collie puppy,动物,MAMMAL,5,130,mon_dog_pup
+mon_dog_beagle,beagle,动物,MAMMAL,13,135,mon_dog_small
+mon_dog_beagle_pup,beagle puppy,动物,MAMMAL,5,88,mon_dog_pup
+mon_dog_boxer,boxer mastiff,动物,MAMMAL,29,150,mon_dog
+mon_dog_boxer_pup,boxer puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_bull,bulldog,动物,MAMMAL,47,135,mon_dog
+mon_dog_bull_pup,bulldog puppy,动物,MAMMAL,5,88,mon_dog_pup
+mon_dog_chihuahua,Chihuahua,动物,MAMMAL,6,135,mon_dog_small
+mon_dog_chihuahua_pup,Chihuahua puppy,动物,MAMMAL,2,88,mon_dog_pup
+mon_dog_dachshund,dachshund,动物,MAMMAL,10,135,mon_dog_small
+mon_dog_dachshund_pup,dachshund puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_gpyrenees,Great Pyrenees,动物,MAMMAL,40,100,mon_dog
+mon_dog_gpyrenees_pup,Great Pyrenees puppy,动物,MAMMAL,5,65,mon_dog_pup
+mon_dog_gshepherd,German shepherd,动物,MAMMAL,36,150,mon_dog
+mon_dog_gshepherd_pup,German shepherd puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_incorporeal,translucent dog,动物,MAMMAL,30,150,mon_dog
+mon_dog_mutant_loper,Loper,动物,MAMMAL,42,150,mon_dog
+mon_dog_mutant_loper_pup,Loper puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_mutant_mauler,Mauler,动物,MAMMAL,45,135,mon_dog
+mon_dog_mutant_mauler_pup,Mauler puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_mutant_mongrel,mongrel,动物,MAMMAL,30,150,mon_dog
+mon_dog_mutant_thrasher,Thrasher,动物,MAMMAL,25,85,mon_dog
+mon_dog_mutant_thrasher_pup,Thrasher puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_pitbullmix,pit bull mix,动物,MAMMAL,27,135,mon_dog
+mon_dog_pitbullmix_pup,pit bull puppy,动物,MAMMAL,5,88,mon_dog_pup
+mon_dog_pup,Labrador puppy,动物,MAMMAL,5,98,mon_dog
+mon_dog_rottweiler,rottweiler,动物,MAMMAL,42,135,mon_dog
+mon_dog_rottweiler_pup,rottweiler puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_samoyed,Samoyed,动物,MAMMAL,32,150,mon_dog
+mon_dog_samoyed_pup,Samoyed puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_dog_telekenetic,triclopean dog,动物,MAMMAL,30,150,mon_dog
+mon_dog_wad,Flat-coated Retriever,动物,MAMMAL,30,150,mon_dog
+mon_dog_wad_pup,Flat-coated Retriever puppy,动物,MAMMAL,5,98,mon_dog_pup
+mon_duck,mallard,动物,BIRD,2,85,mon_bird_water_base
+mon_duck_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_duck_domestic,domestic duck,动物,BIRD,4,85,mon_bird_water_base
+mon_duck_domestic_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_ferret,ferret,动物,MAMMAL,12,110,
+mon_ferret_kit,ferret kit,动物,MAMMAL,5,110,mon_ferret
+mon_fish_blackfish,black sea bass,动物,FISH,6,150,mon_fish_small
+mon_fish_bluefin_tuna,Atlantic bluefin tuna,动物,FISH,30,150,mon_fish_huge
+mon_fish_bluefish,bluefish,动物,FISH,6,150,mon_fish_small
+mon_fish_bluegill,bluegill,动物,FISH,2,150,mon_fish_tiny
+mon_fish_bowfin,bowfin,动物,FISH,10,150,mon_fish_medium
+mon_fish_brook_trout,brook trout,动物,FISH,6,150,mon_fish_small
+mon_fish_brown_trout,brown trout,动物,FISH,20,150,mon_fish_large
+mon_fish_bullhead,brown bullhead,动物,FISH,2,150,mon_fish_tiny
+mon_fish_bullhead_yellow,yellow bullhead,动物,FISH,2,150,mon_fish_tiny
+mon_fish_burbot,burbot,动物,FISH,2,150,mon_fish_tiny
+mon_fish_calico_bass,black crappie,动物,FISH,6,150,mon_fish_small
+mon_fish_carp,European carp,动物,FISH,10,150,mon_fish_medium
+mon_fish_channel_catfish,channel catfish,动物,FISH,10,150,mon_fish_medium
+mon_fish_cod,Atlantic cod,动物,FISH,20,150,mon_fish_large
+mon_fish_crayfish,crayfish,动物,FISH,3,150,
+mon_fish_eel,American eel,动物,FISH,10,150,
+mon_fish_fallfish,fallfish,动物,FISH,2,150,mon_fish_tiny
+mon_fish_flounder,summer flounder,动物,FISH,2,150,mon_fish_tiny
+mon_fish_gar_longnose,longnose gar,动物,FISH,6,150,mon_fish_small
+mon_fish_goldfish,goldfish,动物,FISH,2,150,mon_fish_tiny
+mon_fish_grass_carp,grass carp,动物,FISH,20,150,mon_fish_large
+mon_fish_green_sunfish,green sunfish,动物,FISH,2,150,mon_fish_tiny
+mon_fish_haddock,haddock,动物,FISH,10,150,mon_fish_medium
+mon_fish_halibut,Atlantic halibut,动物,FISH,20,150,mon_fish_large
+mon_fish_kokanee_salmon,kokanee salmon,动物,FISH,10,150,mon_fish_medium
+mon_fish_lake_trout,lake trout,动物,FISH,20,150,mon_fish_large
+mon_fish_lbass,largemouth bass,动物,FISH,10,150,mon_fish_medium
+mon_fish_lobster,lobster,动物,FISH,12,80,
+mon_fish_mackerel,Atlantic mackerel,动物,FISH,2,150,mon_fish_tiny
+mon_fish_muskellunge,muskellunge,动物,FISH,20,150,mon_fish_large
+mon_fish_pbass,striped bass,动物,FISH,10,150,mon_fish_medium
+mon_fish_perch,yellow perch,动物,FISH,2,150,mon_fish_tiny
+mon_fish_pickerel,chain pickerel,动物,FISH,10,150,mon_fish_medium
+mon_fish_pickerel_american,American pickerel,动物,FISH,2,150,mon_fish_tiny
+mon_fish_pike,northern pike,动物,FISH,10,150,mon_fish_medium
+mon_fish_pollock,pollock,动物,FISH,10,150,mon_fish_medium
+mon_fish_porgy,scup,动物,FISH,2,150,mon_fish_tiny
+mon_fish_pumpkinseed,pumpkinseed,动物,FISH,2,150,mon_fish_tiny
+mon_fish_rainbow_trout,rainbow trout,动物,FISH,20,150,mon_fish_large
+mon_fish_redbreast,redbreast sunfish,动物,FISH,2,150,mon_fish_tiny
+mon_fish_rock_bass,rock bass,动物,FISH,2,150,mon_fish_tiny
+mon_fish_salmon,Atlantic salmon,动物,FISH,20,150,mon_fish_large
+mon_fish_sbass,smallmouth bass,动物,FISH,10,150,mon_fish_medium
+mon_fish_sturgeon_lake,lake sturgeon,动物,FISH,20,150,mon_fish_large
+mon_fish_sturgeon_shortnose,shortnose sturgeon,动物,FISH,6,150,mon_fish_small
+mon_fish_sunfish,banded sunfish,动物,FISH,2,150,mon_fish_tiny
+mon_fish_walleye,walleye,动物,FISH,10,150,mon_fish_medium
+mon_fish_warmouth,warmouth,动物,FISH,6,150,mon_fish_small
+mon_fish_white_catfish,white catfish,动物,FISH,2,150,mon_fish_tiny
+mon_fish_white_sucker,white sucker,动物,FISH,6,150,mon_fish_small
+mon_fish_whitefish,lake whitefish,动物,FISH,10,150,mon_fish_medium
+mon_fish_whitefish_round,round whitefish,动物,FISH,2,150,mon_fish_tiny
+mon_foul_bigfrog,greasy stinktoad,动物,AMPHIBIAN,40,70,mon_proxy_bigfrog
+mon_foul_bigtad,giant tadpole,动物,AMPHIBIAN,10,120,mon_proxy_bigtad
+mon_foul_giganfrog,giant hogtoad,动物,AMPHIBIAN,120,100,mon_proxy_giganfrog
+mon_foul_megafrog,great beaked toad,动物,AMPHIBIAN,400,90,mon_proxy_megafrog
+mon_foul_toad,foul toad,动物,AMPHIBIAN,3,80,mon_fowler_toad
+mon_fowler_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_fowler_toad,Fowler's toad,动物,AMPHIBIAN,3,80,mon_proxy_frog
+mon_fox_gray,fox,动物,MAMMAL,20,130,
+mon_fox_red,fox,动物,MAMMAL,30,145,
+mon_freedom_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_freedom_toad,American toad,动物,AMPHIBIAN,3,80,mon_proxy_frog
+mon_fry_blackfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_bluefin_tuna,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_bluefish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_bluegill,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_bowfin,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_brook_trout,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_brown_trout,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_bullhead,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_bullhead_yellow,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_burbot,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_calico_bass,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_carp,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_channel_catfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_cod,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_crayfish,crustacean larva,动物,FISH,1,150,mon_fry
+mon_fry_fallfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_flounder,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_gar_longnose,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_goldfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_grass_carp,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_green_sunfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_haddock,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_halibut,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_kokanee_salmon,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_lake_trout,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_lbass,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_mackerel,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_muskellunge,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_mutant_salmon,mutant fish fry,动物,FISH,3,150,mon_fry_mutant
+mon_fry_pbass,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_perch,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_pickerel,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_pickerel_american,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_pike,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_pollock,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_porgy,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_pumpkinseed,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_rainbow_trout,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_redbreast,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_rock_bass,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_salmon,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_sbass,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_sturgeon_lake,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_sturgeon_shortnose,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_sunfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_walleye,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_warmouth,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_white_catfish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_white_sucker,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_whitefish,fish fry,动物,FISH,1,150,mon_fry
+mon_fry_whitefish_round,fish fry,动物,FISH,1,150,mon_fry
+mon_gartersnake,common garter snake,动物,REPTILE,1,100,mon_snake_abstract
+mon_gartersnake_baby,common garter snake snakelet,动物,REPTILE,1,60,mon_snakelet_abstract
+mon_goat,goat,动物,MAMMAL,80,200,mon_sheep
+mon_goat_kid,kid,动物,MAMMAL,20,90,mon_sheep_lamb
+mon_goose,domestic goose,动物,BIRD,10,85,mon_bird_water_base
+mon_goose_canadian,Canada goose,动物,BIRD,11,85,mon_bird_water_base
+mon_goose_canadian_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_goose_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_gray_frog,gray treefrog,动物,AMPHIBIAN,2,80,mon_proxy_frog
+mon_gray_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_grebe,horned grebe,动物,BIRD,1,85,mon_bird_water_base
+mon_grebe_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_green_frog,green frog,动物,AMPHIBIAN,2,80,mon_proxy_frog
+mon_green_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_green_worm,many-legged frog,动物,AMPHIBIAN,2,80,mon_green_frog
+mon_groundhog,groundhog,动物,MAMMAL,12,140,
+mon_grouse,ruffed grouse,动物,BIRD,1,140,mon_bird_flying_base
+mon_grouse_chick,brown chick,动物,BIRD,1,40,mon_generic_chick
+mon_guinea_fowl,domestic guineafowl,动物,BIRD,3,105,mon_bird_flightless_base
+mon_guinea_fowl_chick,yellow chick,动物,BIRD,1,40,mon_chicken_chick
+mon_hare,snowshoe hare,动物,MAMMAL,8,300,mon_rabbit_base
+mon_hare_baby,snowshoe hare kit,动物,MAMMAL,1,125,mon_rabbit_baby_base
+mon_horse,horse,动物,MAMMAL,90,300,
+mon_horse_foal,foal,动物,MAMMAL,35,260,
+mon_horse_police,horse,动物,MAMMAL,90,300,mon_horse
+mon_hummingbird,ruby-throated hummingbird,动物,BIRD,1,200,mon_bird_flying_base
+mon_hummingbird_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_jumbo_bigfrog,jumbo treefrog,动物,AMPHIBIAN,20,110,mon_proxy_bigfrog
+mon_lab_rat,lab rat,动物,MAMMAL,6,100,
+mon_lab_ratkin,lab rat,动物,MAMMAL,6,100,
+mon_lemming,lemming,动物,MAMMAL,4,90,
+mon_leo_frog,leopard frog,动物,AMPHIBIAN,3,80,mon_proxy_frog
+mon_leo_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_leo_worm,many-legged frog,动物,AMPHIBIAN,3,80,mon_leo_frog
+mon_llama,llama,动物,MAMMAL,90,90,
+mon_llama_calf,llama calf,动物,MAMMAL,35,90,
+mon_mink,mink,动物,MAMMAL,30,130,
+mon_mink_frog,mink frog,动物,AMPHIBIAN,2,80,mon_proxy_frog
+mon_mink_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_moorhen,common gallinule,动物,BIRD,1,110,mon_bird_water_base
+mon_moorhen_chick,waterfowl chick,动物,BIRD,1,40,mon_generic_chick_water
+mon_moose,moose,动物,MAMMAL,366,200,
+mon_moose_calf,moose calf,动物,MAMMAL,85,120,
+mon_muskrat,muskrat,动物,MAMMAL,10,100,
+mon_mutant_carp,giant carp,动物,FISH,180,150,
+mon_mutant_salmon,giant salmon,动物,FISH,110,175,
+mon_mutant_salmon_huge,huge salmon,动物,FISH,225,175,
+mon_mutant_salmon_mega,leaper salmon,动物,FISH,240,200,
+mon_odd_bigfrog,oversized toad,动物,AMPHIBIAN,50,100,mon_proxy_bigfrog
+mon_odd_bigtad,giant tadpole,动物,AMPHIBIAN,10,120,mon_proxy_bigtad
+mon_odd_giganfrog,giant toad,动物,AMPHIBIAN,120,90,mon_proxy_giganfrog
+mon_odd_megafrog,gargantuan toad,动物,AMPHIBIAN,1200,80,mon_proxy_megafrog
+mon_odd_toad,odd toad,动物,AMPHIBIAN,12,80,mon_freedom_toad
+mon_opossum,opossum,动物,MAMMAL,12,110,
+mon_otter,otter,动物,MAMMAL,12,110,
+mon_palette_frog,palette frog,动物,AMPHIBIAN,2,80,mon_pickerel_frog
+mon_pattern_bigfrog,staticskin frog,动物,AMPHIBIAN,40,80,mon_proxy_bigfrog
+mon_pattern_bigtad,giant tadpole,动物,AMPHIBIAN,10,120,mon_proxy_bigtad
+mon_pattern_frog,strangely-patterned frog,动物,AMPHIBIAN,3,80,mon_leo_frog
+mon_pattern_giganfrog,taser tongue,动物,AMPHIBIAN,100,90,mon_proxy_giganfrog
+mon_peeper_frog,spring peeper,动物,AMPHIBIAN,1,80,mon_proxy_frog
+mon_peeper_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_pheasant,ring-necked pheasant,动物,BIRD,3,140,mon_bird_flying_base
+mon_pheasant_chick,brown chick,动物,BIRD,1,40,mon_generic_chick
+mon_pickerel_frog,pickerel frog,动物,AMPHIBIAN,2,80,mon_proxy_frog
+mon_pickerel_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_pig,pig,动物,MAMMAL,50,100,
+mon_pig_piglet,piglet,动物,MAMMAL,5,80,
+mon_pigeon,feral pigeon,动物,BIRD,1,200,mon_bird_flying_base
+mon_pigeon_chick,brown chick,动物,BIRD,1,40,mon_generic_chick
+mon_rabbit,domestic rabbit,动物,MAMMAL,8,300,mon_rabbit_base
+mon_rabbit_baby,domestic rabbit kit,动物,MAMMAL,1,125,mon_rabbit_baby_base
+mon_raccoon,raccoon,动物,MAMMAL,14,100,
+mon_raccoon_mutant,dextrous raccoon,动物,MAMMAL,21,100,mon_raccoon
+mon_rattlesnake,timber rattlesnake,动物,REPTILE,2,100,mon_snake_abstract
+mon_rattlesnake_big,mutant rattlesnake,动物,REPTILE,64,100,mon_rattlesnake_giant
+mon_rattlesnake_big_s,mutant rattlesnake snakelet,动物,REPTILE,12,90,mon_rattlesnake_s
+mon_rattlesnake_giant,giant rattlesnake,动物,REPTILE,64,100,
+mon_rattlesnake_mega,deathrattle serpent,动物,REPTILE,400,110,
+mon_rattlesnake_s,timber rattlesnake snakelet,动物,REPTILE,1,60,mon_snakelet_abstract
+mon_raven,raven,动物,BIRD,4,200,mon_bird_flying_base
+mon_raven_chick,brown chick,动物,BIRD,1,40,mon_crow_chick
+mon_reindeer,reindeer,动物,MAMMAL,120,325,
+mon_reindeer_fawn,reindeer fawn,动物,MAMMAL,35,93,mon_reindeer
+mon_robin,American robin,动物,BIRD,1,200,mon_bird_flying_base
+mon_robin_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_sewer_fish,seweranha,动物,FISH,20,180,
+mon_sewer_rat,brown rat,动物,MAMMAL,10,100,
+mon_sewer_snake,sewer snake,动物,REPTILE,10,90,
+mon_sheep,sheep,动物,MAMMAL,90,90,
+mon_sheep_lamb,lamb,动物,MAMMAL,20,90,
+mon_shift_bigfrog,mimic treefrog,动物,AMPHIBIAN,20,130,mon_jumbo_bigfrog
+mon_shift_bigtad,giant tadpole,动物,AMPHIBIAN,10,120,mon_proxy_bigtad
+mon_shift_frog,shifting treefrog,动物,AMPHIBIAN,2,80,mon_gray_frog
+mon_skink_fivelined,five-lined skink,动物,REPTILE,1,125,
+mon_skink_fivelined_baby,five-lined skink hatchling,动物,REPTILE,1,60,mon_skink_fivelined
+mon_skunk,skunk,动物,MAMMAL,12,110,
+mon_slug_forest,oversized slug,动物,MOLLUSK,25,10,
+mon_slug_giant,colossal slug,动物,MOLLUSK,190,60,
+mon_slug_larva,slug larva,动物,MOLLUSK,2,25,mon_larva_abstract
+mon_slug_small,giant slug,动物,MOLLUSK,190,60,mon_slug_giant
+mon_snail_forest,oversized snail,动物,MOLLUSK,25,10,
+mon_snail_giant,colossal snail,动物,MOLLUSK,190,60,
+mon_snail_larva,snail larva,动物,MOLLUSK,2,25,mon_larva_abstract
+mon_snail_river,freshwater snail,动物,MOLLUSK,3,10,
+mon_snail_small,giant snail,动物,MOLLUSK,190,60,mon_snail_giant
+mon_spade_frog,spadefoot toad,动物,AMPHIBIAN,2,80,mon_proxy_frog
+mon_spade_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_sparrow,house sparrow,动物,BIRD,1,200,mon_bird_flying_base
+mon_sparrow_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_squirrel,squirrel,动物,MAMMAL,6,140,
+mon_squirrel_red,squirrel,动物,MAMMAL,6,130,
+mon_strange_bigfrog,mutant bullfrog,动物,AMPHIBIAN,50,100,mon_proxy_bigfrog
+mon_strange_bigtad,giant tadpole,动物,AMPHIBIAN,10,120,mon_proxy_bigtad
+mon_strange_frog,strange bullfrog,动物,AMPHIBIAN,12,80,mon_bullfrog_frog
+mon_strange_giganfrog,giant bullfrog,动物,AMPHIBIAN,120,90,mon_proxy_giganfrog
+mon_strange_megafrog,colossal croaker,动物,AMPHIBIAN,1200,80,mon_proxy_megafrog
+mon_tail_frog,tailed frog,动物,AMPHIBIAN,2,80,mon_mink_frog
+mon_tiger,tiger,动物,MAMMAL,180,140,mon_cougar
+mon_turkey,wild turkey,动物,BIRD,16,140,mon_bird_flying_base
+mon_turkey_chick,brown chick,动物,BIRD,1,40,mon_generic_chick
+mon_turkey_domestic,domestic turkey,动物,BIRD,20,105,mon_bird_flightless_base
+mon_turkey_domestic_chick,brown chick,动物,BIRD,1,40,mon_generic_chick
+mon_turtle_painted,painted turtle,动物,REPTILE,2,65,mon_turtle_abstract
+mon_turtle_painted_baby,painted turtle hatchling,动物,REPTILE,1,45,mon_turtle_baby_abstract
+mon_turtle_snapping_common,common snapping turtle,动物,REPTILE,16,65,mon_turtle_abstract
+mon_turtle_snapping_common_baby,common snapping turtle hatchling,动物,REPTILE,1,45,mon_turtle_baby_abstract
+mon_tusked_moose,great tusked moose,动物,MAMMAL,590,175,
+mon_tusked_moose_calf,tusked moose calf,动物,MAMMAL,85,120,
+mon_vocal_bigfrog,wailing treefrog,动物,AMPHIBIAN,20,110,mon_jumbo_bigfrog
+mon_vocal_bigtad,giant tadpole,动物,AMPHIBIAN,10,120,mon_proxy_bigtad
+mon_vocal_frog,vocal treefrog,动物,AMPHIBIAN,1,80,mon_peeper_frog
+mon_waxwing,cedar waxwing,动物,BIRD,1,200,mon_bird_flying_base
+mon_waxwing_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_weasel,weasel,动物,MAMMAL,20,110,
+mon_wild_rabbit,cottontail rabbit,动物,MAMMAL,8,300,mon_rabbit_base
+mon_wild_rabbit_baby,cottontail rabbit kit,动物,MAMMAL,1,125,mon_rabbit_baby_base
+mon_wolf,wolf,动物,MAMMAL,40,165,
+mon_wolf_pup,wolf puppy,动物,MAMMAL,10,98,mon_wolf
+mon_wood_frog,wood frog,动物,AMPHIBIAN,2,80,mon_proxy_frog
+mon_wood_tadpole,tadpole,动物,AMPHIBIAN,1,70,mon_proxy_tadpole
+mon_wood_worm,many-legged frog,动物,AMPHIBIAN,2,80,mon_wood_frog
+mon_woodpecker,downy woodpecker,动物,BIRD,1,200,mon_bird_flying_base
+mon_woodpecker_chick,gray chick,动物,BIRD,1,40,mon_generic_chick_tiny
+mon_wormsnake,worm snake,动物,REPTILE,1,70,mon_snake_abstract
+mon_wormsnake_baby,worm snake snakelet,动物,REPTILE,1,60,mon_snakelet_abstract
+mon_alpha_razorclaw,alpha razorclaw,变异生物,MUTANT,120,95,
+mon_big_rat,big rat,变异生物,MUTANT,25,100,
+mon_crayfish_giant_larva,giant crayfish larva,变异生物,MUTANT,2,150,mon_larva_abstract
+mon_crayfish_mega,colossal crayfish,变异生物,MUTANT,50,130,mon_giant_crayfish
+mon_crayfish_small,oversized crayfish,变异生物,MUTANT,50,130,mon_giant_crayfish
+mon_crow_mutant,bloated corvid,变异生物,MUTANT,35,70,
+mon_dark_wyrm,dark wyrm,变异生物,MUTANT,120,100,
+mon_giant_crayfish,giant crayfish,变异生物,MUTANT,50,130,
+mon_mausketeer,mausketeer,变异生物,MUTANT,125,115,mon_big_rat
+mon_mutant_alpha,transcendent mutant,变异生物,"MUTANT, HUMAN",120,100,mon_mutant_antler
+mon_mutant_alpha_boss,mutant child,变异生物,"MUTANT, HUMAN",120,100,mon_mutant_alpha
+mon_mutant_antler,ungulate mutant,变异生物,"MUTANT, HUMAN",210,150,
+mon_mutant_arthropod,arthropod mutant,变异生物,"MUTANT, HUMAN",180,105,mon_mutant_antler
+mon_mutant_camouflaged,camouflaged mutant,变异生物,"MUTANT, HUMAN",160,115,mon_mutant_antler
+mon_mutant_evolved,bestial mutant,变异生物,"MUTANT, HUMAN",300,110,mon_mutant_antler
+mon_mutant_experimental,experimental mutant,变异生物,"MUTANT, HUMAN",150,100,
+mon_mutant_mollusk,shelled mutant,变异生物,"MUTANT, HUMAN",320,60,mon_mutant_antler
+mon_pack_rat,pack rat,变异生物,MUTANT,60,90,mon_big_rat
+mon_player_blob,slime microbian,变异生物,MUTANT,40,100,
+mon_razorclaw,razorclaw,变异生物,MUTANT,80,85,
+mon_slime_ocularium,slime ocularium,变异生物,MUTANT,140,10,
+mon_sludge_crawler,sludge crawler,变异生物,MUTANT,300,60,
+mon_teke_mouse,Mouse of NEMA,变异生物,MUTANT,40,125,mon_big_rat
+mon_tunnel_rat,tunnel runner,变异生物,MUTANT,45,80,mon_big_rat
+mon_zap_rat,zap rattigan,变异生物,MUTANT,25,100,mon_big_rat
+mon_absence,absence,异界与恐怖,NETHER_EMANATION,150,40,
+mon_albino_penguin,albino penguin,异界与恐怖,NETHER,200,50,
+mon_amigara_horror,amigara horror,异界与恐怖,HORROR,250,70,
+mon_archunk_medium,pulsating chunk of unknown material,异界与恐怖,HORROR,315,75,mon_archunk_weak
+mon_archunk_strong,resonating chunk of unknown material,异界与恐怖,HORROR,445,75,mon_archunk_weak
+mon_archunk_weak,chunk of unknown material,异界与恐怖,HORROR,225,75,
+mon_better_half,better half,异界与恐怖,NETHER_EMANATION,35,110,mon_pale_reflection
+mon_blank,blank body,异界与恐怖,NETHER,100,80,
+mon_breather,breather,异界与恐怖,NETHER,100,100,
+mon_breather_hub,breather,异界与恐怖,NETHER,100,100,
+mon_crawler,crawler,异界与恐怖,ABERRATION,180,80,
+mon_dark_reflection,dark reflection,异界与恐怖,NETHER_EMANATION,35,100,mon_pale_reflection
+mon_darkman,wraith,异界与恐怖,NETHER,800,140,
+mon_dog_thing,dog,异界与恐怖,NETHER,25,150,
+mon_eigenspectre_1,eigenspectre,异界与恐怖,NETHER_EMANATION,120,130,
+mon_eigenspectre_2,photonic eigenspectre,异界与恐怖,NETHER_EMANATION,130,70,
+mon_eigenspectre_3,shifting eigenspectre,异界与恐怖,NETHER_EMANATION,120,150,
+mon_eigenspectre_3_echo,shifting eigenspectre,异界与恐怖,NETHER_EMANATION,40,150,
+mon_eigenspectre_4,titanic eigenspectre,异界与恐怖,NETHER_EMANATION,200,90,
+mon_flaming_eye,flaming eye,异界与恐怖,NETHER,300,90,
+mon_flatlander,flatlander,异界与恐怖,NETHER_EMANATION,30,100,
+mon_flesh_golem,flesh golem,异界与恐怖,ABERRATION,200,80,
+mon_fleshy_shambler,fleshy shambler,异界与恐怖,ABERRATION,100,50,
+mon_flying_polyp,flying polyp,异界与恐怖,NETHER,350,280,
+mon_giant_appendage,giant appendage,异界与恐怖,NETHER_EMANATION,1000000000,90,
+mon_gozu,gozu,异界与恐怖,NETHER,400,80,
+mon_gracke,gracken,异界与恐怖,NETHER,100,180,
+mon_guilt,guilt,异界与恐怖,NETHER_EMANATION,10,110,mon_shifting_mass
+mon_hallucinator,person,异界与恐怖,NETHER_EMANATION,100000000,25,
+mon_hanging_roper,hanging roper,异界与恐怖,NETHER,200,150,
+mon_headless_dog_thing,tentacle dog,异界与恐怖,NETHER,120,120,
+mon_hound_tindalos,hound of Tindalos,异界与恐怖,NETHER,300,70,
+mon_hound_tindalos_afterimage,hound of Tindalos,异界与恐怖,NETHER,100,70,
+mon_human_snail,human snail,异界与恐怖,ABERRATION,80,50,
+mon_hunting_horror,hunting horror,异界与恐怖,NETHER,280,180,
+mon_impossible_shape,impossible shape,异界与恐怖,NETHER_EMANATION,30,90,
+mon_jabberwock,jabberwock,异界与恐怖,ABERRATION,400,140,
+mon_kreck,kreck,异界与恐怖,NETHER,30,100,
+mon_living_vector,unfolded impossibility,异界与恐怖,NETHER_EMANATION,200,120,
+mon_memory,memory,异界与恐怖,NETHER_EMANATION,25,100,
+mon_mi_go,mi-go,异界与恐怖,MIGO,210,120,
+mon_mi_go_captured,partially harvested mi-go,异界与恐怖,MIGO,20,,
+mon_mi_go_guard,mi-go guard,异界与恐怖,MIGO,350,110,
+mon_mi_go_myrmidon,mi-go myrmidon,异界与恐怖,MIGO,610,80,
+mon_mi_go_scout,mi-go scout,异界与恐怖,MIGO,200,120,
+mon_mi_go_slaver,mi-go slaver,异界与恐怖,MIGO,240,120,
+mon_mi_go_surgeon,mi-go surgeon,异界与恐怖,MIGO,160,120,
+mon_nether_fish,nether fish symbiote,异界与恐怖,NETHER,25,100,
+mon_nether_huntsman,eldritch huntsman,异界与恐怖,NETHER,210,110,
+mon_pale_reflection,pale reflection,异界与恐怖,NETHER_EMANATION,35,80,
+mon_shadow,shadow,异界与恐怖,NETHER,60,90,
+mon_shadow_snake,shadow snake,异界与恐怖,NETHER,40,90,
+mon_shifting_mass,shifting mass,异界与恐怖,NETHER_EMANATION,10,110,
+mon_shoggoth,shoggoth,异界与恐怖,NETHER,400,90,
+mon_shrapnel_swarm,shrapnel swarm,异界与恐怖,NETHER,1000,190,
+mon_sloth,sloth,异界与恐怖,NETHER_EMANATION,10,110,mon_shifting_mass
+mon_star_vampire,star vampire,异界与恐怖,NETHER,250,120,
+mon_star_vampire_coiling,star vampire,异界与恐怖,NETHER,250,120,mon_star_vampire
+mon_structural_spur,structural spur,异界与恐怖,NETHER,300,100,
+mon_swarm_structure,swarm structure,异界与恐怖,NETHER_EMANATION,80,80,
+mon_tainted_shadow,tainted shadow,异界与恐怖,NETHER_EMANATION,35,100,
+mon_thing,thing,异界与恐怖,NETHER,160,140,
+mon_tindalos,star-crowned hound,异界与恐怖,NETHER,1200,65,
+mon_twisted_body,twisted body,异界与恐怖,HORROR,70,90,
+mon_twisted_reflection,twisted reflection,异界与恐怖,NETHER_EMANATION,35,90,mon_pale_reflection
+mon_twisting_blade,twisting blade,异界与恐怖,NETHER_EMANATION,30,60,
+mon_zombie_phase_shrike,phase shrike,异界与恐怖,ABERRATION,10,90,mon_zombie_phase_skulker
+mon_zombie_phase_skulker,phase skulker,异界与恐怖,ABERRATION,80,90,
+mon_ant,giant ant,昆虫与蛛类,INSECT,40,100,
+mon_ant_acid,giant acidic ant,昆虫与蛛类,INSECT,60,100,
+mon_ant_acid_larva,acidic ant larva,昆虫与蛛类,INSECT,20,15,mon_larva_abstract
+mon_ant_acid_queen,giant acidic queen ant,昆虫与蛛类,INSECT,300,40,
+mon_ant_acid_small,oversized acidic ant,昆虫与蛛类,INSECT,60,100,mon_ant_acid
+mon_ant_acid_soldier,giant acidic soldier ant,昆虫与蛛类,INSECT,100,100,
+mon_ant_acid_soldier_mega,super soldier acidic ant,昆虫与蛛类,INSECT,100,100,mon_ant_acid_soldier
+mon_ant_larva,ant larva,昆虫与蛛类,INSECT,2,15,mon_larva_abstract
+mon_ant_queen,giant queen ant,昆虫与蛛类,INSECT,300,40,
+mon_ant_small,oversized ant,昆虫与蛛类,INSECT,40,100,mon_ant
+mon_ant_soldier,giant soldier ant,昆虫与蛛类,INSECT,80,100,
+mon_ant_soldier_mega,super soldier ant,昆虫与蛛类,INSECT,80,100,mon_ant_soldier
+mon_antlion_giant,giant adult antlion,昆虫与蛛类,INSECT_FLYING,70,130,
+mon_antlion_larva,giant antlion larva,昆虫与蛛类,INSECT,60,100,
+mon_aphid,giant aphid,昆虫与蛛类,INSECT,20,120,
+mon_aphid_small,oversized aphid,昆虫与蛛类,INSECT,20,120,mon_aphid
+mon_bee,giant bee,昆虫与蛛类,INSECT_FLYING,30,140,
+mon_bee_mega,alpha bee,昆虫与蛛类,INSECT_FLYING,30,140,mon_bee
+mon_bee_small,oversized bee,昆虫与蛛类,INSECT_FLYING,30,140,mon_bee
+mon_butterfly,oversized butterfly,昆虫与蛛类,INSECT_FLYING,25,95,
+mon_butterfly_cocoon,giant cocoon,昆虫与蛛类,INSECT,100,,
+mon_butterfly_giant,giant butterfly,昆虫与蛛类,INSECT_FLYING,50,95,
+mon_butterfly_titan,emperor butterfly,昆虫与蛛类,INSECT_FLYING,50,95,mon_butterfly_giant
+mon_carrion_grub,carrion grub,昆虫与蛛类,INSECT,20,15,mon_larva_abstract
+mon_caterpillar_butterfly,giant caterpillar,昆虫与蛛类,INSECT,30,30,mon_larva_abstract
+mon_caterpillar_moth,giant caterpillar,昆虫与蛛类,INSECT,30,30,mon_larva_abstract
+mon_centipede_giant,giant centipede,昆虫与蛛类,CENTIPEDE,110,110,
+mon_centipede_house,giant house centipede,昆虫与蛛类,CENTIPEDE,84,165,
+mon_centipede_house_larva,giant house centipede larva,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_centipede_house_small,oversized house centipede,昆虫与蛛类,CENTIPEDE,51,175,mon_centipede_house
+mon_centipede_larva,centipede larva,昆虫与蛛类,CENTIPEDE,25,80,mon_larva_abstract
+mon_centipede_mega,armored centipede,昆虫与蛛类,CENTIPEDE,850,110,
+mon_centipede_mom,centipede matriarch,昆虫与蛛类,CENTIPEDE,200,60,mon_centipede_giant
+mon_centipede_small,oversized centipede,昆虫与蛛类,CENTIPEDE,30,115,mon_centipede_giant
+mon_cicada,giant cicada,昆虫与蛛类,INSECT,100,80,
+mon_cicada_nymph,cicada nymph,昆虫与蛛类,INSECT,80,80,mon_larva_abstract
+mon_dermatik,dermatik,昆虫与蛛类,INSECT_FLYING,60,130,
+mon_dermatik_incubator_spider,twitching spider,昆虫与蛛类,SPIDER,40,20,mon_dermatik_incubator_deer
+mon_dermatik_larva,dermatik larva,昆虫与蛛类,INSECT,2,20,mon_larva_abstract
+mon_dermatik_midwife,dermatik midwife,昆虫与蛛类,INSECT,60,100,mon_dermatik
+mon_diving_beetle_small,giant diving beetle,昆虫与蛛类,INSECT,90,50,
+mon_diving_larva,giant water tiger,昆虫与蛛类,INSECT,35,50,
+mon_dragonfly_giant,giant dragonfly,昆虫与蛛类,INSECT_FLYING,50,150,
+mon_dragonfly_mega,fused dragonflies,昆虫与蛛类,INSECT,1100,100,
+mon_dragonfly_naiad,giant dragonfly naiad,昆虫与蛛类,INSECT,40,100,
+mon_firefly,oversized firefly,昆虫与蛛类,INSECT_FLYING,25,95,
+mon_firefly_larva,firefly larva,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_fly,giant fly,昆虫与蛛类,INSECT_FLYING,25,120,
+mon_fly_larva,giant grub,昆虫与蛛类,INSECT,15,15,mon_larva_abstract
+mon_fly_mega,frigate fly,昆虫与蛛类,INSECT_FLYING,25,120,mon_fly
+mon_fly_small,oversized fly,昆虫与蛛类,INSECT_FLYING,25,120,mon_fly
+mon_giant_cockroach,giant cockroach,昆虫与蛛类,INSECT,40,100,
+mon_giant_cockroach_nymph,giant cockroach nymph,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_graboid,graboid,昆虫与蛛类,WORM,600,95,
+mon_grasshopper_giant,giant grasshopper,昆虫与蛛类,INSECT,40,180,
+mon_grasshopper_nymph,grasshopper nymph,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_grasshopper_small,oversized grasshopper,昆虫与蛛类,INSECT,40,180,mon_grasshopper_giant
+mon_halfworm,giant half worm,昆虫与蛛类,WORM,115,55,mon_worm
+mon_halfworm_graboid,graboid half worm,昆虫与蛛类,WORM,600,95,mon_graboid
+mon_halfworm_small,oversized half worm,昆虫与蛛类,WORM,115,55,mon_worm_small
+mon_lady_bug,oversized lady bug,昆虫与蛛类,INSECT,120,105,
+mon_lady_bug_giant,giant lady bug,昆虫与蛛类,INSECT,350,110,
+mon_lady_bug_larva,lady bug larva,昆虫与蛛类,INSECT,25,80,mon_larva_abstract
+mon_large_cockroach,oversized cockroach,昆虫与蛛类,INSECT,40,100,mon_giant_cockroach
+mon_locust,giant locust,昆虫与蛛类,INSECT_FLYING,30,90,
+mon_locust_mega,famine,昆虫与蛛类,INSECT_FLYING,30,90,mon_locust
+mon_locust_nymph,locust nymph,昆虫与蛛类,INSECT_FLYING,2,50,mon_larva_abstract
+mon_locust_small,oversized locust,昆虫与蛛类,INSECT_FLYING,30,90,mon_locust
+mon_mantis_giant,giant praying mantis,昆虫与蛛类,INSECT,120,100,
+mon_mantis_mega,great mantis,昆虫与蛛类,INSECT,120,100,mon_mantis_giant
+mon_mantis_nymph,praying mantis nymph,昆虫与蛛类,INSECT,25,80,mon_larva_abstract
+mon_mantis_small,oversized praying mantis,昆虫与蛛类,INSECT,120,100,mon_mantis_giant
+mon_mole_cricket,giant mole cricket,昆虫与蛛类,INSECT,160,80,
+mon_mole_cricket_nymph,mole cricket nymph,昆虫与蛛类,INSECT,25,80,mon_larva_abstract
+mon_mosquito_giant,giant mosquito,昆虫与蛛类,INSECT_FLYING,20,120,
+mon_mosquito_larva,giant mosquito larva,昆虫与蛛类,INSECT,2,150,mon_larva_abstract
+mon_mosquito_mega,bloodbank mosquito,昆虫与蛛类,INSECT_FLYING,20,120,mon_mosquito_giant
+mon_mosquito_small,oversized mosquito,昆虫与蛛类,INSECT_FLYING,20,120,mon_mosquito_giant
+mon_moth,oversized moth,昆虫与蛛类,INSECT_FLYING,25,95,
+mon_moth_cocoon,giant cocoon,昆虫与蛛类,INSECT,100,,
+mon_moth_fly,giant moth fly,昆虫与蛛类,INSECT_FLYING,23,155,
+mon_moth_fly_larva,giant moth fly larva,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_moth_fly_small,oversized moth fly,昆虫与蛛类,INSECT_FLYING,7,155,mon_moth_fly
+mon_moth_giant,giant moth,昆虫与蛛类,INSECT_FLYING,50,95,
+mon_moth_titan,lunar moth,昆虫与蛛类,INSECT_FLYING,50,95,mon_moth_giant
+mon_nether_leech,strange leech,昆虫与蛛类,INSECT,100,100,mon_larva_abstract
+mon_plague_vector,plague vector,昆虫与蛛类,INSECT,70,100,
+mon_pregnant_giant_cockroach,pregnant giant cockroach,昆虫与蛛类,INSECT,40,100,mon_giant_cockroach
+mon_silverfish,giant silverfish,昆虫与蛛类,INSECT,71,135,
+mon_silverfish_nymph,giant silverfish nymph,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_silverfish_small,oversized silverfish,昆虫与蛛类,INSECT,23,135,mon_silverfish
+mon_skittering_plague,skittering plague,昆虫与蛛类,INSECT,30,120,
+mon_spider_cellar_giant,giant cellar spider,昆虫与蛛类,SPIDER,60,100,
+mon_spider_cellar_giant_s,cellar spiderling,昆虫与蛛类,SPIDER,2,90,mon_larva_abstract
+mon_spider_cellar_leg,detached spider leg,昆虫与蛛类,INSECT,25,50,
+mon_spider_cellar_mega,warehouse spider,昆虫与蛛类,SPIDER,60,100,mon_spider_cellar_giant
+mon_spider_cellar_mom,mommy long-legs,昆虫与蛛类,SPIDER,60,85,mon_spider_cellar_giant
+mon_spider_cellar_small,oversized cellar spider,昆虫与蛛类,SPIDER,60,100,mon_spider_cellar_giant
+mon_spider_jumping_giant,giant jumping spider,昆虫与蛛类,SPIDER,30,100,
+mon_spider_jumping_giant_s,jumping spiderling,昆虫与蛛类,SPIDER,2,90,mon_larva_abstract
+mon_spider_jumping_mega,missile spider,昆虫与蛛类,SPIDER,30,100,mon_spider_jumping_giant
+mon_spider_jumping_small,oversized jumping spider,昆虫与蛛类,SPIDER,30,100,mon_spider_jumping_giant
+mon_spider_trapdoor_giant,giant trapdoor spider,昆虫与蛛类,SPIDER,70,110,
+mon_spider_trapdoor_mega,deathtrap spider,昆虫与蛛类,SPIDER,70,110,mon_spider_trapdoor_giant
+mon_spider_trapdoor_s,trapdoor spiderling,昆虫与蛛类,SPIDER,2,90,mon_larva_abstract
+mon_spider_trapdoor_small,oversized trapdoor spider,昆虫与蛛类,SPIDER,70,110,mon_spider_trapdoor_giant
+mon_spider_web,giant web spider,昆虫与蛛类,SPIDER,40,110,
+mon_spider_web_mega,wyrd spider,昆虫与蛛类,SPIDER,40,110,mon_spider_web
+mon_spider_web_s,web spiderling,昆虫与蛛类,SPIDER,2,90,mon_larva_abstract
+mon_spider_web_small,oversized web spinning spider,昆虫与蛛类,SPIDER,40,110,mon_spider_web
+mon_spider_widow_giant,giant black widow,昆虫与蛛类,SPIDER,60,90,
+mon_spider_widow_giant_s,black widow spiderling,昆虫与蛛类,SPIDER,2,90,mon_larva_abstract
+mon_spider_widow_mega,black death widow,昆虫与蛛类,SPIDER,60,90,mon_spider_widow_giant
+mon_spider_widow_small,oversized black widow spider,昆虫与蛛类,SPIDER,60,90,mon_spider_widow_giant
+mon_spider_wolf_giant,giant wolf spider,昆虫与蛛类,SPIDER,40,150,
+mon_spider_wolf_giant_s,wolf spiderling,昆虫与蛛类,SPIDER,2,90,mon_larva_abstract
+mon_spider_wolf_mega,necrowolf spider,昆虫与蛛类,SPIDER,40,150,mon_spider_wolf_giant
+mon_spider_wolf_small,oversized wolf spider,昆虫与蛛类,SPIDER,40,150,mon_spider_wolf_giant
+mon_stag_beetle_giant,massive stag beetle,昆虫与蛛类,INSECT,350,80,
+mon_stag_beetle_larva,giant stag beetle larva,昆虫与蛛类,INSECT,120,25,
+mon_stag_beetle_mega,titan stag beetle,昆虫与蛛类,INSECT,350,80,mon_stag_beetle_giant
+mon_stag_beetle_small,giant stag beetle,昆虫与蛛类,INSECT,350,80,mon_stag_beetle_giant
+mon_strider_giant,giant water strider,昆虫与蛛类,INSECT,20,50,
+mon_strider_nymph,water strider nymph,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_strider_small,oversized water strider,昆虫与蛛类,INSECT,20,50,mon_strider_giant
+mon_wasp,giant wasp,昆虫与蛛类,INSECT_FLYING,100,150,
+mon_wasp_guard,giant wasp guard,昆虫与蛛类,INSECT_FLYING,100,150,mon_wasp
+mon_wasp_larva,wasp larva,昆虫与蛛类,INSECT,35,50,mon_larva_abstract
+mon_wasp_mega,giant wasp queen,昆虫与蛛类,INSECT_FLYING,100,100,mon_wasp_guard
+mon_wasp_pupa,wasp pupa,昆虫与蛛类,INSECT,100,,
+mon_wasp_queen,oversized wasp queen,昆虫与蛛类,INSECT_FLYING,100,150,mon_wasp_guard
+mon_wasp_small,oversized wasp,昆虫与蛛类,INSECT_FLYING,20,100,
+mon_wasp_small_guard,oversized wasp guard,昆虫与蛛类,INSECT_FLYING,20,100,mon_wasp_small
+mon_water_scorpion,giant water scorpion,昆虫与蛛类,INSECT,45,50,
+mon_water_scorpion_larva,water scorpion nymph,昆虫与蛛类,INSECT,45,50,mon_water_scorpion
+mon_woodlouse,giant woodlouse,昆虫与蛛类,INSECT,90,80,
+mon_woodlouse_manca,woodlouse manca,昆虫与蛛类,INSECT,2,50,mon_larva_abstract
+mon_worm,giant earthworm,昆虫与蛛类,WORM,115,55,
+mon_worm_larva,earthworm larva,昆虫与蛛类,WORM,2,50,mon_larva_abstract
+mon_worm_small,oversized earthworm,昆虫与蛛类,WORM,115,55,mon_worm
+mon_EMP_hack,EMP hack,机器人与改造体,ROBOT_FLYING,10,250,base_drone
+mon_broken_cyborg,broken cyborg,机器人与改造体,ROBOT,60,90,
+mon_c4_hack,C-4 hack,机器人与改造体,ROBOT_FLYING,10,250,base_drone
+mon_crows_m240,M240 autonomous CROWS II,机器人与改造体,ROBOT,40,100,
+mon_dispatch,NR-031 Dispatch,机器人与改造体,ROBOT,100,100,
+mon_dispatch_military,NR-V05-M Dispatch,机器人与改造体,ROBOT,100,100,
+mon_exodii_quad,Exodii quadruped,机器人与改造体,CYBORG,240,110,
+mon_exodii_turret,upcycled turret,机器人与改造体,ROBOT,240,100,
+mon_exodii_worker,Exodii worker,机器人与改造体,CYBORG,125,110,
+mon_flashbang_hack,flashbang hack,机器人与改造体,ROBOT_FLYING,10,250,base_drone
+mon_fleshborg_1_1,fleshborg,机器人与改造体,"CYBORG, ROBOT",85,80,
+mon_fleshborg_1_2,advanced fleshborg,机器人与改造体,"CYBORG, ROBOT",85,80,mon_fleshborg_1_1
+mon_gasbomb_hack,tear gas hack,机器人与改造体,ROBOT_FLYING,10,250,base_drone
+mon_golden_monolith,golden monolith,机器人与改造体,ROBOT,100,5,mon_yrax_sphenocorona
+mon_grenade_hack,grenade hack,机器人与改造体,ROBOT_FLYING,10,250,base_drone
+mon_grocerybot,grocery bot,机器人与改造体,ROBOT,80,100,
+mon_grocerybot_busted,busted grocery bot,机器人与改造体,ROBOT,80,100,
+mon_hazmatbot,cleaner bot,机器人与改造体,ROBOT,120,70,
+mon_lab_security_drone_BM,BM security drone,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_lab_security_drone_BM2,BM security drone,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_lab_security_drone_BS,BS security drone,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_lab_security_drone_GM,GM security drone,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_lab_security_drone_GR,LGR security drone,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_lab_security_drone_YM,OM security drone,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_labyrinth_turret_1_1,flesh turret,机器人与改造体,"ROBOT, HUMAN",60,100,
+mon_manhack,manhack,机器人与改造体,ROBOT_FLYING,10,190,base_drone
+mon_mech_combat,X-02: 'Grunt' Combat Mech,机器人与改造体,ROBOT,550,65,
+mon_mech_lifter,X-01: 'Jack' Lifting Mech,机器人与改造体,ROBOT,400,50,
+mon_mech_recon,X-03: 'Specter' Recon Mech,机器人与改造体,ROBOT,320,120,
+mon_molebot,demining bot,机器人与改造体,ROBOT,80,40,
+mon_nursebot,nurse bot,机器人与改造体,ROBOT,80,100,
+mon_nursebot_defective,nurse bot,机器人与改造体,ROBOT,80,100,
+mon_prototype_cyborg,prototype cyborg,机器人与改造体,CYBORG,60,90,
+mon_robofac_camspy,Hub 01 camspy,机器人与改造体,ROBOT_FLYING,20,120,
+mon_robofac_laserturret_mk1,prototype laser turret,机器人与改造体,ROBOT,30,100,
+mon_robofac_prototype,prototype robot,机器人与改造体,ROBOT,50,140,
+mon_robofac_skittergun,Hub 01 exterminatron,机器人与改造体,ROBOT,40,100,
+mon_science_bot,experimental lab bot,机器人与改造体,ROBOT,80,100,
+mon_secubot,M16A4 autonomous TALON UGV,机器人与改造体,ROBOT,80,40,
+mon_secubot_america,autonomous TALON UGV Liberty Edition,机器人与改造体,ROBOT,80,40,
+mon_secubot_america_refurbished,refurbished autonomous TALON UGV Liberty Edition,机器人与改造体,ROBOT,80,40,
+mon_secubot_balthazar,M16A4 autonomous TALON UGV,机器人与改造体,ROBOT,80,40,mon_secubot
+mon_skitterbot,skitterbot,机器人与改造体,ROBOT,40,130,
+mon_stiltwalker_1_1,Stiltwalker,机器人与改造体,CYBORG,130,200,
+mon_talon_m202a1,M202A1 autonomous TALON UGV,机器人与改造体,ROBOT,80,40,
+mon_tazer_hack,taser hack,机器人与改造体,ROBOT_FLYING,10,350,base_drone
+mon_turret,improvised MP5 turret,机器人与改造体,ROBOT,30,100,
+mon_turret_artisans,custom plated turret,机器人与改造体,ROBOT,40,100,mon_turret_rifle
+mon_turret_bmg,M2HB autonomous CROWS II,机器人与改造体,ROBOT,40,100,
+mon_turret_rifle,M249 autonomous CROWS II,机器人与改造体,ROBOT,40,100,
+mon_turret_rifle_balthazar,M249 autonomous CROWS II,机器人与改造体,ROBOT,40,100,mon_turret_rifle
+mon_turret_riot,riot control platform,机器人与改造体,ROBOT,30,100,
+mon_turret_searchlight,milspec searchlight,机器人与改造体,ROBOT,30,100,
+mon_turret_speaker,loudspeaker,机器人与改造体,ROBOT,30,100,
+mon_yrax_apeirogon,Yrax apeirohedron,机器人与改造体,ROBOT,1000000,500,
+mon_yrax_delta,Yrax delta,机器人与改造体,ROBOT,10,120,base_drone
+mon_yrax_sphenocorona,Yrax sphenocorona,机器人与改造体,ROBOT,10,40,
+mon_yrax_triakis,Yrax triakis,机器人与改造体,ROBOT,50,100,
+mon_yrax_trifacet,Yrax trifacet,机器人与改造体,ROBOT,50,100,
+mon_biollante,biollante,植物,PLANT,120,100,
+mon_biollante_sprig,biollante sprig,植物,PLANT,20,100,mon_biollante
+mon_biollante_sprout,biollante sprout,植物,PLANT,60,100,mon_biollante
+mon_creeper_hub,creeper hub,植物,PLANT,100,100,
+mon_creeper_vine,creeper vine,植物,PLANT,2,75,
+mon_fungal_fighter,fungicidal triffid,植物,PLANT,60,50,
+mon_leech_blossom,leech blossom,植物,LEECH_PLANT,100,100,
+mon_leech_pod_cluster,leech pod cluster,植物,LEECH_PLANT,40,100,
+mon_leech_radio,signal tree,植物,LEECH_PLANT,40,100,
+mon_leech_root_drone,root drone,植物,LEECH_PLANT,40,80,
+mon_leech_root_runner,root runner,植物,LEECH_PLANT,40,120,
+mon_leech_stalk,leech stalk,植物,LEECH_PLANT,40,100,
+mon_triffid,triffid,植物,PLANT,80,70,
+mon_triffid_flower,triffid flower,植物,PLANT,200,100,
+mon_triffid_heart,triffid heart,植物,PLANT,500,100,
+mon_triffid_queen,triffid queen,植物,PLANT,280,40,
+mon_triffid_sprig,triffid sprig,植物,PLANT,3,40,
+mon_triffid_young,triffid sprout,植物,PLANT,40,50,
+mon_vinebeast,vine beast,植物,PLANT,100,80,
+mon_ant_fungus,fungal ant,真菌,FUNGUS,40,60,
+mon_bee_fungus,giant fungal bee,真菌,FUNGUS,20,120,
+mon_bee_mega_fungus,alpha fungal bee,真菌,FUNGUS,20,120,mon_bee_fungus
+mon_bee_small_fungus,fungal bee,真菌,FUNGUS,20,120,mon_bee_fungus
+mon_feral_cop_fungal_infected,feral cop,真菌,"FERAL, HUMAN, FUNGUS",84,85,mon_feral_cop
+mon_feral_human_axe_fungal_infected,deranged axeman,真菌,"FERAL, HUMAN, FUNGUS",84,90,mon_feral_human_axe
+mon_feral_human_crowbar_fungal_infected,feral human,真菌,"FERAL, HUMAN, FUNGUS",84,90,mon_feral_human_crowbar
+mon_feral_human_pipe_fungal_infected,feral human,真菌,"FERAL, HUMAN, FUNGUS",84,90,mon_feral_human_pipe
+mon_fungal_blossom,fungal blossom,真菌,FUNGUS,30,100,
+mon_fungal_hedgerow,fungal hedgerow,真菌,FUNGUS,40,100,
+mon_fungal_tendril,fungal tendril,真菌,FUNGUS,30,100,
+mon_fungal_wall,fungal wall,真菌,FUNGUS,20,100,
+mon_fungaloid,fungaloid,真菌,FUNGUS,80,40,
+mon_fungaloid_queen,fungal spire,真菌,FUNGUS,300,100,
+mon_fungaloid_seeder,giant fungal blossom,真菌,FUNGUS,300,100,
+mon_fungaloid_shambler,fungaloid shambler,真菌,FUNGUS,150,20,mon_fungaloid
+mon_fungaloid_tower,fungal tower,真菌,FUNGUS,300,100,
+mon_fungaloid_young,fungal sporeling,真菌,FUNGUS,70,70,
+mon_marloss_zealot_f,Marloss zealot,真菌,FUNGUS,80,100,
+mon_marloss_zealot_m,Marloss zealot,真菌,FUNGUS,80,100,
+mon_spider_fungus,fungal spider,真菌,FUNGUS,20,60,
+mon_spore,spore cloud,真菌,FUNGUS,4,100,
+mon_wasp_fungus,giant fungal wasp,真菌,FUNGUS,70,95,
+mon_wasp_guard_fungus,giant fungal wasp guard,真菌,FUNGUS,70,95,mon_wasp_fungus
+mon_wasp_mega_fungus,giant fungal wasp queen,真菌,FUNGUS,70,105,mon_wasp_guard_fungus
+mon_wasp_queen_fungus,fungal wasp queen,真菌,FUNGUS,10,70,mon_wasp_small_guard_fungus
+mon_wasp_small_fungus,fungal wasp,真菌,FUNGUS,10,70,
+mon_wasp_small_guard_fungus,fungal wasp guard,真菌,FUNGUS,10,70,mon_wasp_small_fungus
+mon_whisper_fungus,whispering fungi,真菌,FUNGUS,45,100,
+mon_blob,slime,黏液与异常体,SLIME,80,70,
+mon_blob_brain,brain slime,黏液与异常体,SLIME,400,50,
+mon_blob_large,big slime,黏液与异常体,SLIME,160,90,
+mon_blob_sewer,sewer slime,黏液与异常体,SLIME,60,70,mon_blob
+mon_blob_small,small slime,黏液与异常体,SLIME,40,50,
+mon_gelatin,amoebic mold,黏液与异常体,SLIME,200,40,
+mon_hallu_mannequin,mannequin,黏液与异常体,HALLUCINATION,5,50,
+mon_hallu_mom,your mother,黏液与异常体,HALLUCINATION,5,100,
+mon_hallu_multicooker,evil multi-cooker,黏液与异常体,HALLUCINATION,5,50,

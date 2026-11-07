@@ -1401,6 +1401,38 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 actor.id = "mon_zombie";
                 actor.height = 1.8f;
                 actor.position = here.get_abs( origin + tripoint_rel_ms( 0, -3, 0 ) );
+                // SDL's ordinary 2D target has no depth buffer. Give this tilted
+                // production-scene render the same depth precision as the compositor.
+                auto *previous_target = SDL_GetRenderTarget( renderer.get() );
+                SDL_Texture_Ptr view_target( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
+                                             SDL_TEXTUREACCESS_TARGET, width, height ) );
+                REQUIRE( view_target );
+                REQUIRE( SDL_SetRenderTarget( renderer.get(), view_target.get() ) == 0 );
+                SDL_RenderFlush( renderer.get() );
+                const auto gen_depth = reinterpret_cast<PFNGLGENRENDERBUFFERSPROC>( SDL_GL_GetProcAddress( "glGenRenderbuffers" ) );
+                const auto bind_depth = reinterpret_cast<PFNGLBINDRENDERBUFFERPROC>( SDL_GL_GetProcAddress( "glBindRenderbuffer" ) );
+                const auto allocate_depth = reinterpret_cast<PFNGLRENDERBUFFERSTORAGEPROC>( SDL_GL_GetProcAddress( "glRenderbufferStorage" ) );
+                const auto attach_depth = reinterpret_cast<PFNGLFRAMEBUFFERRENDERBUFFERPROC>( SDL_GL_GetProcAddress( "glFramebufferRenderbuffer" ) );
+                const auto delete_depth = reinterpret_cast<PFNGLDELETERENDERBUFFERSPROC>( SDL_GL_GetProcAddress( "glDeleteRenderbuffers" ) );
+                REQUIRE( gen_depth );
+                REQUIRE( bind_depth );
+                REQUIRE( allocate_depth );
+                REQUIRE( attach_depth );
+                REQUIRE( delete_depth );
+                GLuint depth = 0;
+                gen_depth( 1, &depth );
+                bind_depth( GL_RENDERBUFFER, depth );
+                allocate_depth( GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height );
+                attach_depth( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth );
+                on_out_of_scope restore_target( [&]() {
+                    SDL_RenderFlush( renderer.get() );
+                    attach_depth( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0 );
+                    SDL_SetRenderTarget( renderer.get(), previous_target );
+                    delete_depth( 1, &depth );
+                } );
+                GLint depth_bits = 0;
+                glGetIntegerv( GL_DEPTH_BITS, &depth_bits );
+                REQUIRE( depth_bits >= 24 );
                 const auto look_down = [&]() {
                     render(); // Prepare native materials and flush the SDL composition.
                     glPushAttrib( GL_ALL_ATTRIB_BITS );
@@ -1416,13 +1448,21 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         glPopMatrix();
                         glPopAttrib();
                     } );
+                    REQUIRE( fp3d_materials::bind() );
                     glViewport( 0, 0, width, height );
                     glDisable( GL_SCISSOR_TEST );
+                    glDisable( GL_BLEND );
+                    glDisable( GL_CULL_FACE );
+                    glDisable( GL_TEXTURE_2D );
                     glClearColor( .03f, .04f, .05f, 1 );
+                    glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
                     glDepthMask( GL_TRUE );
+                    glDepthFunc( GL_LESS );
+                    glDepthRange( 0, 1 );
+                    glClearDepth( 1 );
                     glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
                     glEnable( GL_DEPTH_TEST );
-                    REQUIRE( fp3d_materials::bind() );
+                    glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
                     fp3d_scene::draw( scene, 0, 50, static_cast<float>( width ) / height, {} );
                     std::vector<std::uint32_t> pixels( width * height );
                     glReadPixels( 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
@@ -1437,14 +1477,24 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 const auto empty = look_down();
                 scene.sprites.push_back( actor );
                 const auto downstairs = look_down();
-                CHECK( downstairs != empty );
+                CHECK( static_cast<bool>( downstairs != empty ) );
                 save_scene( "atrium-from-second-floor", downstairs );
-                for( auto &tile : scene.cells ) {
-                    if( tile.position.z() == origin.z() ) { tile.ceiling_present = true; }
+                for( int y = -4; y <= -1; ++y ) {
+                    for( int x = -1; x <= 1; ++x ) {
+                        fp3d_snapshot::cell lid;
+                        lid.position = here.get_abs( origin + tripoint_rel_ms( x, y, 1 ) );
+                        lid.terrain = "t_floor";
+                        auto tile = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto &entry ) {
+                            return entry.position == lid.position;
+                        } );
+                        if( tile == scene.cells.end() ) { scene.cells.push_back( lid ); }
+                        else { *tile = lid; }
+                    }
                 }
                 const auto covered = look_down();
-                scene.sprites.clear();
-                CHECK( look_down() == covered );
+                save_scene( "atrium-covered-floor", covered );
+                scene.sprites.pop_back();
+                CHECK( static_cast<bool>( look_down() == covered ) );
             }
         }
 

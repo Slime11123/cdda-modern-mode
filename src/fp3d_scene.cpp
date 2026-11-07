@@ -220,6 +220,48 @@ void round_furniture_part( const fp3d_furniture::part &part,
     glEnd();
 }
 
+// A few crossed, irregular fire tongues sit behind the real stone arch,
+// above the coal bed. They render without a square sprite background and
+// preserve the GL state used by the rest of the world renderer.
+void kiln_cavity_fire()
+{
+    glPushAttrib( GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
+                  GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT );
+    glDisable( GL_TEXTURE_2D );
+    glDisable( GL_LIGHTING );
+    glDisable( GL_CULL_FACE );
+    glEnable( GL_BLEND );
+    glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+    glDepthMask( GL_FALSE );
+    struct flame {
+        float x, z, width, height;
+    };
+    constexpr std::array<flame, 5> flames{ {
+            { -.115f, .105f, .085f, .305f },
+            { -.038f, .046f, .105f, .420f },
+            { .071f, .130f, .083f, .354f },
+            { .012f, -.040f, .064f, .283f },
+            { .148f, .000f, .048f, .246f }
+        } };
+    for( const flame &f : flames ) {
+        const float y0 = .111f;
+        const float tip = y0 + f.height;
+        for( const bool across : { true, false } ) {
+            glBegin( GL_TRIANGLES );
+            glColor4f( 1.0f, .27f, .015f, .86f );
+            glVertex3f( f.x - ( across ? f.width : 0.0f ), y0,
+                        f.z - ( across ? 0.0f : f.width ) );
+            glColor4f( 1.0f, .83f, .12f, .94f );
+            glVertex3f( f.x + .018f, tip, f.z - .018f );
+            glColor4f( 1.0f, .32f, .025f, .84f );
+            glVertex3f( f.x + ( across ? f.width : 0.0f ), y0,
+                        f.z + ( across ? 0.0f : f.width ) );
+            glEnd();
+        }
+    }
+    glPopAttrib();
+}
+
 void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
                          unsigned facing = 0 )
 {
@@ -229,6 +271,21 @@ void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
     unsigned part_index = 0;
     for( const auto &part : fp3d_furniture::parts( model.shape ) ) {
         const auto surfaces = fp3d_materials::lookup_furniture( model.id, part_index++ );
+        if( part.glass ) {
+            // A display case consists of visible open space, not a solid
+            // blue-painted cube.  State restoration also works in GL lists.
+            glPushAttrib( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                          GL_ENABLE_BIT | GL_CURRENT_BIT );
+            glEnable( GL_BLEND );
+            glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+            glDepthMask( GL_FALSE );
+            glDisable( GL_LIGHTING );
+            glColor4f( .57f, .83f, .94f, .27f );
+            box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                 std::nullopt );
+            glPopAttrib();
+            continue;
+        }
         if( part.round ) {
             round_furniture_part( part, surfaces );
             continue;
@@ -241,6 +298,9 @@ void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
         glRotatef( 180, 1, 0, 0 );
         floor( 0, 0, 0, surfaces.side );
         glPopMatrix();
+    }
+    if( model.shape == fp3d_furniture::kind::kiln ) {
+        kiln_cavity_fire();
     }
     glPopMatrix();
 }
@@ -276,8 +336,12 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         color( brightness, brightness, brightness );
     }
     glPushMatrix();
+    // Opening ownership must not flicker when a lower level is outside the
+    // snapshot or temporarily hidden by cross-z visibility.
     const bool stair_opening = tile.goes_down &&
-                               ( tile.kind == kind::ladder || ( below && below->goes_up ) );
+                               ( tile.kind == kind::ladder ||
+                                 tile.terrain.find( "stairs" ) != std::string::npos ||
+                                 ( below && below->goes_up ) );
     if( tile.floor_present && !tile.is_ramp && !stair_opening ) {
         const auto floor_material = door ? fp3d_materials::lookup( "t_floor" ) : material;
         if( floor_material ) {
@@ -737,6 +801,33 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             return fp3d_furniture::facing( tile.furniture->shape, {},
             { table_at( tile.position + tripoint_rel_ms::north ), table_at( tile.position + tripoint_rel_ms::east ),
               table_at( tile.position + tripoint_rel_ms::south ), table_at( tile.position + tripoint_rel_ms::west ) } );
+        }
+        const auto shape = tile.furniture->shape;
+        const auto grouped = []( fp3d_furniture::kind kind ) {
+            return fp3d_furniture::shows_contents( kind ) ||
+                   kind == fp3d_furniture::kind::counter ||
+                   kind == fp3d_furniture::kind::cabinet ||
+                   kind == fp3d_furniture::kind::desk ||
+                   kind == fp3d_furniture::kind::rack;
+        };
+        const auto linked = [&]( tripoint_rel_ms direction ) {
+            const auto *other = known_cell( tile.position + direction );
+            return other && other->furniture &&
+                   ( other->furniture->shape == shape ||
+                     ( grouped( shape ) && grouped( other->furniture->shape ) ) );
+        };
+        const bool row_ew = linked( tripoint_rel_ms::east ) || linked( tripoint_rel_ms::west );
+        const bool row_ns = linked( tripoint_rel_ms::north ) || linked( tripoint_rel_ms::south );
+        if( row_ew != row_ns ) {
+            // Aligned cabinets, desks and benches share a row axis even if an
+            // endpoint also touches a perpendicular wall.
+            const unsigned a = row_ew ? 0u : 1u;
+            const unsigned b = ( a + 2 ) % 4;
+            const std::array<tripoint_rel_ms, 4> dirs{ tripoint_rel_ms::north,
+                tripoint_rel_ms::east, tripoint_rel_ms::south, tripoint_rel_ms::west };
+            const bool wall_a = known_wall( tile.position + dirs[a] );
+            const bool wall_b = known_wall( tile.position + dirs[b] );
+            return wall_a != wall_b ? ( wall_a ? a : b ) : a;
         }
         return fp3d_furniture::facing( tile.furniture->shape,
         { known_wall( tile.position + tripoint_rel_ms::north ),

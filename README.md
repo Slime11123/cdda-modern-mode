@@ -8,12 +8,22 @@
 
 > **Status: experimental Windows preview (November 2026).** Development builds may have crashes, compatibility issues, and inconsistent performance. This is not an official CDDA product, and full manual gameplay validation is still in progress.
 
+## Alpha 0.2.0 — November 5–7, 2026
+
+The current project release is **Alpha 0.2.0** (tag: `alpha0.2.0`). This development milestone brings together the following changes:
+
+- **November 5:** expanded first-person 3D bathrooms, appliances, chairs, furniture materials, connected stair flights, climbing markers, blood decals, and corpse pickup interactions.
+- **November 6:** paged 3D radial action menus, ladder/downspout models, updated modern UI and character creation, native-weather-driven rain/snow, clouds, fog and lightning; an in-development searchable monster bestiary with kill counts.
+- **November 7:** preserve original colored crafting/construction requirement labels; correct 3D vending machines, low display cabinets, filing cabinet drawers, anvil and other furniture; model a hollow stone kiln from individual rocks with an interior visual flame.
+
+Some new features still require full in-game and cross-device testing. See the [dated release notes](docs/RELEASE_NOTES_alpha0.2.0.md) for scope, known limitations and license notices.
+
 ## Download and play
 
 Visit the [Releases page](https://github.com/Slime11123/cdda-modern-mode/releases) to see whether a Windows ZIP preview is available. Choose an asset labeled **Windows-x64**. GitHub's automatically generated **Source code** archives are *not* ready-to-play Windows builds.
 
 1. **Extract the entire ZIP** to a writable folder outside `Program Files`. Do not launch the executable from inside the ZIP.
-2. **Double-click `cataclysm-tiles.exe`** (the real game executable). No CMD or second EXE is needed in the Alpha.4 Windows package. Keep the DLLs, `data/`, `gfx/`, and `lang/` folders together.
+2. **Double-click `cataclysm-tiles.exe`** (the real game executable). No CMD or second EXE is needed in the Alpha 0.2.0 Windows package. Keep the DLLs, `data/`, `gfx/`, and `lang/` folders together.
 3. Create a new world and character in-game. Saves and settings are stored under the extracted `user/` folder; back them up before upgrading.
 4. Press **F5 or F6** to open the unified settings menu. Select the 2D/3D view, classic/modern controls, and classic sidebar/modern HUD independently, then apply and save.
 

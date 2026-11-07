@@ -10,7 +10,9 @@ namespace fp3d_camera
 constexpr float horizontal_fov_degrees = 120;
 constexpr float floor_height = 2.2f;
 constexpr float eye_height = 1.6f;
-constexpr float near_clip = .05f;
+// Preserve enough depth precision for nearby floors after z-level changes.
+// The 3D FBO uses a 24-bit depth buffer and draws distant landscape silhouettes.
+constexpr float near_clip = .20f;
 constexpr float far_clip = 1536.0f;
 float horizontal_tangent();
 
