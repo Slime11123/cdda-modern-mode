@@ -190,15 +190,36 @@ vec2 mc_project_view(vec3 p) {
     return vec2(0.5)+p.xy/(-p.z*scale)*0.5;
 }
 float mc_sun_occlusion(vec3 pos) {
-    vec2 uv=vec2(dot(pos,u_shadow_x),dot(pos,u_shadow_y)) /
-            (2.0*max(0.1,u_shadow_radius)) + 0.5;
-    float sd=(u_shadow_distance-dot(pos,u_shadow_sun)-0.1)/
+    float sd=(u_shadow_distance-dot(pos,u_shadow_sun)-0.1) /
              max(0.1,2.0*u_shadow_distance-0.1);
-    // Outside the actual depth map is never considered direct sunlight.
-    if(uv.x<0.012 || uv.y<0.012 || uv.x>0.988 || uv.y>0.988 ||
-       sd<0.002 || sd>0.998) { return 0.0; }
-    float depth=texture2D(u_shadow,uv).r;
-    return depth>0.99999 || depth+0.0025>=sd ? 1.0 : 0.0;
+    if(sd<0.002 || sd>0.998) { return 0.0; }
+    vec2 projected=vec2(dot(pos,u_shadow_x),dot(pos,u_shadow_y));
+    vec2 near_uv=(projected+u_shadow_offset) /
+                 (2.0*max(1.0,u_shadow_radius))+0.5;
+    float near_edge=min(min(near_uv.x,near_uv.y),
+                        min(1.0-near_uv.x,1.0-near_uv.y));
+    float near_weight=u_has_shadow_far>0.5 ?
+        smoothstep(0.075,0.175,near_edge) :
+        smoothstep(0.01,0.04,near_edge);
+    float near_vis=0.0;
+    if(near_weight>0.001 && near_edge>0.006) {
+        float depth=texture2D(u_shadow,near_uv).r;
+        near_vis=(depth>0.99999 || depth+0.0025>=sd) ? 1.0 : 0.0;
+    }
+    if(u_has_shadow_far<0.5 || near_weight>=0.999) {
+        return near_vis*near_weight;
+    }
+    vec2 far_uv=(projected+u_shadow_far_offset) /
+                (2.0*max(1.0,u_shadow_far_radius))+0.5;
+    float far_edge=min(min(far_uv.x,far_uv.y),
+                       min(1.0-far_uv.x,1.0-far_uv.y));
+    float far_vis=0.0;
+    if(far_edge>0.008) {
+        float depth=texture2D(u_shadow_far,far_uv).r;
+        far_vis=(depth>0.99999 || depth+0.0025>=sd) ?
+            smoothstep(0.013,0.043,far_edge) : 0.0;
+    }
+    return mix(far_vis,near_vis,near_weight);
 }
 vec3 mc_sun_volume(vec2 uv,float depth) {
     // This is actual shadow-map occlusion integrated along the camera ray,
@@ -226,23 +247,45 @@ vec3 mc_sun_volume(vec2 uv,float depth) {
     float fog=0.60+0.55*clamp(u_clouds,0.0,1.0)+
               0.35*u_rain_strength;
     float integration=(light/8.0)*(1.0-exp(-raylen*0.045));
+    // A sunshaft is light SCATTERING in air, not a flat bright decal on
+    // asphalt/vehicle material. The earlier unbounded additive term washed
+    // dark roads into wide light-gray regions near nearby sun occluders.
+    // For opaque pixels attenuate short camera-to-surface paths; real sky
+    // rays and distant atmospheric beams still receive their full light.
+    float surface_attenuation=depth<0.99998 ?
+        mix(0.32,0.68,smoothstep(8.0,38.0,raylen)) : 1.0;
     return vec3(1.0,0.82,0.65)*integration*phase*fog*
-           u_shadow_strength*(0.42+0.20*u_mc_intensity);
+           u_shadow_strength*(0.42+0.20*u_mc_intensity)*
+           surface_attenuation;
 }
-vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, float material_reflectivity) {
-    if(d>=0.9999 || d<=0.0 || material_reflectivity<=0.02) {
+vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
+    if(d>=0.9999 || d<=0.0 || material.r<=0.02) {
         return original_color;
     }
     // The native-visible mask only marks horizontal, real terrain floors.
     // Reconstructing a normal from adjacent scene depth samples near cars,
     // tile boundaries or sprites used to create large zero-reflection holes.
-    vec3 normal=normalize(vec3(0.0,cos(u_yaw_pitch.y),sin(u_yaw_pitch.y)));
     vec3 p=mc_view_at(uv,d);
+    float roughness=clamp(material.g>0.01 ? material.g : 0.53,0.08,0.95);
+    float bump=clamp(material.b,0.0,0.12);
+    // Procedural micro-normal for the classified real water/ground only.
+    // Use world coordinates so turning the camera doesn't move the pattern.
+    // Not a full tileset normal map and it never bends the geometry depth.
+    vec3 world=mc_world_at(p);
+    float phase=world.x*1.55+world.z*0.89+u_time*(roughness<0.25?0.5:0.0);
+    float phase2=world.z*1.41-world.x*0.37+u_time*(roughness<0.25?0.32:0.0);
+    vec3 nworld=normalize(vec3(bump*cos(phase),1.0,bump*cos(phase2)));
+    float cy=cos(u_yaw_pitch.x),sy=sin(u_yaw_pitch.x);
+    float cp=cos(u_yaw_pitch.y),sp=sin(u_yaw_pitch.y);
+    float intermediate=-sy*nworld.x+cy*nworld.z;
+    vec3 normal=normalize(vec3(cy*nworld.x+sy*nworld.z,
+                               cp*nworld.y-sp*intermediate,
+                               sp*nworld.y+cp*intermediate));
     vec3 incident=normalize(p);
     float up_angle=clamp(-dot(normal,incident),0.0,1.0);
     if(up_angle<=0.015) { return original_color; }
     float grazing=1.0-up_angle;
-    float wet=clamp(material_reflectivity,0.0,1.0);
+    float wet=clamp(material.r,0.0,1.0);
     float range=mc_linear_depth(d);
     // Continuous weak wet sheen across EVERY classified native road tile,
     // including pixels where limited screen-space ray casting cannot hit.
@@ -250,7 +293,10 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, float material_ref
                         clamp(u_daylight,0.0,1.0));
     atmosphere=mix(atmosphere,vec3(0.31,0.33,0.35),
                    clamp(u_clouds,0.0,1.0)*0.68);
-    float film=wet*(0.07+0.12*grazing);
+    // Schlick Fresnel for a dielectric wet surface (F0 near 0.04);
+    // rough asphalt gives a weaker, broader response than smooth water.
+    float fresnel=0.04+0.96*pow(grazing,5.0);
+    float film=wet*(0.025+0.070*fresnel)*(1.0-0.40*roughness);
     vec3 result=mix(original_color,atmosphere,film);
     // The old abrupt 20-m cutoff looked like bands of dry tiles. Fade only
     // the extra screen-space reflection; the underlying rain film stays.
@@ -283,13 +329,16 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, float material_ref
     if(hitfade<=0.0) { return result; }
     // Gentle spatial filtering and low bounded strength keep car reflections
     // visible but prevent a single hit from becoming a solid mirror tile.
-    vec3 reflection=texture2D(u_scene,hituv).rgb*0.50+
-                    texture2D(u_scene,hituv+vec2(u_texel.x*2.0,0.0)).rgb*0.25+
-                    texture2D(u_scene,hituv-vec2(u_texel.x*2.0,0.0)).rgb*0.25;
+    vec2 spread=u_texel*(1.0+5.0*roughness);
+    vec3 reflection=texture2D(u_scene,hituv).rgb*(0.66-0.30*roughness)+
+                    texture2D(u_scene,hituv+vec2(spread.x,0.0)).rgb*(0.085+0.075*roughness)+
+                    texture2D(u_scene,hituv-vec2(spread.x,0.0)).rgb*(0.085+0.075*roughness)+
+                    texture2D(u_scene,hituv+vec2(0.0,spread.y)).rgb*(0.085+0.075*roughness)+
+                    texture2D(u_scene,hituv-vec2(0.0,spread.y)).rgb*(0.085+0.075*roughness);
     float edge=smoothstep(0.02,0.14,min(min(hituv.x,hituv.y),
                                         min(1.0-hituv.x,1.0-hituv.y)));
     float confidence=hitfade*edge*distance_fade;
-    float strength=wet*(0.12+0.16*grazing)*confidence;
+    float strength=wet*(0.08+0.22*fresnel)*(1.0-0.55*roughness)*confidence;
     return mix(result,reflection,strength);
 }
 )glsl";
@@ -344,9 +393,9 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, float material_ref
     if(u_has_depth>0.5 && u_quality>=3.0) {
         float surface_depth=texture2D(u_depth,v_uv).r;
         if(u_mc_ssr_enabled>0.5 && u_has_mc_reflect_mask>0.5) {
-            float actual_reflectivity=texture2D(u_mc_reflect_mask,v_uv).r;
-            if(actual_reflectivity>0.025) {
-                color=mc_wet_reflection(v_uv,surface_depth,color,actual_reflectivity);
+            vec3 surface_material=texture2D(u_mc_reflect_mask,v_uv).rgb;
+            if(surface_material.r>0.025) {
+                color=mc_wet_reflection(v_uv,surface_depth,color,surface_material);
             }
         }
         if(u_has_shadow>0.5 && u_mc_volume_enabled>0.5 &&

@@ -14,6 +14,16 @@ namespace fp3d_shadow
 {
 struct data {
     GLuint texture = 0;
+    // Cascaded far-range map; zero means single-map fallback.
+    GLuint far_texture = 0;
+    // Native visible wall occupancy atlas (local X/Z, 256x256).
+
+    float far_radius = 0;
+    int far_resolution = 0;
+    std::array<float, 2> snap_offset = { 0, 0 };
+    std::array<float, 2> far_snap_offset = { 0, 0 };
+    unsigned qa_far_depth_occupied_texels = 0;
+    std::uint64_t qa_far_depth_hash = 0;
     float radius = 30;
     float distance = 64;
     float strength = 0;

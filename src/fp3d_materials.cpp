@@ -521,8 +521,22 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             if( pending.size() > before ) {
                 pending.back().window = true;
             }
+        } else if( tile.terrain.compare( 0, 9, "t_treetop" ) == 0 ) {
+            // The native treetop belongs to a higher z-level, but its art
+            // must come from the corresponding tree, not a missing ground
+            // tile. This is an alpha-cutout atlas slot for crossed cards.
+            const size_t before = pending.size();
+            add( treetop_plant_key( tile.terrain ), nullptr );
+            if( pending.size() > before ) {
+                pending.back().plant = true;
+            }
         } else if( tile.kind != fp3d_snapshot::terrain_kind::glass ) {
             add( tile.terrain, nullptr );
+        }
+        if( !tile.ceiling_surface.empty() ) {
+            // An exposed metal walkway can be visible from underneath even
+            // when its upper floor is outside the native endpoint cache.
+            add( tile.ceiling_surface, nullptr );
         }
         if( tile.ceiling_present || tile.kind == fp3d_snapshot::terrain_kind::glass ||
             tile.kind == fp3d_snapshot::terrain_kind::closed_door ||
@@ -702,6 +716,12 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             DebugLog( D_INFO, D_MAIN ) << "fp3d: vehicle part missing in selected tileset: " << id;
             SDL_SetRenderDrawColor( renderer, 115, 122, 127, 255 );
             SDL_RenderFillRect( renderer, &slot );
+        } else if( !painted && entry.plant ) {
+            // Missing cutout vegetation must stay transparent. An opaque
+            // debug checker is not foliage and was especially conspicuous
+            // when a tree crown spans a second native z-level.
+            ++missing;
+            DebugLog( D_INFO, D_MAIN ) << "fp3d: plant sprite absent in selected tileset: " << id;
         } else if( !painted ) {
             ++missing;
             SDL_SetRenderDrawColor( renderer, 80, 40, 95, 255 );

@@ -137,7 +137,13 @@ uniform float u_has_depth;
 uniform vec2 u_sun_position;
 uniform float u_sun_strength;
 uniform sampler2D u_shadow;
+uniform sampler2D u_shadow_far;
 uniform float u_has_shadow;
+uniform float u_has_shadow_far;
+uniform float u_shadow_far_radius;
+uniform float u_shadow_far_resolution;
+uniform vec2 u_shadow_offset;
+uniform vec2 u_shadow_far_offset;
 uniform float u_shadow_radius;
 uniform float u_shadow_distance;
 uniform float u_shadow_strength;
@@ -213,33 +219,146 @@ void main() {
             vec3 world = vec3(cy * cam.x - sy * vz, vy + u_camera_height,
                               sy * cam.x + cy * vz);
             world.xz += u_camera_offset;
-            vec2 light_uv = vec2(dot(world,u_shadow_x), dot(world,u_shadow_y)) /
-                            (2.0 * u_shadow_radius) + 0.5;
-            float current_light_depth = (u_shadow_distance -
-                dot(world,u_shadow_sun) - 0.1) /
-                (2.0 * u_shadow_distance - 0.1);
             float texel = 1.0 / max(1.0, u_shadow_resolution);
-            // A receiver outside the light volume must be lit, not tested
-            // against clamped depth=1 (which created false dark streaks).
-            float edge_distance = min(min(light_uv.x,light_uv.y),
-                                      min(1.0-light_uv.x,1.0-light_uv.y));
-            if(current_light_depth > 0.0 && current_light_depth < 1.0 &&
-               edge_distance > texel * 2.0) {
-                float shadowed = 0.0;
-                float bias = 0.0009 + 0.0008 * (1.0 - clamp(u_shadow_sun.y,0.0,1.0));
-                // Symmetric 3x3 PCF instead of the old 2x2 harsh pixel steps.
-                for(int iy = -1; iy <= 1; ++iy) {
-                    for(int ix = -1; ix <= 1; ++ix) {
-                        vec2 uv = light_uv + vec2(float(ix),float(iy))*texel;
-                        float blocker = texture2D(u_shadow, uv).r;
-                        shadowed += (blocker < 0.99999 &&
-                                   current_light_depth > blocker + bias) ? 1.0 : 0.0;
+            // The fixed receiver bias previously applied the same strong
+            // sun occlusion to walls, floors and underside ceilings. A
+            // back-facing wall receives NO direct sunlight in native GL,
+            // so its ambient term must not be shadowed again. Reconstruct
+            // the actual rendered surface normal from local depth-plane
+            // derivatives. Orient toward camera (visible face), not the
+            // arbitrary triangle winding of the wall atlas.
+            // Scale-invariant receiver normal for near-camera surfaces.
+            // A 1-2 metre wall at 2520px width has dFdx/dFdy areas
+            // around 1e-6 metres^2. The former absolute 1e-5 cross-length
+            // threshold incorrectly replaced that valid vertical normal
+            // with an UPWARD one, creating huge camera-dependent black
+            // wall triangles even when the real wall does not face the sun.
+            //
+            // Normalize each derivative before taking their cross, then
+            // test only the angle. Degenerate/edge pixels get NO direct
+            // solar shadow, never a fabricated floor normal.
+            vec3 dpdx=dFdx(world);
+            vec3 dpdy=dFdy(world);
+            float dx_len=length(dpdx);
+            float dy_len=length(dpdy);
+            vec3 receiver_normal=vec3(0.0);
+            if(dx_len>0.0000001 && dy_len>0.0000001) {
+                vec3 oriented=cross(dpdx/dx_len,dpdy/dy_len);
+                float sine_angle=length(oriented);
+                if(sine_angle>0.05) {
+                    receiver_normal=oriented/sine_angle;
+                }
+            }
+            vec3 toward_eye=vec3(u_camera_offset.x,u_camera_height,
+                                 u_camera_offset.y)-world;
+            if(dot(receiver_normal,toward_eye)<0.0) {
+                receiver_normal=-receiver_normal;
+            }
+            // Most world wall/floor/ceiling faces are axis-aligned. Screen
+            // depth derivatives at seams and near the camera can rotate a
+            // reconstructed normal as the player turns, producing huge
+            // camera-dependent triangular shadow bands on an unchanged wall.
+            // Snap only confidently planar faces; preserve angled vehicles
+            // and ramps with their actual reconstructed orientation.
+            vec3 axis_strength=abs(receiver_normal);
+            float largest=max(axis_strength.x,max(axis_strength.y,axis_strength.z));
+            if(largest>0.86) {
+                if(axis_strength.x>=axis_strength.y && axis_strength.x>=axis_strength.z) {
+                    receiver_normal=vec3(sign(receiver_normal.x),0.0,0.0);
+                } else if(axis_strength.y>=axis_strength.z) {
+                    receiver_normal=vec3(0.0,sign(receiver_normal.y),0.0);
+                } else {
+                    receiver_normal=vec3(0.0,0.0,sign(receiver_normal.z));
+                }
+            }
+            // Push the receiver toward its visible surface normal before
+            // projecting to the sun map. The shadow caster is inset inside
+            // the painted wall; this keeps an oblique near-camera ray from
+            // comparing against the wall's own slightly displaced depth.
+            // Outside buildings and through doorways real occluders still
+            // cast sun shadows, unlike globally disabling indoor shadows.
+            float receiver_offset=abs(receiver_normal.y)<0.5 ? 0.055 : 0.014;
+            vec3 shadow_world=world+receiver_normal*receiver_offset;
+            vec2 light_uv=(vec2(dot(shadow_world,u_shadow_x),
+                                dot(shadow_world,u_shadow_y))+u_shadow_offset) /
+                            (2.0*u_shadow_radius)+0.5;
+            float current_light_depth=(u_shadow_distance-
+                dot(shadow_world,u_shadow_sun)-0.1) /
+                (2.0*u_shadow_distance-0.1);
+            float facing_sun=clamp(dot(receiver_normal,u_shadow_sun),0.0,1.0);
+            // Shadow only directly sunlit receivers. A back-facing wall
+            // has zero native direct sunlight, so darkening its ambient
+            // creates false diagonal tile-by-tile self-shadow bands. The
+            // real shadows on sunlit roads, cars and building faces remain.
+            float direct_receiver=smoothstep(0.03,0.23,facing_sun);
+            float slope_bias=1.0-abs(dot(receiver_normal,u_shadow_sun));
+            float bias_near=0.00070+0.00135*slope_bias;
+            float bias_far=bias_near+0.00035;
+            float near_edge = min(min(light_uv.x,light_uv.y),
+                                  min(1.0-light_uv.x,1.0-light_uv.y));
+            if(current_light_depth > 0.0 && current_light_depth < 1.0) {
+                // Bias depends on the actual receiver plane slope, not
+                // just the vertical component of the sun direction.
+                // Blend two independently rasterized solar depth maps
+                // across a wide light-space band; never linearly blend
+                // depth values (which would create bogus ghost casters).
+                float near_weight = u_has_shadow_far>0.5 ?
+                    smoothstep(0.075,0.175,near_edge) :
+                    smoothstep(texel*2.0,max(0.075,texel*4.0),near_edge);
+                float near_shadow=0.0;
+                if(near_weight>0.001 && near_edge>texel*2.0) {
+                    for(int iy=-1;iy<=1;++iy) {
+                        for(int ix=-1;ix<=1;++ix) {
+                            vec2 sample_uv=light_uv+vec2(float(ix),float(iy))*texel;
+                            float blocker=texture2D(u_shadow,sample_uv).r;
+                            near_shadow += (blocker<0.99999 &&
+                                current_light_depth>blocker+bias_near) ? 1.0 : 0.0;
+                        }
+                    }
+                    near_shadow/=9.0;
+                }
+                float shadow_factor=near_shadow*near_weight;
+                if(u_has_shadow_far>0.5 && near_weight<0.999) {
+                    vec2 far_uv = (vec2(dot(shadow_world,u_shadow_x),dot(shadow_world,u_shadow_y)) +
+                                   u_shadow_far_offset) /
+                                  (2.0*max(1.0,u_shadow_far_radius)) + 0.5;
+                    float far_texel=1.0/max(1.0,u_shadow_far_resolution);
+                    float far_edge=min(min(far_uv.x,far_uv.y),
+                                       min(1.0-far_uv.x,1.0-far_uv.y));
+                    if(far_edge>far_texel*2.0) {
+                        float far_shadow=0.0;
+                        for(int iy=-1;iy<=1;++iy) {
+                            for(int ix=-1;ix<=1;++ix) {
+                                vec2 uv=far_uv+vec2(float(ix),float(iy))*far_texel;
+                                float blocker=texture2D(u_shadow_far,uv).r;
+                                far_shadow += (blocker<0.99999 &&
+                                    current_light_depth>blocker+bias_far) ? 1.0 : 0.0;
+                            }
+                        }
+                        // Fade at the distant light volume edge, not to a
+                        // clamped border texel that darkens the whole frame.
+                        float far_fade=smoothstep(0.015,0.045,far_edge);
+                        shadow_factor += far_shadow/9.0 *
+                                         (1.0-near_weight)*far_fade;
                     }
                 }
-                float edge_fade = smoothstep(texel * 2.0,
-                                             max(0.075, texel * 4.0), edge_distance);
-                float shadow_factor = (shadowed / 9.0) * edge_fade;
-                color *= 1.0 - shadow_factor * u_shadow_strength * 0.36;
+                // Restore distinct, properly DARK directional silhouettes
+                // (car, street light, mailbox, buildings). The old 0.36
+                // multiplier barely separated dark asphalt from shadow,
+                // especially with bright indirect daylight and Photon.
+                // Ultra uses the full dual-cascade PCF; lower settings retain
+                // a gentler fallback. Never add tinted gray to shadows.
+                float shadow_contrast = u_quality >= 2.5 ? 0.68 : 0.48;
+                color *= 1.0 - shadow_factor * u_shadow_strength *
+                         shadow_contrast * direct_receiver;
+                // IMPORTANT: never ADD a fixed blue/grey colour to a
+                // receiver simply because it is in shadow. On dark asphalt
+                // the old +vec3(0.088,0.097,0.110) term made car shadows
+                // BRIGHTER than the surrounding road, creating the large
+                // flat grey patch seen under/behind vehicles. The native
+                // scene's diffuse ambient already provides indirect sky
+                // illumination for rooms and shadowed ground. This pass
+                // exclusively removes occluded *directional* sunlight.
             }
         }
     }
@@ -768,6 +887,10 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
         active_texture( GL_TEXTURE3 );
         glBindTexture( GL_TEXTURE_2D, values.reflection_mask );
     }
+    if( values.shadow_far ) {
+        active_texture( GL_TEXTURE4 );
+        glBindTexture( GL_TEXTURE_2D, values.shadow_far );
+    }
     active_texture( GL_TEXTURE0 );
     use_program( program );
     const auto set_int = [&]( const char *name, int value ) {
@@ -781,6 +904,7 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
     set_int( "u_scene", 0 );
     set_int( "u_depth", 1 );
     set_int( "u_shadow", 2 );
+    set_int( "u_shadow_far", 4 );
     set_int( "u_mc_reflect_mask", 3 );
     set_int( "colortex0", 0 );
     set_int( "gcolor", 0 );
@@ -801,6 +925,20 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
     set_float( "u_mc_volume_enabled", mc_bridge && shadow_volume ? 1.0f : 0.0f );
     set_float( "u_has_depth", values.depth ? 1.0f : 0.0f );
     set_float( "u_has_shadow", values.shadow ? 1.0f : 0.0f );
+    set_float( "u_has_shadow_far", values.shadow_far ? 1.0f : 0.0f );
+    set_float( "u_shadow_far_radius", values.shadow_far_radius );
+    set_float( "u_shadow_far_resolution",
+               static_cast<float>( values.shadow_far_resolution ) );
+    const GLint near_snap = uniform_location( program, "u_shadow_offset" );
+    if( near_snap >= 0 ) {
+        uniform_2f( near_snap, values.shadow_snap_offset[0],
+                    values.shadow_snap_offset[1] );
+    }
+    const GLint far_snap = uniform_location( program, "u_shadow_far_offset" );
+    if( far_snap >= 0 ) {
+        uniform_2f( far_snap, values.shadow_far_snap_offset[0],
+                    values.shadow_far_snap_offset[1] );
+    }
     set_float( "u_shadow_radius", values.shadow_radius );
     set_float( "u_shadow_distance", values.shadow_distance );
     set_float( "u_shadow_strength", values.shadow_strength );
@@ -859,6 +997,10 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
     }
     if( values.reflection_mask ) {
         active_texture( GL_TEXTURE3 );
+        glBindTexture( GL_TEXTURE_2D, 0 );
+    }
+    if( values.shadow_far ) {
+        active_texture( GL_TEXTURE4 );
         glBindTexture( GL_TEXTURE_2D, 0 );
     }
     active_texture( GL_TEXTURE0 );

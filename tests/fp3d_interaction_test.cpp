@@ -600,4 +600,65 @@ TEST_CASE( "fp3d_melee_cancel_also_protects_friendly_monsters", "[fp3d][interact
     CHECK( you.get_moves() == moves );
     CHECK( rng_get_engine() == engine );
 }
+TEST_CASE( "fp3d_downspout_E_wheel_routes_only_native_climbing_actions",
+           "[fp3d][interaction][pipe_wheel]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto pipe_pos = you.pos_bub( here ) + tripoint_rel_ms::north;
+    const auto initial_moves = you.get_moves();
+    const auto initial_pos = you.pos_abs();
+    const auto initial_turn = calendar::turn;
+    const auto initial_rng = rng_get_engine();
+
+    for( const std::string &id : { "t_gutter_downspout", "t_vitrified_downspout",
+                                   "t_gutter_drop", "t_vitrified_gutter_drop" } ) {
+        here.ter_set( pipe_pos, ter_str_id( id ) );
+        const fp3d_targeting::target target{ you.pos_abs(), here.get_abs( pipe_pos ),
+                                            fp3d_targeting::kind::terrain, id };
+        REQUIRE( fp3d_interaction::valid( target, you, here ) );
+        const auto entries = fp3d_interaction::context_entries( target, you, here );
+        const bool lower = id.find( "downspout" ) != std::string::npos;
+        CHECK( entries[0].visible );
+        CHECK( entries[0].enabled == lower );
+        CHECK( entries[0].action == ACTION_MOVE_UP );
+        REQUIRE( entries[0].command );
+        CHECK( std::string( entries[0].command ) == "FP3D_PIPE_UP" );
+        CHECK( entries[1].visible );
+        CHECK( entries[1].enabled == !lower );
+        CHECK( entries[1].action == ACTION_MOVE_DOWN );
+        REQUIRE( entries[1].command );
+        CHECK( std::string( entries[1].command ) == "FP3D_PIPE_DOWN" );
+        CHECK( entries[7].visible );
+        CHECK( entries[7].action == ACTION_NULL );
+        const auto request = fp3d_interaction::resolve(
+                                 lower ? "FP3D_PIPE_UP" : "FP3D_PIPE_DOWN", target, you, here );
+        REQUIRE( request );
+        CHECK( request->action == ( lower ? ACTION_MOVE_UP : ACTION_MOVE_DOWN ) );
+        CHECK_FALSE( request->position );
+        CHECK_FALSE( fp3d_interaction::resolve(
+                         lower ? "FP3D_PIPE_DOWN" : "FP3D_PIPE_UP", target, you, here ) );
+    }
+
+    // A stale, replaced, distant or wrong-type target cannot climb.
+    here.ter_set( pipe_pos, ter_str_id( "t_floor" ) );
+    const fp3d_targeting::target stale{ you.pos_abs(), here.get_abs( pipe_pos ),
+                                       fp3d_targeting::kind::terrain, "t_gutter_downspout" };
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_PIPE_UP", stale, you, here ) );
+    here.ter_set( pipe_pos, ter_str_id( "t_gutter_downspout" ) );
+    auto distant = stale;
+    distant.position += tripoint_rel_ms::north;
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_PIPE_UP", distant, you, here ) );
+    const fp3d_targeting::target wrong_kind{ you.pos_abs(), here.get_abs( pipe_pos ),
+                                            fp3d_targeting::kind::furniture, "f_null" };
+    CHECK_FALSE( fp3d_interaction::resolve( "FP3D_PIPE_UP", wrong_kind, you, here ) );
+    CHECK( you.pos_abs() == initial_pos );
+    CHECK( you.get_moves() == initial_moves );
+    CHECK( calendar::turn == initial_turn );
+    CHECK( rng_get_engine() == initial_rng );
+}
 #endif

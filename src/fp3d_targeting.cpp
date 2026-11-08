@@ -251,6 +251,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         const auto model_parts = [&] {
             // Avoid four neighbour lookups for every ordinary floor tile.
             const bool special = tile->kind == terrain::fence ||
+                                 fp3d_snapshot::is_chain_gate( tile->terrain ) ||
                                  tile->terrain == "t_radio_tower" ||
                                  tile->terrain == "t_column" ||
                                  tile->terrain == "t_pillar" ||
@@ -261,13 +262,17 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
             const auto adjacent = [&]( const tripoint_rel_ms &direction ) {
                 const auto *other = cell_at( tile->position + direction );
-                return other && other->kind == terrain::fence &&
-                       fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
+                return other && fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
             };
-            return fp3d_snapshot::terrain_model_parts( tile->terrain, {
+            const std::array<bool, 4> links{
                 adjacent( tripoint_rel_ms::north ), adjacent( tripoint_rel_ms::east ),
                 adjacent( tripoint_rel_ms::south ), adjacent( tripoint_rel_ms::west )
-            } );
+            };
+            if( fp3d_snapshot::is_chain_gate( tile->terrain ) ) {
+                return fp3d_snapshot::chain_gate_parts( tile->terrain,
+                           fp3d_snapshot::chain_gate_along_x( links ) );
+            }
+            return fp3d_snapshot::terrain_model_parts( tile->terrain, links );
         }();
         if( !model_parts.empty() ) {
             for( const auto &part : model_parts ) {
@@ -276,13 +281,14 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         } else if( tile->kind == terrain::fence ) {
             const auto linked = [&]( const tripoint_rel_ms &direction ) {
                 const auto *other = cell_at( tile->position + direction );
-                return other && other->kind == terrain::fence &&
-                       fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
+                return other && fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
             };
             for( const auto &part : fp3d_snapshot::fence_parts(
                 { linked( tripoint_rel_ms::north ), linked( tripoint_rel_ms::east ),
                   linked( tripoint_rel_ms::south ), linked( tripoint_rel_ms::west ) },
-                tile->terrain == "t_chainfence_posts" ) ) {
+                tile->terrain == "t_chainfence_posts" ||
+                tile->terrain == "t_chickenwire_fence_post" ||
+                tile->terrain == "t_fence_post" ) ) {
                 box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
             }
         } else if( tile->kind == terrain::wall || tile->kind == terrain::obstacle ) {

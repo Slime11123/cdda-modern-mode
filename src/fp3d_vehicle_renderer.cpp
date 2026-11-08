@@ -293,6 +293,10 @@ struct shell_profile {
     using key = std::pair<int, int>;
     std::map<key, shell_cell> cells;
     bool enclosed = false;
+    // CDDA 0.I's Electric Tandem Cabin Motorcycle inherits a three-wide
+    // Supercompact Tandem Car body, but its TWO motorbike wheels share the
+    // same centerline. Do not treat its rear wheel as a side car wheel.
+    bool centerline_motorcycle_cabin = false;
     std::array<float, 3> paint{ .40f, .43f, .47f };
 };
 
@@ -304,13 +308,26 @@ shell_profile build_shell( const vehicle_view &v )
     unsigned edge_count = 0;
     unsigned doors = 0;
     unsigned windows = 0;
+    unsigned narrow_wheels = 0;
+    unsigned total_wheels = 0;
+    int first_wheel_y = 0;
+    bool same_wheel_centerline = true;
     const part_view *paint_source = nullptr;
     int paint_priority = -1;
     for( const part_view &part : v.parts ) {
         if( part.kind == role::wheel ) {
-            // Wheel mounts are placed in the same X/Z map cell as a frame
-            // and fender. Record them so shell panels can leave wheel wells.
+            // Native centreline bicycle/motorbike wheels must not be
+            // reinterpreted as left/right wheels of a four-wheeled sedan.
             profile.cells[{part.mount_x,part.mount_y}].wheel = true;
+            if( total_wheels == 0 ) {
+                first_wheel_y = part.mount_y;
+            } else if( part.mount_y != first_wheel_y ) {
+                same_wheel_centerline = false;
+            }
+            ++total_wheels;
+            if( part.id.find( "motorbike" ) != std::string::npos ) {
+                ++narrow_wheels;
+            }
             continue;
         }
         const bool shell_part = part.kind == role::frame || part.kind == role::body ||
@@ -380,6 +397,13 @@ shell_profile build_shell( const vehicle_view &v )
     // cabin opening, and stays in the open-frame rendering path.
     profile.enclosed = frame_count >= 5 && edge_count >= 3 &&
                        ( roof_count >= 1 || ( doors >= 2 && windows >= 1 ) );
+    // Detect inherited special compact-bike assemblies from their
+    // ACTUAL current mounted parts. Works after swapping batteries, doors,
+    // model names or translations; stripped/modified wheel layouts fall
+    // back to the generic correct native-part rendering path.
+    profile.centerline_motorcycle_cabin =
+        profile.enclosed && roof_count >= 1 && frame_count >= 5 &&
+        total_wheels == 2 && narrow_wheels == 2 && same_wheel_centerline;
     return profile;
 }
 
@@ -721,18 +745,30 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
                 cuboid( x - .45f, skin_z, .07f, .065f, .34f, .84f, paint );
                 cuboid( x + .45f, skin_z, .07f, .065f, .34f, .84f, paint );
             } else if( halfboard ) {
-                // Native 'halfboard' is a LOW waist-high panel. Previously
-                // it was drawn as a 1.25m red opaque side wall.
-                cuboid( x, skin_z, 1.005f, .072f, .31f, halfboard_top, paint );
+                // V11: the tandem bike inherits a three-wide CAR body,
+                // but its rear halfboards were incorrectly drawn only
+                // to .59. This opened a large hole from the lower side
+                // body up to the .852 cabin-glass seal, exposing the
+                // rear centreline tire IN the passenger compartment.
+                // Extend only this native narrow-bike FAIRING to the
+                // .82 window waist. Never refill the upper side window.
+                const float top = profile.centerline_motorcycle_cabin ?
+                                  belt : halfboard_top;
+                cuboid( x, skin_z, 1.005f, .072f, .31f, top, paint );
                 cuboid( x, skin_z, 1.005f, .074f,
-                        halfboard_top - .045f, halfboard_top, edges );
+                        top - .045f, top, edges );
             } else if( body ) {
                 // Real closed lower side skin, below the window opening.
                 cuboid( x, skin_z, 1.005f, .072f, .31f, belt, paint );
             } else {
-                // Empty frame row between panels remains a low sill only.
-                // It must not become a full solid cabin wall.
-                cuboid( x, skin_z, 1.01f, .068f, .29f, .44f, edges );
+                // A centreline motorcycle's front native frame cells
+                // hold WIND­SHIELD and headlights, not halfboards; an
+                // extremely low .44 sill left the base of the A pillar
+                // unattached to the front fairing. The visual front
+                // fender should end near the bonnet, not at the floor.
+                const float top = profile.centerline_motorcycle_cabin &&
+                                  ix > shape.roof_x_max ? .88f : .44f;
+                cuboid( x, skin_z, 1.01f, .068f, .29f, top, edges );
             }
             if( cell != profile.cells.end() && cell->second.door ) {
                 const float door_top = belt;
@@ -744,6 +780,31 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
                       { x + .48f, door_top, skin_z + outside }, edges );
                 cuboid( x + .23f, skin_z + outside, .12f, .044f,
                         .715f, .75f, color3{ .19f, .20f, .22f } );
+            }
+        }
+    }
+
+    // V11 narrow two-wheel cabin: the two native wheels occupy the
+    // MIDDLE of the 3-tile shell (Y=0). Without an enclosed wheel bay
+    // they visibly protrude through the cabin floor when viewed from the
+    // side. A low painted fairing covers only their *upper* semicircles,
+    // preserving the actual round tire BELOW the car and its wheel mount.
+    // Unlike a full red cab panel it never rises into the side glazing.
+    if( profile.centerline_motorcycle_cabin ) {
+        for( const part_view &part : v.parts ) {
+            if( part.kind != role::wheel ) {
+                continue;
+            }
+            const float wx = float( part.mount_x - v.pivot_x );
+            const float wz = float( part.mount_y - v.pivot_y );
+            const float top = part.broken ? .62f : .78f;
+            cuboid( wx, wz, .94f, .88f, .34f, top, paint );
+            // Compact cover side seams; mark the wheel well without a
+            // solid fake body wall crossing the whole passenger bay.
+            for( float side : { -.445f, .445f } ) {
+                cabin_frame_beam( { wx - .43f, .36f, wz + side },
+                                  { wx + .43f, .36f, wz + side },
+                                  .052f, dark );
             }
         }
     }
@@ -793,8 +854,12 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
                             color3{ .12f, .12f, .12f } :
                             tail ? color3{ .63f, .12f, .10f } :
                             color3{ .89f, .85f, .69f };
+        // Two-wheel cabin has real paired headlights, but each should
+        // resemble a flush lamp, not a 0.32-wide beige cardboard crate.
+        const bool bike_cabin = profile.centerline_motorcycle_cabin;
         cuboid( ( tail ? rear - .060f : front + .060f ), z,
-                .09f, .32f, .62f, .78f, lens );
+                .075f, bike_cabin ? .23f : .32f,
+                bike_cabin ? .60f : .62f, bike_cabin ? .73f : .78f, lens );
     }
 
     // V7: Derive each intact roof surface from the *actual* (X,Z) tiles.
@@ -891,10 +956,18 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
             // This roof row must really have an intact roof mount;
             // a damaged/missing roof must never be repaired cosmetically.
             bool supported_roof = false;
+            int nearest_roof_distance = 1000000000;
             for( const auto &[mount, mount_cell] : profile.cells ) {
-                if( mount.first == ix && mount_cell.roof && !mount_cell.broken_roof ) {
-                    supported_roof = true;
-                    break;
+                if( mount.first != ix || !mount_cell.roof ) {
+                    continue;
+                }
+                // Native roof pieces can be in two lateral columns.
+                // Resolve each frame side to its nearest native roof
+                // so one intact panel cannot bridge the broken other side.
+                const int separation = std::abs( mount.second - native_z );
+                if( separation < nearest_roof_distance ) {
+                    nearest_roof_distance = separation;
+                    supported_roof = !mount_cell.broken_roof;
                 }
             }
             if( !frame_present || !supported_roof ) {
@@ -1215,7 +1288,9 @@ void one_part( const vehicle_view &v, const part_view &part, const shell_profile
             // perimeter panel near +/- .46 Z. Push the real tyre sideways
             // only far enough for its outer sidewall to remain visible
             // through the wheel arch, not hidden inside the red metal.
-            const float lateral = narrow ? .10f : profile.enclosed ? .50f : .22f;
+            const float lateral = narrow && profile.centerline_motorcycle_cabin ?
+                                  0.0f : narrow ? .10f :
+                                  profile.enclosed ? .50f : .22f;
             wheel( x, z + side * lateral, part.broken, narrow, art );
             break;
         }

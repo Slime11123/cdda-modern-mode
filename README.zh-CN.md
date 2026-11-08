@@ -112,3 +112,13 @@ Photon 增强设置（本地测试版）：F5/F6 → 光影包 → MC 视觉增�
 Raymarch v3 本地开发版：Photon 视觉桥新增独立材质遮罩的雨天湿路/水面 SSR 和阴影贴图遮挡体积光，F5/F6 光影菜单分别开关。详见 docs/FP3D_DEPTH_RAYMARCH_RENDER_PIPELINE.md。非完整原版 Iris/Photon 多 Pass。
 
 Photon 室内外光照修复（本地 v4）：进入建筑不会整屏关闭太阳阴影、体积光和 SSR，也不会让窗外环境光突然变色。详见 docs/FP3D_INDOOR_OUTDOOR_DAYLIGHT_FIX.md。
+
+本地 Photon v6：白天室内增加稳定环境补光，雨天路面反射补齐地砖缝隙并采用连续湿膜与距离渐隐；原生路灯、邮箱、车辆阴影继续保留。详见 docs/FP3D_DAYLIGHT_WET_REFLECTION_V6.md。
+
+本地光影测试 v6b：增强白天遮阴房间的柔和补光，修复雨天路面反射一格一格断裂，保留原生路灯、邮箱及车辆的阴影。技术说明：docs/FP3D_DAYLIGHT_WET_ROAD_V6B_QA.md。
+
+**本地 v7b 光照修复：** 地面血迹、掉落物、怪物精灵与草地改为接受实际世界光照，夜间不再始终保持原贴图亮度。用户手持物、交互轮廓与自发光火焰保留特殊绘制。详见 [世界地面对象光照](docs/FP3D_WORLD_GROUND_LIGHTING_V7.md)。
+
+**本地 Photon v10b（双级太阳阴影）：** Ultra 画质新增高精度近景 28 米 + 远景 96 米的真实深度投影，级联边界平滑混合，并将光影纹素网格固定到世界坐标以降低移动时的阴影漂移。保留 v9f 道路灰块修复；不支持远级贴图时安全回退原有单图。详见 [双级太阳阴影 v10b](docs/FP3D_DUAL_CASCADE_SHADOW_V10B.md)。
+
+**Photon Ultra v11c：** 修复连续墙体太阳阴影漏光接缝和角度相关的自阴影偏移，减轻重复三角形暗斑，同时保留车辆和路灯真实阴影。详见 [v11c 墙面阴影修复](docs/FP3D_PHOTON_ULTRA_WALL_SHADOW_V11C.md)。

@@ -37,6 +37,22 @@ namespace
 std::optional<request> arrived_2d_action;
 std::optional<action_id> pending_direction_action;
 
+enum class pipe_end { none, bottom, roof };
+
+// Downspouts are native CLIMBABLE terrain, not stairs.  Keep the E-wheel
+// separate so its requests still enter the original climb safety checks.
+pipe_end downspout_end( const map &here, const tripoint_bub_ms &p )
+{
+    const std::string id = here.ter( p ).id().str();
+    if( id == "t_gutter_downspout" || id == "t_vitrified_downspout" ) {
+        return pipe_end::bottom;
+    }
+    if( id == "t_gutter_drop" || id == "t_vitrified_gutter_drop" ) {
+        return pipe_end::roof;
+    }
+    return pipe_end::none;
+}
+
 class approach_activity : public activity_actor
 {
     public:
@@ -363,6 +379,19 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
         choices[7] = { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true, true };
         return choices;
     }
+    const pipe_end pipe = stairs_target ? downspout_end( here, p ) : pipe_end::none;
+    if( pipe != pipe_end::none ) {
+        std::array<fp3d_quick_menu::entry, 8> choices{};
+        for( auto &choice : choices ) {
+            choice.visible = false;
+        }
+        choices[0] = { "爬上", "尝试沿水管向上攀爬；由原版检查落脚点、体力、攀爬能力与风险。",
+                       ACTION_MOVE_UP, "FP3D_PIPE_UP", pipe == pipe_end::bottom, true };
+        choices[1] = { "爬下", "尝试从屋顶沿排水管向下攀爬；由原版检查落差及安全性。",
+                       ACTION_MOVE_DOWN, "FP3D_PIPE_DOWN", pipe == pipe_end::roof, true };
+        choices[7] = { "取消", "返回3D视角，不执行动作。", ACTION_NULL, nullptr, true, true };
+        return choices;
+    }
     const bool surface = object && target.type != fp3d_targeting::kind::item;
     const bool opens = surface && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
     const bool closes = surface && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
@@ -623,7 +652,8 @@ std::optional<request> resolve( const std::string &command,
     if( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) {
         const auto standing = you.pos_bub( here );
         if( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, standing ) ||
-            here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, standing ) ) {
+            here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, standing ) ||
+            downspout_end( here, standing ) != pipe_end::none ) {
             const auto choices = candidate ? context_entries( *candidate, you, here ) :
                                  std::array<fp3d_quick_menu::entry, 8>{};
             const bool actionable = std::any_of( choices.begin(), choices.end(), []( const auto &choice ) {
@@ -708,6 +738,19 @@ std::optional<request> resolve( const std::string &command,
         return std::nullopt;
     }
     const auto p = here.get_bub( candidate->position );
+    if( command == "FP3D_PIPE_UP" || command == "FP3D_PIPE_DOWN" ) {
+        // The pipe must still be the exact same adjacent terrain after the menu.
+        // Do not emulate a z-level teleport: native vertical actions enforce all
+        // movement, support, encumbrance, slipping and ledge-safety rules.
+        const pipe_end pipe = candidate->type == fp3d_targeting::kind::terrain ?
+                              downspout_end( here, p ) : pipe_end::none;
+        const bool up = command == "FP3D_PIPE_UP";
+        if( fp3d_input::vehicle_controls() ||
+            pipe != ( up ? pipe_end::bottom : pipe_end::roof ) ) {
+            return std::nullopt;
+        }
+        return request{ up ? ACTION_MOVE_UP : ACTION_MOVE_DOWN, std::nullopt, false };
+    }
     if( command == "FP3D_STAIRS_UP" || command == "FP3D_STAIRS_DOWN" ) {
         const bool up = command == "FP3D_STAIRS_UP";
         if( p != you.pos_bub( here ) || fp3d_input::vehicle_controls() ||
@@ -763,12 +806,14 @@ std::optional<request> resolve( const std::string &command,
                 action = ACTION_EXAMINE;
             }
         }
-        const bool stairs = candidate->type == fp3d_targeting::kind::terrain && !can_chat &&
+        const bool terrain_target = candidate->type == fp3d_targeting::kind::terrain && !can_chat;
+        const bool stairs = terrain_target &&
                             ( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ||
-                                           here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) );
-        if( command == "FP3D_INTERACT_LONG" || stairs ) {
+                              here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) );
+        const bool pipe = terrain_target && downspout_end( here, p ) != pipe_end::none;
+        if( command == "FP3D_INTERACT_LONG" || stairs || pipe ) {
             const auto choice = fp3d_quick_menu::show( context_entries( *candidate, you, here ),
-                                stairs ? "楼梯" : "目标操作" );
+                                stairs ? "楼梯" : pipe ? "水管攀爬" : "目标操作" );
             if( !choice || !choice->enabled || !valid( *candidate, you, here ) ||
                 !fp3d_compositor::turn_based() ) {
                 return std::nullopt;
@@ -783,6 +828,7 @@ std::optional<request> resolve( const std::string &command,
             }
             if( choice->command ) {
                 if( choice_command == "FP3D_STAIRS_UP" || choice_command == "FP3D_STAIRS_DOWN" ||
+                    choice_command == "FP3D_PIPE_UP" || choice_command == "FP3D_PIPE_DOWN" ||
                     choice_command == "FP3D_ATTACK" ) {
                     return resolve( choice_command, candidate, you, here );
                 }

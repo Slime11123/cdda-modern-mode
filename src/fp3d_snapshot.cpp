@@ -207,6 +207,9 @@ void capture_landscape( scene_snapshot &scene )
             const auto &definition = terrain.obj();
             const auto &id = definition.get_type_id().str();
             const bool wooded = definition.is_wooded();
+            // Keep legitimate CDDA terrain IDs: this game version has no
+            // generic t_road terrain/atlas icon. Road overmaps are represented
+            // by t_pavement and must be tiled, NOT stretched across 12m.
             const std::string ground = definition.is_water() || definition.is_river() || definition.is_lake() ?
                                        "t_water_dp" : id.find( "road" ) != std::string::npos ||
                                        id.find( "highway" ) != std::string::npos || id.find( "bridge" ) != std::string::npos ?
@@ -297,7 +300,9 @@ terrain_kind classify( const std::string &id )
         return terrain_kind::downspout;
     }
     if( id.compare( 0, 12, "t_chainfence" ) == 0 ||
+        id.compare( 0, 19, "t_chickenwire_fence" ) == 0 ||
         id == "t_fence" || id == "t_privacy_fence" ||
+        id == "t_fence_post" || id == "t_screened_porch_wall" ||
         id == "t_concrete_railing" || id == "t_railing" ||
         id == "t_metal_railing" || id == "t_guardrail" ||
         id == "t_guardrail_bg_dp" || id == "t_guardrail_hw_air" ) {
@@ -483,8 +488,73 @@ bool fence_connects( const std::string &a, const std::string &b )
     const auto starts = []( const std::string & id, const std::string & prefix ) {
         return id.compare( 0, prefix.size(), prefix ) == 0;
     };
-    return ( starts( a, "t_chainfence" ) && starts( b, "t_chainfence" ) ) ||
+    const auto chain = [&]( const std::string &id ) {
+        return starts( id, "t_chainfence" ) ||
+               starts( id, "t_chickenwire_fence" ) || is_chain_gate( id );
+    };
+    return ( chain( a ) && chain( b ) ) ||
            ( starts( a, "t_guardrail" ) && starts( b, "t_guardrail" ) );
+}
+
+bool is_chain_gate( const std::string &id )
+{
+    return id == "t_chaingate_c" || id == "t_chaingate_o" || id == "t_chaingate_l" ||
+           id == "t_chickenwire_gate_c" || id == "t_chickenwire_gate_o";
+}
+
+bool chain_gate_along_x( const std::array<bool, 4> &neighbours )
+{
+    // Native neighbour order: north, east, south, west.
+    return int( neighbours[1] ) + int( neighbours[3] ) >=
+           int( neighbours[0] ) + int( neighbours[2] );
+}
+
+std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x )
+{
+    if( !is_chain_gate( id ) ) {
+        return {};
+    }
+    using part = fp3d_furniture::part;
+    constexpr float top = 2.02f;
+    const bool opened = id == "t_chaingate_o" || id == "t_chickenwire_gate_o";
+    // The two boundary posts remain fixed while the door leaf pivots around
+    // its left hinge. No full-cell slab or invisible panel for open doors.
+    std::vector<part> frame{
+        { -.46f, 0, .075f, .075f, 0, top },
+        { .46f, 0, .075f, .075f, 0, top },
+        { -.46f, 0, .13f, .13f, top - .08f, top + .04f },
+        { .46f, 0, .13f, .13f, top - .08f, top + .04f }
+    };
+    // The real fixed upper crossmember stays in place while the leaf opens.
+    frame.push_back( { 0, 0, .93f, .055f, 1.97f, 2.03f } );
+    if( opened ) {
+        // Follow the V12 visible hinged leaf: the open wire panel swings
+        // about x=-.425 and extends towards negative z, not a ghost
+        // crosswise wall remaining in the closed position.
+        frame.push_back( { -.425f, -.03f, .057f, .057f, .18f, 1.87f } );
+        frame.push_back( { -.425f, -.74f, .057f, .057f, .18f, 1.87f } );
+        for( const float y : { .20f, .985f, 1.85f } ) {
+            frame.push_back( { -.425f, -.385f, .056f, .77f, y - .03f, y + .03f } );
+        }
+        frame.push_back( { -.425f, -.74f, .11f, .085f, .91f, 1.08f } );
+    } else {
+        // Rectangular hollow leaf, separate from the two exterior posts.
+        frame.push_back( { -.36f, 0, .055f, .055f, .16f, 1.89f } );
+        frame.push_back( { .36f, 0, .055f, .055f, .16f, 1.89f } );
+        for( const float y : { .16f, .98f, 1.87f } ) {
+            frame.push_back( { 0, 0, .76f, .052f, y - .026f, y + .026f } );
+        }
+        frame.push_back( { .365f, .035f, .095f, .085f, .91f, 1.07f } ); // latch
+        if( id == "t_chaingate_l" ) {
+            frame.push_back( { .365f, .095f, .095f, .07f, .84f, .94f } ); // padlock
+        }
+    }
+    if( !along_x ) {
+        for( part &p : frame ) {
+            p = fp3d_furniture::rotated( p, 1 );
+        }
+    }
+    return frame;
 }
 
 std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
@@ -656,7 +726,10 @@ void prepare_view( avatar &you, map &here )
     if( here.supports_zlevels() ) {
         // build_map_cache prepares shared 3D LOS and this layer's native lightmap.
         // update_visibility_cache is deliberately called only once, at player z.
-        for( int z = std::max( -OVERMAP_DEPTH, p.z() - render_below );
+        // Include every native-visible storey above the player, and retain
+        // the surface even from z=4 and higher. Avoid building ten empty
+        // subterranean cache levels when the player is outdoors.
+        for( int z = std::max( -OVERMAP_DEPTH, p.z() - below_for_storey( p.z() ) );
              z <= std::min( OVERMAP_HEIGHT, p.z() + render_above ); ++z ) {
             if( z != p.z() ) {
                 here.build_map_cache( z );
@@ -726,10 +799,18 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
     const visibility_variables &variables = here.get_visibility_variables_cache();
     const bool fresh = variables.variables_set && !variables.visibility_cache_dirty &&
                        variables.last_pos == player;
-    result.min_z = here.supports_zlevels() ? std::max( -OVERMAP_DEPTH,
-                   player.z() - std::clamp( below, 0, std::min( render_below, fov_3d_z_range ) ) ) : player.z();
-    result.max_z = here.supports_zlevels() ? std::min( OVERMAP_HEIGHT,
-                   player.z() + std::clamp( above, 0, std::min( render_above, fov_3d_z_range ) ) ) : player.z();
+    // The camera sees z-levels in world space, independent of 2D mode's
+    // four-up/two-down legacy snapshot. Extend to the native 3D LOS horizon,
+    // preserving the street below tall structures. Optional callers can
+    // still narrow either direction for isolated tests/performance probes.
+    const int below_budget = std::clamp( below, 0,
+                                        std::min( below_for_storey( player.z() ), fov_3d_z_range ) );
+    const int above_budget = std::clamp( above, 0,
+                                        std::min( render_above, fov_3d_z_range ) );
+    result.min_z = here.supports_zlevels() ?
+                   std::max( -OVERMAP_DEPTH, player.z() - below_budget ) : player.z();
+    result.max_z = here.supports_zlevels() ?
+                   std::min( OVERMAP_HEIGHT, player.z() + above_budget ) : player.z();
     // Query native perception once per cell, including a one-cell halo for
     // exposed-surface neighbours. The raw 3D seen/camera cache can reject
     // obstructed cells cheaply; it is not the 2D viewport visibility mask.
@@ -940,6 +1021,52 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                           !here.is_outside( p ) &&
                                           here.access_cache( z ).seen_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID + .1f &&
                                           here.sees( player, p, you.unimpaired_range() );
+                // An outdoor radio tower is open steelwork, metal walkway
+                // and railings across several z-levels. Native 3D endpoint
+                // visibility often drops the upper terrain while the adjacent
+                // exterior air is clearly visible from underneath. Keep the
+                // REAL material/model for these narrowly identified exterior
+                // surfaces, never upper floor contents or other indoor IDs.
+                const bool tower_exterior_surface = fresh && !visible && !blind &&
+                    p.z() > player.z() && !you.cant_see( p ) &&
+                    square_dist( player, p ) <= you.unimpaired_range() &&
+                    // The underside of a first-level metal deck is visible
+                    // from the ground even when that ground is a paved tile,
+                    // not an open-air tile. Native-visible lower terrain is
+                    // enough for these exterior-only structural components.
+                    ( beside_visible_air ||
+                      ( perception[index( p + tripoint_rel_ms::below )] & visible_bit ) ) &&
+                    ( [&] {
+                        const std::string id = here.ter( p ).id().str();
+                        return id == "t_radio_tower" || id == "t_railing" ||
+                               id == "t_metal_floor_no_roof" ||
+                               id == "t_ladder_up_down" ||
+                               id == "t_ladder_up" || id == "t_ladder_down";
+                    } )();
+                // Native 3D shadowcasting can see the air immediately
+                // beneath an overhead platform while dropping the solid
+                // platform endpoint. Show only that neutral underside:
+                // never disclose the upstairs terrain ID, furniture,
+                // contents or layout when the upper cell itself is unseen.
+                // A completely enclosed upper room has no visible air below,
+                // so this cannot turn its hidden floor into a visible room.
+                const bool upper_floor_boundary = fresh && !visible && !blind &&
+                    p.z() > player.z() &&
+                    ( perception[index( p + tripoint_rel_ms::below )] & air_bit ) &&
+                    !you.cant_see( p ) &&
+                    square_dist( player, p ) <= you.unimpaired_range() &&
+                    here.has_floor( p );
+                if( upper_floor_boundary && !tower_exterior_surface ) {
+                    tile.terrain = "t_floor";
+                    tile.kind = terrain_kind::floor;
+                    tile.known = knowledge::visible;
+                    tile.exterior_only = true;
+                    tile.floor_present = true;
+                    tile.ceiling_present = false;
+                    ++result.visible;
+                    result.cells.push_back( std::move( tile ) );
+                    continue;
+                }
                 // The first solid boundary below visible shaft air is visible
                 // geometry even when cross-level shadowcasting drops its endpoint.
                 // This fallback never copies the room's furniture or contents.
@@ -948,6 +1075,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                            !you.cant_see( p ) && square_dist( player, p ) <= you.unimpaired_range() &&
                                            here.has_floor( p );
                 tile.exterior_only = fresh && !visible && ( room_surface || lower_surface ||
+                                     tower_exterior_surface ||
                                      exposed_surface( you, here, p, beside_visible_air, blind ) );
                 if( visible || tile.exterior_only ) {
                     tile.terrain = here.ter( p ).id().str();
@@ -995,9 +1123,26 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 if( ( visible || tile.exterior_only ) && !blind && here.supports_zlevels() ) {
                     // Copy only the visible room's enclosing boundary. Never
                     // copy the unseen upstairs terrain ID, contents or layout.
-                    tile.ceiling_present = here.inbounds( overhead ) &&
-                                           ( here.has_floor( overhead ) ||
-                                             ( !here.is_outside( p ) && !visible_air_above ) );
+                    // Roof/ceiling proxies must be backed by an actual floor,
+                    // or by a genuinely closed overhead boundary. Standing
+                    // below an open radio-tower platform used to manufacture
+                    // extra wooden panels whenever upper open air happened to
+                    // be absent from the 3D LOS cache.
+                    const bool actual_floor_above = here.inbounds( overhead ) &&
+                                                   here.has_floor( overhead );
+                    tile.ceiling_present = actual_floor_above ||
+                        ( here.inbounds( overhead ) && !here.is_outside( p ) &&
+                          !visible_air_above && !here.is_open_air( overhead ) );
+                    if( actual_floor_above ) {
+                        // Materialize a real, exposed metal deck underside even
+                        // if its upper cell was rejected by endpoint LOS.
+                        // No nonstructural upper terrain/contents are copied.
+                        const std::string overhead_id = here.ter( overhead ).id().str();
+                        if( overhead_id == "t_metal_floor_no_roof" ||
+                            overhead_id == "t_floor_metal_gangway" ) {
+                            tile.ceiling_surface = overhead_id;
+                        }
+                    }
                 }
                 if( tile.known == knowledge::remembered && !visible_air_above &&
                     definition.has_flag( ter_furn_flag::TFLAG_INDOORS ) ) {
@@ -1021,8 +1166,10 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                 window_pane::covered : definition.movecost > 0 ?
                                 window_pane::opening : window_pane::glazed;
                 }
-                if( tile.exterior_only && ( ( tile.open_air && !tile.ceiling_present ) ||
-                                            tile.kind == terrain_kind::obstacle || plant_height( tile.terrain ) > 0 ) ) {
+                if( tile.exterior_only &&
+                    ( ( tile.open_air && !tile.ceiling_present && tile.terrain != "t_radio_tower" ) ||
+                      ( tile.kind == terrain_kind::obstacle && tile.terrain != "t_radio_tower" ) ||
+                      plant_height( tile.terrain ) > 0 ) ) {
                     continue;
                 }
                 tile.vegetation_height = plant_height( tile.terrain );

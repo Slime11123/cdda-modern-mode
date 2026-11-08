@@ -40,6 +40,21 @@ const tile_type *resolve_sprite( const tileset &set, const fp3d_snapshot::sprite
 const tile_type *resolve_overlay( const tileset &set, bool male, const std::string &overlay,
                                   const std::string &variant );
 std::string sprite_key( const fp3d_snapshot::sprite &image );
+// Treetop terrain is a separate z-level from its parent tree. Map its
+// visual-only crown to a native tree sprite of the selected tileset.
+inline std::string treetop_plant_key( const std::string &terrain )
+{
+    if( terrain == "t_treetop_dead" ) {
+        return "$plant:t_tree_dead";
+    }
+    if( terrain == "t_treetop_evergreen" ) {
+        return "$plant:t_tree_pine";
+    }
+    if( terrain == "t_treetop_giant_fern" ) {
+        return "$plant:t_mega_fern";
+    }
+    return "$plant:t_tree";
+}
 // Native vpart_id plus cosmetic variant; independent of world orientation.
 std::string vehicle_key( const fp3d_vehicle::part_view &part );
 // Dominant paint tint sampled from the currently selected tileset's

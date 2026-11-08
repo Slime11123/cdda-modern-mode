@@ -32,8 +32,17 @@ constexpr int radius = MAX_VIEW_DISTANCE;
 constexpr int landscape_radius = 240;
 constexpr int landscape_patch_size = 12;
 constexpr int city_radius = 960;
-constexpr int render_above = 4;
-constexpr int render_below = 2;
+// Follow the complete native 3D sight range (10 levels), not an arbitrary
+// four-up/two-down slice. CDDA's loaded map is capped by OVERMAP_HEIGHT.
+// On an elevated floor we must still retain z=0, plus nearby basements.
+// Limit unneeded underground levels when outdoors to keep capture cost low.
+constexpr int render_above = 10;
+constexpr int render_below = 10;
+constexpr int below_for_storey( int player_z )
+{
+    return player_z >= 0 ?
+           ( player_z + 2 < render_below ? player_z + 2 : render_below ) : 2;
+}
 
 enum class knowledge { visible, remembered };
 enum class window_pane { glazed, opening, covered };
@@ -47,6 +56,12 @@ std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighb
         bool posts_only = false );
 // True when adjacent segments belong to one continuous real-world railing.
 bool fence_connects( const std::string &left, const std::string &right );
+// Chain-link fence gates use a dedicated open steel-frame model, including the
+// locked, closed and swung-open native states. Orientation is derived only
+// from already-visible neighbours, not hidden map data.
+bool is_chain_gate( const std::string &id );
+bool chain_gate_along_x( const std::array<bool, 4> &neighbours );
+std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x );
 // Custom solid models shared by scene drawing and pointer targeting. Empty
 // for terrain that retains the existing world geometry path.
 std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
@@ -75,6 +90,10 @@ struct cell {
     bool exterior_only = false;
     // A visible room's immediate overhead boundary, without upstairs identity.
     bool ceiling_present = false;
+    // A real exposed overhead metal walkway may not have its own visible
+    // endpoint in native 3D LOS. Texture only its underside from this
+    // presentation-only boundary, never copy upstairs contents.
+    std::string ceiling_surface;
     bool floor_present = true;
     bool open_air = false;
     bool goes_up = false;

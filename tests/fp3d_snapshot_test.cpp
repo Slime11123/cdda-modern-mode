@@ -3,6 +3,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -83,6 +84,49 @@ TEST_CASE( "fp3d_radio_tower_has_open_steel_lattice_picking_geometry", "[fp3d][g
         CHECK_FALSE( part.width > .80f && part.depth > .80f );
     }
     CHECK( fp3d_snapshot::terrain_model_parts( "t_dirt" ).empty() );
+}
+
+TEST_CASE( "fp3d_chainlink_gates_have_hollow_open_and_closed_models", "[fp3d][geometry]" )
+{
+    using namespace fp3d_snapshot;
+    CHECK( is_chain_gate( "t_chaingate_c" ) );
+    CHECK( is_chain_gate( "t_chaingate_l" ) );
+    CHECK( is_chain_gate( "t_chaingate_o" ) );
+    CHECK( is_chain_gate( "t_chickenwire_gate_c" ) );
+    CHECK( is_chain_gate( "t_chickenwire_gate_o" ) );
+    CHECK_FALSE( is_chain_gate( "t_door_c" ) );
+    CHECK( fence_connects( "t_chainfence", "t_chaingate_c" ) );
+    CHECK( fence_connects( "t_chaingate_o", "t_chainfence_posts" ) );
+    CHECK( fence_connects( "t_chickenwire_fence", "t_chickenwire_gate_c" ) );
+    CHECK( fence_connects( "t_chickenwire_fence", "t_chaingate_o" ) );
+    CHECK_FALSE( fence_connects( "t_chainfence", "t_wooden_fence" ) );
+    CHECK( chain_gate_along_x( { false, true, false, true } ) );
+    CHECK_FALSE( chain_gate_along_x( { true, false, true, false } ) );
+    const auto closed = chain_gate_parts( "t_chaingate_c", true );
+    const auto locked = chain_gate_parts( "t_chaingate_l", true );
+    const auto opened = chain_gate_parts( "t_chaingate_o", true );
+    REQUIRE( closed.size() == 10 );
+    CHECK( locked.size() == closed.size() + 1 );
+    REQUIRE( opened.size() == 9 );
+    CHECK( chain_gate_parts( "t_door_c", true ).empty() );
+    CHECK( chain_gate_parts( "t_chickenwire_gate_c", true ).size() == closed.size() );
+    CHECK( chain_gate_parts( "t_chickenwire_gate_o", true ).size() == opened.size() );
+    CHECK( terrain_shape( "t_chainfence" ) == terrain_kind::fence );
+    CHECK( terrain_shape( "t_chickenwire_fence" ) == terrain_kind::fence );
+    CHECK( terrain_shape( "t_chickenwire_fence_post" ) == terrain_kind::fence );
+    CHECK( terrain_shape( "t_fence_post" ) == terrain_kind::fence );
+    CHECK( terrain_shape( "t_screened_porch_wall" ) == terrain_kind::fence );
+    CHECK( fence_parts( { true, true, true, true }, true ).size() == 1 );
+    CHECK( fence_parts( { false, true, false, true }, false ).size() == 3 );
+    for( const auto &part : closed ) {
+        CHECK( part.width > 0.f );
+        CHECK( part.depth > 0.f );
+        CHECK_FALSE( part.width > .8f && part.depth > .8f );
+    }
+    // The open leaf folds toward the hinge, leaving the center passage free.
+    CHECK( opened[4].x < -.3f );
+    CHECK( opened[5].x < -.3f );
+    CHECK( std::abs( chain_gate_parts( "t_chaingate_o", false )[4].z + .43f ) < .01f );
 }
 
 TEST_CASE( "fp3d_snapshot_keeps_hidden_door_memory", "[fp3d][vision]" )
@@ -704,6 +748,55 @@ TEST_CASE( "fp3d_dark_contents_use_los_without_changing_native_perception", "[fp
     CHECK( ( hidden == nullptr || !hidden->furniture.has_value() ) );
 }
 
+TEST_CASE( "fp3d_radio_tower_upper_walkway_is_metal_from_ground",
+           "[fp3d][multilevel][radio_tower]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    REQUIRE( here.supports_zlevels() );
+    const auto ground = you.pos_bub( here );
+    const auto metal = ground + tripoint_rel_ms( 4, 0, 1 );
+    const auto frame = ground + tripoint_rel_ms( 6, 0, 1 );
+    const auto rail = ground + tripoint_rel_ms( 6, 1, 1 );
+    // A connected 3x3 exterior deck: the middle metal panel has no
+    // adjacent open-air cells, but the paved surface directly beneath it
+    // is visible from the ground. It must not turn into neutral t_floor.
+    for( int dx = 3; dx <= 5; ++dx ) {
+        for( int dy = -1; dy <= 1; ++dy ) {
+            REQUIRE( here.ter_set( ground + tripoint_rel_ms( dx, dy, 1 ),
+                                   ter_str_id( "t_metal_floor_no_roof" ) ) );
+        }
+    }
+    // Native military radio towers use an open steel frame surrounded by
+    // elevated metal flooring, not an ordinary wooden upper-storey ceiling.
+    REQUIRE( here.ter_set( frame, ter_str_id( "t_radio_tower" ) ) );
+    REQUIRE( here.ter_set( rail, ter_str_id( "t_railing" ) ) );
+    here.invalidate_visibility_cache();
+    fp3d_snapshot::prepare_view( you, here );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    CHECK( scene.max_z >= 1 );
+    const auto *walkway = find_cell( scene, here.get_abs( metal ) );
+    REQUIRE( walkway );
+    CHECK( walkway->terrain == "t_metal_floor_no_roof" );
+    CHECK( walkway->floor_present );
+    // Open tower decks have no invented ceiling above an actual sky cell.
+    CHECK_FALSE( walkway->ceiling_present );
+    // From ground level, a missing upper LOS endpoint must not replace the
+    // real metal deck underside with the generic wooden t_floor texture.
+    const auto *under = find_cell( scene,
+                                  here.get_abs( ground + tripoint_rel_ms( 4, 0, 0 ) ) );
+    REQUIRE( under );
+    CHECK( under->ceiling_present );
+    CHECK( under->ceiling_surface == "t_metal_floor_no_roof" );
+    const auto *steel = find_cell( scene, here.get_abs( frame ) );
+    REQUIRE( steel );
+    CHECK( steel->terrain == "t_radio_tower" );
+    const auto *guardrail = find_cell( scene, here.get_abs( rail ) );
+    REQUIRE( guardrail );
+    CHECK( guardrail->kind == fp3d_snapshot::terrain_kind::fence );
+}
+
 TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilevel]" )
 {
     prepare_scene();
@@ -739,6 +832,49 @@ TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilev
     }
 }
 
+TEST_CASE( "fp3d_multistorey_visibility_reaches_upper_floors_and_ground",
+           "[fp3d][multilevel]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    REQUIRE( here.supports_zlevels() );
+    const auto ground = you.pos_bub( here );
+    // A vertical facade taller than the old four-storey snapshot budget.
+    for( int z = 0; z <= 8; ++z ) {
+        REQUIRE( here.ter_set( ground + tripoint_rel_ms( 5, 0, z ),
+                               ter_str_id( "t_wall" ) ) );
+    }
+    here.invalidate_visibility_cache();
+    fp3d_snapshot::prepare_view( you, here );
+    const auto from_ground = fp3d_snapshot::capture( you, here );
+    CHECK( from_ground.min_z <= 0 );
+    CHECK( from_ground.max_z >= 8 );
+    const auto *high_facade = find_cell( from_ground,
+                                        here.get_abs( ground + tripoint_rel_ms( 5, 0, 8 ) ) );
+    REQUIRE( high_facade );
+    CHECK( high_facade->kind == fp3d_snapshot::terrain_kind::wall );
+
+    // At fourth floor, z=0 must remain captured rather than turning into
+    // empty sky. The native LOS/depth test still controls which cells draw.
+    const auto upper = ground + tripoint_rel_ms( 0, 0, 4 );
+    REQUIRE( here.ter_set( upper, ter_str_id( "t_floor" ) ) );
+    for( int z = 1; z <= 4; ++z ) {
+        REQUIRE( here.ter_set( ground + tripoint_rel_ms( 3, 0, z ),
+                               ter_str_id( "t_open_air" ) ) );
+    }
+    const auto pavement = ground + tripoint_rel_ms( 3, 0, 0 );
+    REQUIRE( here.ter_set( pavement, ter_str_id( "t_pavement" ) ) );
+    you.setpos( here, upper );
+    here.invalidate_visibility_cache();
+    fp3d_snapshot::prepare_view( you, here );
+    const auto from_fourth = fp3d_snapshot::capture( you, here );
+    CHECK( from_fourth.origin.z() == upper.z() );
+    CHECK( from_fourth.min_z <= ground.z() );
+    CHECK( from_fourth.max_z >= upper.z() );
+    CHECK( find_cell( from_fourth, here.get_abs( pavement ) ) != nullptr );
+}
+
 TEST_CASE( "fp3d_multilevel_native_visibility_and_memory", "[fp3d][multilevel]" )
 {
     prepare_scene();
@@ -760,7 +896,7 @@ TEST_CASE( "fp3d_multilevel_native_visibility_and_memory", "[fp3d][multilevel]" 
     const auto rng = rng_get_engine();
     auto scene = fp3d_snapshot::capture( you, here );
     CHECK( scene.min_z == -2 );
-    CHECK( scene.max_z == 4 );
+    CHECK( scene.max_z == fp3d_snapshot::render_above );
     for( int z = 0; z <= 2; ++z ) {
         const auto p = player + tripoint_rel_ms( 4, 0, z );
         INFO( "facade z=" << z << " seen=" << here.access_cache( z ).seen_cache[p.x()][p.y()]
@@ -851,7 +987,7 @@ TEST_CASE( "fp3d_multilevel_origin_and_basement", "[fp3d][multilevel]" )
     auto scene = fp3d_snapshot::capture( you, here );
     CHECK( scene.origin.z() == -1 );
     CHECK( scene.min_z == -3 );
-    CHECK( scene.max_z == 3 );
+    CHECK( scene.max_z == 9 );
     const auto *stairs = find_cell( scene, here.get_abs( basement + tripoint_rel_ms::east ) );
     REQUIRE( stairs );
     CHECK( stairs->goes_up );
@@ -1001,7 +1137,7 @@ TEST_CASE( "fp3d_multilevel_capture_budget", "[fp3d][multilevel]" )
     }
     const auto bounded = fp3d_snapshot::capture( you, here, 100, 100 );
     CHECK( bounded.max_z == fp3d_snapshot::render_above );
-    CHECK( bounded.min_z == -fp3d_snapshot::render_below );
+    CHECK( bounded.min_z == -fp3d_snapshot::below_for_storey( player.z() ) );
 }
 
 TEST_CASE( "fp3d_native_stair_actions_keep_presentation_in_sync", "[fp3d][multilevel]" )

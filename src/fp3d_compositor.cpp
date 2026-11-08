@@ -1094,8 +1094,96 @@ void compose()
         glRotatef( yaw + ( SDL_GetTicks() - started ) * .025f, 0, 1, 0 );
         // World and postprocessing must share the exact same smoothed
         // camera pose (including the rider follower while driving).
-        const fp3d_camera::offset frame_camera = latest_scene ?
+        fp3d_camera::offset frame_camera = latest_scene ?
                 visual_camera( SDL_GetTicks() ) : fp3d_camera::offset{};
+        // QA-only camera override: inspect the actual nearby vehicle's
+        // sun shadow in the SAME loaded world without moving the player,
+        // world origin, game time or saving a single byte of gameplay data.
+        if( latest_scene && env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+            env_enabled( "CDDA_FP3D_QA_CAMERA_NEAR_VEHICLE" ) &&
+            !latest_scene->vehicles.empty() ) {
+            // Select one of the already-visible native cars without
+            // changing the actual player/camera outside isolated QA mode.
+            size_t car_index = 0;
+            if( const char *index = std::getenv( "CDDA_FP3D_QA_VEHICLE_INDEX" ) ) {
+                const long requested = std::strtol( index, nullptr, 10 );
+                if( requested >= 0 &&
+                    static_cast<size_t>( requested ) < latest_scene->vehicles.size() ) {
+                    car_index = static_cast<size_t>( requested );
+                }
+            }
+            const auto &car = latest_scene->vehicles[car_index];
+            const auto rel = car.origin - latest_scene->origin;
+            frame_camera.x = static_cast<float>( rel.x() );
+            frame_camera.y = static_cast<float>( rel.y() ) + 7.0f;
+            frame_camera.height = fp3d_camera::eye_height;
+            yaw = 0.0f;
+            pitch = 7.0f;
+        }
+        // QA only: keep exactly the same wall-facing camera while toggling
+        // sun shadow passes. Never alter game state, user movement or saves.
+        if( latest_scene && env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+            env_enabled( "CDDA_FP3D_QA_CAMERA_NEAR_WALL" ) ) {
+            const fp3d_snapshot::cell *selected = nullptr;
+            float score = -1e9f;
+            for( const auto &cell : latest_scene->cells ) {
+                if( cell.kind != fp3d_snapshot::terrain_kind::wall ||
+                    cell.known != fp3d_snapshot::knowledge::visible ||
+                    cell.exterior_only || cell.position.z() != latest_scene->origin.z() ) {
+                    continue;
+                }
+                const auto delta = cell.position - latest_scene->origin;
+                // Keep camera and wall inside the actual loaded snapshot.
+                if( std::abs( delta.x() ) > 28 || std::abs( delta.y() ) > 28 ) {
+                    continue;
+                }
+                int aligned = 0;
+                bool free_south = true;
+                bool bare_wall = true;
+                for( const auto &other : latest_scene->cells ) {
+                    if( other.position.z() != cell.position.z() ) { continue; }
+                    const auto neighbour = other.position - cell.position;
+                    if( neighbour.y() == 0 && std::abs( neighbour.x() ) <= 5 &&
+                        other.kind == fp3d_snapshot::terrain_kind::wall ) { ++aligned; }
+                    if( neighbour.y() == 3 && std::abs( neighbour.x() ) <= 1 &&
+                        other.kind == fp3d_snapshot::terrain_kind::wall ) {
+                        free_south = false;
+                    }
+                    if( neighbour.y() >= 1 && neighbour.y() <= 4 &&
+                        std::abs( neighbour.x() ) <= 1 &&
+                        ( other.furniture ||
+                          other.kind == fp3d_snapshot::terrain_kind::wall ||
+                          other.kind == fp3d_snapshot::terrain_kind::obstacle ) ) {
+                        bare_wall = false;
+                    }
+                }
+                const bool qa_bare = env_enabled( "CDDA_FP3D_QA_BARE_WALL" );
+                const float candidate = aligned * 12.0f -
+                    .2f * ( std::abs( delta.x() ) + std::abs( delta.y() ) ) +
+                    ( free_south ? 4.0f : 0.0f ) +
+                    ( qa_bare && bare_wall ? 1000.0f : 0.0f );
+                if( aligned >= 3 && candidate > score ) {
+                    selected = &cell;
+                    score = candidate;
+                }
+            }
+            if( selected ) {
+                const auto rel = selected->position - latest_scene->origin;
+                frame_camera.x = static_cast<float>( rel.x() );
+                float qa_wall_distance = 5.0f;
+                if( const char *distance = std::getenv( "CDDA_FP3D_QA_WALL_DISTANCE" ) ) {
+                    qa_wall_distance = std::clamp( static_cast<float>( std::atof( distance ) ),
+                                                   -10.0f, 10.0f );
+                }
+                frame_camera.y = static_cast<float>( rel.y() ) + qa_wall_distance;
+                frame_camera.height = fp3d_camera::eye_height;
+                yaw = 0.0f;
+                if( const char *angle = std::getenv( "CDDA_FP3D_QA_WALL_YAW" ) ) {
+                    yaw = std::clamp( static_cast<float>( std::atof( angle ) ), -180.0f, 180.0f );
+                }
+                pitch = 2.0f;
+            }
+        }
         if( latest_scene ) {
             fp3d_materials::bind();
             glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
@@ -1195,6 +1283,13 @@ void compose()
                 }();
                 light_pass = shadow;
                 post_env.shadow = shadow.texture;
+                post_env.shadow_far = shadow.far_texture;
+                post_env.shadow_far_radius = shadow.far_radius;
+                post_env.shadow_far_resolution = shadow.far_resolution;
+                for( int axis = 0; axis < 2; ++axis ) {
+                    post_env.shadow_snap_offset[axis] = shadow.snap_offset[axis];
+                    post_env.shadow_far_snap_offset[axis] = shadow.far_snap_offset[axis];
+                }
                 post_env.shadow_radius = shadow.radius;
                 post_env.shadow_distance = shadow.distance;
                 post_env.shadow_strength = shadow.strength;
@@ -1337,6 +1432,16 @@ void compose()
                     << " post_fbo=" << fp3d_shaderpacks::processed_framebuffer()
                     << " scene_fbo=" << framebuffer
                     << " shadow_texture=" << post_env.shadow
+                    << " shadow_far_texture=" << post_env.shadow_far
+                    << " shadow_near_radius=" << post_env.shadow_radius
+                    << " shadow_far_radius=" << post_env.shadow_far_radius
+                    << " shadow_snap_x=" << post_env.shadow_snap_offset[0]
+                    << " shadow_snap_y=" << post_env.shadow_snap_offset[1]
+                    << " shadow_far_snap_x=" << post_env.shadow_far_snap_offset[0]
+                    << " shadow_far_snap_y=" << post_env.shadow_far_snap_offset[1]
+                    << " shadow_far_resolution=" << post_env.shadow_far_resolution
+                    << " shadow_far_depth_occupied=" << light_pass.qa_far_depth_occupied_texels
+                    << " shadow_far_depth_hash=" << light_pass.qa_far_depth_hash
                     << " shadow_furniture_casters=" << light_pass.furniture_casters
                     << " shadow_streetlights=" << light_pass.street_light_casters
                     << " shadow_mailboxes=" << light_pass.mailbox_casters

@@ -48,6 +48,11 @@ struct environment {
     float sun_v = -1;
     float sun_strength = 0;
     GLuint shadow = 0;
+    GLuint shadow_far = 0;
+    float shadow_far_radius = 0;
+    int shadow_far_resolution = 0;
+    float shadow_snap_offset[2] = { 0, 0 };
+    float shadow_far_snap_offset[2] = { 0, 0 };
     float shadow_radius = 30;
     float shadow_distance = 78;
     float shadow_strength = 0;

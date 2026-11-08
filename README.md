@@ -110,3 +110,13 @@ Please report bugs and suggestions via [Issues](https://github.com/Slime11123/cd
 Raymarch v3 local development: Photon visual bridge adds a separate native reflectivity target, wet-road/water SSR and shadow-map-occluded volumetric sunlight, with independent F5/F6 toggles. See docs/FP3D_DEPTH_RAYMARCH_RENDER_PIPELINE.md. Not full Iris/Photon multi-pass.
 
 Photon indoor/outdoor lighting fix (local v4): entering a building no longer disables sunlight shadows, volumetric light, or SSR for the whole scene; exterior brightness stays consistent. See docs/FP3D_INDOOR_OUTDOOR_DAYLIGHT_FIX.md.
+
+Local Photon v6: brighter daylight interiors, continuous wet-road reflectivity masks and distance-faded screen-space reflections; modeled furniture, streetlight and vehicle shadows remain. See docs/FP3D_DAYLIGHT_WET_REFLECTION_V6.md.
+
+Local 3D shader v6b: brighter stable daylight in shaded rooms and a continuous softer wet-road SSR in rain. Existing streetlight, mailbox and vehicle sun shadows remain. Details: docs/FP3D_DAYLIGHT_WET_ROAD_V6B_QA.md.
+
+**Local v7b lighting fix:** Blood decals, dropped items, world sprites and foliage now receive scene lighting instead of remaining full-bright at night. The held item, interaction outline and genuine emissive fire are preserved. See [ground-object world lighting](docs/FP3D_WORLD_GROUND_LIGHTING_V7.md).
+
+**Local Photon v10b (dual-cascade sunlight shadows):** Ultra quality now has a high-resolution 28 m near shadow and a 96 m far shadow with smooth PCF blending and world-space texel snapping, while retaining the v9f road seam fix. Falls back to the original single shadow map when needed. See [v10b cascade implementation and QA](docs/FP3D_DUAL_CASCADE_SHADOW_V10B.md).
+
+**Photon Ultra v11c:** Seal wall shadow-caster seams and apply receiver-angle-aware depth bias to reduce repetitive triangular self-shadow artifacts while retaining car and streetlamp cast shadows. See [v11c wall-shadow fix](docs/FP3D_PHOTON_ULTRA_WALL_SHADOW_V11C.md).
