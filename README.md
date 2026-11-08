@@ -32,17 +32,17 @@ Explore CDDA's world in a first-person 3D perspective, or switch back to classic
 
 *Actual development screenshots supplied by the developer. Graphics and performance depend on settings and hardware.*
 
-## What's new — Alpha 0.3.1
+## What's new — Alpha 0.3.2
 
-**Performance & interface-size update (November 8, 2026).** See [the full 0.3.1 changelog](docs/RELEASE_NOTES_alpha0.3.1.md).
+**November 9, 2026.** This update integrates modern inventory and map improvements, vehicle V12 frame topology, and isolated QA-only research for Photon-style normal/ORM material data. See [the Alpha 0.3.2 changelog](docs/RELEASE_NOTES_alpha0.3.2.md).
 
-- **Faster 3D scene preparation:** reuse prepared map caches, reduce redundant scene-capture work and avoid repeated full-scene stair linkage.
-- **Less unnecessary GPU work:** avoid the wet-reflection mask pass when a scene contains no relevant reflective surfaces; streamline vehicle visibility calculations.
-- **More legible first launch on Windows:** increase the default UI/font dimensions without enlarging the initial window. Existing user settings are respected.
-- **Carry forward Alpha 0.3.0:** multistorey geometry, vehicle improvements, modern interaction and the experimental Photon-style shadow, sky and reflection pipeline.
+- **Modern inventory:** improved equipment and nested pocket tree controls, with persisted expansion state. The original developer-supplied inventory screenshot appears above.
+- **Overmap & compass:** mouse-drag map panning, right-click context actions, native overmap notes with colored X markers, and nearby bearings on the top compass.
+- **3D vehicle V12:** shape body panels, roof and glass around actual intact frame rows, falling back to modular rendering where the structure is damaged or discontinuous.
+- **Experimental materials:** normal/ORM auxiliary maps, GPU atlases, and a wall/floor surface framebuffer are **gated QA prototypes only**, not default gameplay PBR. Complete Minecraft Photon/Iris multi-pass shader execution remains unsupported.
+- **Alpha 0.3.1 improvements remain:** reduced redundant scene preparation, conditional reflection work, and more legible first-run Windows defaults.
 
-*These are targeted optimizations, not a promise of a specific FPS increase. GPU and gameplay-wide performance still require testing on different PCs.*
-
+*This is an experimental Alpha build; full cross-GPU, tileset, map-note, vehicle, gameplay and legacy-save validation is still ongoing.*
 ## Download and install (Windows x64)
 
 1. Open [GitHub Releases](https://github.com/Slime11123/cdda-modern-mode/releases) and download the newest **Windows-x64 ZIP**. GitHub's automatic **Source code** ZIP is not a playable game package.
@@ -78,7 +78,7 @@ Third-party authors retain their own rights and license conditions. Neither Phot
 
 **Alpha — work in progress.** Real-world gameplay, FPS on diverse GPUs, shaderpack versions, vehicle interiors, complex buildings, mods and old save migration have not all been exhaustively verified.
 
-- [Alpha 0.3.1 release notes](docs/RELEASE_NOTES_alpha0.3.1.md) · [Shaderpack compatibility](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D progress](docs/FP3D_PROGRESS.md)
+- [Alpha 0.3.2 release notes](docs/RELEASE_NOTES_alpha0.3.2.md) · [Alpha 0.3.1 release notes](docs/RELEASE_NOTES_alpha0.3.1.md) · [Shaderpack compatibility](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D progress](docs/FP3D_PROGRESS.md)
 - [Development status](docs/DEVELOPMENT_STATUS.md) · [Modern controls](docs/FP3D_0I1_MODERN_CONTROLS.md) · [Attribution](docs/ATTRIBUTION.md)
 - Developers: Windows, CMake, SDL2 Tiles, OpenGL; enable `TILES=ON` and `ENABLE_FP3D=ON`. See [CMake compiling guide](doc/c++/COMPILING-CMAKE.md).
 

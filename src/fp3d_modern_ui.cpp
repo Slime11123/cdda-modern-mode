@@ -1,6 +1,7 @@
 #include "fp3d_modern_ui.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <set>
@@ -132,6 +133,10 @@ class panel : public cataimgui::window
         std::optional<tripoint_abs_omt> pending_travel;
         std::optional<tripoint_abs_omt> note_edit_position;
         std::string note_draft;
+        int note_color_choice = 0;
+        std::optional<tripoint_abs_omt> map_context_position;
+        tripoint_abs_omt map_drag_anchor;
+        ImVec2 map_drag_start = ImVec2( 0, 0 );
         std::string note_status;
         bool confirm_note_delete = false;
         std::optional<std::pair<tripoint_abs_omt, std::string>> pending_note;
@@ -229,12 +234,105 @@ class panel : public cataimgui::window
                 ImGui::EndDragDropTarget();
             }
         }
+        // Use the survival menu's existing dark-brown and amber style colors.
+        // Parent containers remain distinguishable without introducing a second UI palette.
+        void parent_row_highlight( const ImVec2 &min, const ImVec2 &max, int depth,
+                                   bool pocket, bool hovered, bool selected ) const {
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const float rounding = 3.0f * scale;
+            const ImVec4 frame = ImGui::GetStyleColorVec4( ImGuiCol_FrameBg );
+            const ImVec4 header = ImGui::GetStyleColorVec4( ImGuiCol_Header );
+            ImVec4 fill;
+            if( selected ) {
+                fill = ImGui::GetStyleColorVec4( ImGuiCol_HeaderActive );
+            } else if( hovered ) {
+                fill = ImGui::GetStyleColorVec4( ImGuiCol_HeaderHovered );
+            } else {
+                // The parent row is darkest at deeper levels; pocket headings are
+                // softer than their owning container, all within the same palette.
+                const float strength = pocket ? 0.45f : depth == 0 ? 0.88f : 0.67f;
+                fill = ImLerp( frame, header, strength );
+                fill.w = pocket ? 0.68f : depth == 0 ? 0.78f : 0.71f;
+            }
+            ImVec4 border = ImGui::GetStyleColorVec4( ImGuiCol_Border );
+            border.w = pocket ? 0.45f : 0.60f;
+            ImVec4 accent = ImGui::GetStyleColorVec4( ImGuiCol_CheckMark );
+            accent.w = selected ? 0.95f : pocket ? 0.55f : 0.74f;
+            draw->AddRectFilled( min, max, ImGui::ColorConvertFloat4ToU32( fill ), rounding );
+            draw->AddRect( min, max, ImGui::ColorConvertFloat4ToU32( border ), rounding );
+            draw->AddRectFilled( ImVec2( min.x + 2 * scale, min.y + 3 * scale ),
+                                 ImVec2( min.x + 5 * scale, max.y - 3 * scale ),
+                                 ImGui::ColorConvertFloat4ToU32( accent ), 1.0f * scale );
+        }
+        // Draw one uninterrupted tree trunk per visible ancestor, with T and L junctions.
+        // Tracks encode which ancestor still has a following sibling.
+        void tree_guides( const ImVec2 &min, const ImVec2 &max, int depth,
+                          bool has_next, bool has_previous, const std::vector<bool> &tracks,
+                          bool has_open_children ) const {
+            // The outermost item list is not a tree branch; only nested pockets
+            // and their contents should carry the continuous guide lines.
+            if( depth == 0 ) {
+                return;
+            }
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const float center = ( min.y + max.y ) * .5f;
+            const float join = ImGui::GetStyle().ItemSpacing.y * .5f + 1.0f;
+            const float base = min.x + 12 * scale;
+            const float step = 22 * scale;
+            const ImU32 line_color = IM_COL32( 165, 156, 130, 205 );
+            const float thickness = std::max( 1.0f, 1.4f * scale );
+            // Level zero belongs to the root list: never draw its vertical trunk.
+            for( size_t level = 1; level < tracks.size(); ++level ) {
+                if( tracks[level] ) {
+                    const float x = base + static_cast<float>( level ) * step;
+                    draw->AddLine( ImVec2( x, min.y - join ), ImVec2( x, max.y + join ),
+                                   line_color, thickness );
+                }
+            }
+            const float x = base + depth * step;
+            if( depth > 0 || has_previous ) {
+                draw->AddLine( ImVec2( x, min.y - join ), ImVec2( x, center ),
+                               line_color, thickness );
+            }
+            if( has_next ) {
+                draw->AddLine( ImVec2( x, center ), ImVec2( x, max.y + join ),
+                               line_color, thickness );
+            }
+            draw->AddLine( ImVec2( x, center ), ImVec2( x + 11 * scale, center ),
+                           line_color, thickness );
+            if( has_open_children ) {
+                const float child_x = x + step;
+                draw->AddLine( ImVec2( x + 11 * scale, center ), ImVec2( child_x, center ),
+                               line_color, thickness );
+                draw->AddLine( ImVec2( child_x, center ), ImVec2( child_x, max.y + join ),
+                               line_color, thickness );
+            }
+        }
+        void tree_arrow( const ImVec2 &min, const ImVec2 &max, int depth,
+                         bool expanded ) const {
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const float x = min.x + ( 12 + depth * 22 + 17 ) * scale;
+            const float y = ( min.y + max.y ) * .5f;
+            const float r = 4 * scale;
+            const ImU32 color = IM_COL32( 221, 189, 122, 255 );
+            if( expanded ) {
+                draw->AddTriangleFilled( ImVec2( x - r, y - r * .6f ),
+                                         ImVec2( x + r, y - r * .6f ),
+                                         ImVec2( x, y + r ), color );
+            } else {
+                draw->AddTriangleFilled( ImVec2( x - r * .5f, y - r ),
+                                         ImVec2( x + r, y ),
+                                         ImVec2( x - r * .5f, y + r ), color );
+            }
+        }
         size_t container_pocket_count( const item_location &owner ) const {
             return std::count_if( view.groups.begin(), view.groups.end(), [&]( const auto &group ) {
                 return group.container == owner && group.pocket_index >= 0;
             } );
         }
-        void item_card( size_t index, int depth = 0, bool show_contents = false, bool grid = false ) {
+        void item_card( size_t index, int depth = 0, bool show_contents = false, bool grid = false,
+                        bool has_next = false, bool has_previous = false,
+                        const std::vector<bool> &tracks = {} ) {
             const auto &entry = view.entries[index];
             auto loc = entry.location;
             if( !loc ) {
@@ -242,25 +340,40 @@ class panel : public cataimgui::window
             }
             ImGui::PushID( static_cast<const void *>( &*loc ) );
             const bool expandable_gear = !grid && show_contents && container_pocket_count( loc ) > 0;
-            bool gear_expanded = true;
+            // Item variables survive panel recreation and normal save/load.
+            // Inventory containers start closed; nearby loot keeps its previous
+            // default-open behavior until the player explicitly changes it.
+            const std::string tree_key = "fp3d_inventory_tree_open";
+            const bool default_open = entry.nearby;
+            bool gear_expanded = !expandable_gear ||
+                                 loc->get_var( tree_key, std::string( default_open ? "1" : "0" ) ) == "1";
             bool clicked = false;
-            if( expandable_gear ) {
-                ImGui::PushStyleVar( ImGuiStyleVar_FramePadding, ImVec2( 4 * scale, ( 52 * scale - ImGui::GetFontSize() ) / 2 ) );
-                gear_expanded = ImGui::TreeNodeEx( "##item", ImGuiTreeNodeFlags_Framed |
-                                                  ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow |
-                                                  ImGuiTreeNodeFlags_DefaultOpen |
-                                                  ( selected.count( index ) ? ImGuiTreeNodeFlags_Selected : 0 ) );
-                ImGui::PopStyleVar();
-                clicked = ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen();
-            } else if( grid ) {
+            if( grid ) {
                 clicked = ImGui::InvisibleButton( "##item", ImVec2( 80 * scale, 76 * scale ) );
             } else {
-                clicked = ImGui::Selectable( "##item", selected.count( index ), ImGuiSelectableFlags_AllowDoubleClick,
-                                             ImVec2( 0, 52 * scale ) );
+                clicked = ImGui::Selectable( "##item", selected.count( index ),
+                                             ImGuiSelectableFlags_AllowDoubleClick, ImVec2( 0, 52 * scale ) );
             }
             const ImVec2 min = ImGui::GetItemRectMin();
             const ImVec2 max = ImGui::GetItemRectMax();
             auto *draw = ImGui::GetWindowDrawList();
+            if( expandable_gear && !grid ) {
+                parent_row_highlight( min, max, depth, false, ImGui::IsItemHovered(),
+                                      selected.count( index ) != 0 );
+            }
+            if( show_contents && !grid ) {
+                if( expandable_gear && ImGui::IsItemClicked( ImGuiMouseButton_Left ) &&
+                    ImGui::GetMousePos().x <= min.x + ( 12 + depth * 22 + 25 ) * scale ) {
+                    gear_expanded = !gear_expanded;
+                    loc->set_var( tree_key, std::string( gear_expanded ? "1" : "0" ) );
+                    clicked = false;
+                }
+                tree_guides( min, max, depth, has_next, has_previous, tracks,
+                             expandable_gear && gear_expanded );
+                if( expandable_gear ) {
+                    tree_arrow( min, max, depth, gear_expanded );
+                }
+            }
             if( grid ) {
                 draw->AddRectFilled( min, max, selected.count( index ) ? IM_COL32( 110, 79, 36, 190 ) :
                                      ImGui::IsItemHovered() ? IM_COL32( 70, 60, 43, 180 ) : IM_COL32( 20, 19, 17, 120 ) );
@@ -268,7 +381,8 @@ class panel : public cataimgui::window
             }
             const auto key = loc->typeId().str() + ( loc->has_itype_variant() ? loc->itype_variant().id : "" );
             const auto icon = icons.find( key );
-            const ImVec2 image_min( min.x + ( grid ? 18 : expandable_gear ? 25 : 4 ) * scale, min.y + 4 * scale );
+            const ImVec2 image_min( min.x + ( grid ? 18 : show_contents ? 42 + depth * 22 : 4 ) * scale,
+                                    min.y + 4 * scale );
             if( icon != icons.end() && icon->second ) {
                 draw->AddImage( ( ImTextureID )( intptr_t )icon->second.get(), image_min,
                                 ImVec2( image_min.x + 44 * scale, image_min.y + 44 * scale ) );
@@ -316,7 +430,7 @@ class panel : public cataimgui::window
                 ImGui::Text( "%.2f kg / %.2f L", entry.weight_kg, entry.volume_l );
                 ImGui::TextWrapped( "位置：%s", entry.group.c_str() );
                 ImGui::Text( "数量 %d / 损坏等级 %d", loc->count(), loc->damage_level() );
-                ImGui::TextUnformatted( "右键操作；拖到容器或装备区域；Shift 多选" );
+                ImGui::TextUnformatted( "右键操作；拖到容器或装备区域；Shift 多选；箭头展开/收起" );
                 ImGui::EndTooltip();
             }
             if( ImGui::BeginDragDropSource() ) {
@@ -386,15 +500,15 @@ class panel : public cataimgui::window
                 ImGui::EndPopup();
             }
             if( show_contents && depth < 16 && gear_expanded ) {
-                gear_pockets( loc, depth );
-            }
-            if( expandable_gear && gear_expanded ) {
-                ImGui::TreePop();
+                std::vector<bool> child_tracks = tracks;
+                child_tracks.push_back( has_next );
+                gear_pockets( loc, depth, child_tracks );
             }
             ImGui::PopID();
         }
-        void gear_pockets( const item_location &owner, int depth ) {
-            if( !owner || depth >= 16 ) {
+        void gear_pockets( item_location owner, int depth,
+                           const std::vector<bool> &tracks ) {
+            if( !owner || depth >= 15 ) {
                 return;
             }
             std::vector<size_t> pockets;
@@ -403,56 +517,66 @@ class panel : public cataimgui::window
                     pockets.push_back( i );
                 }
             }
-            if( pockets.empty() ) {
-                return;
-            }
-            const bool multiple_pockets = pockets.size() > 1;
-            for( const size_t group_index : pockets ) {
-                const auto &group = view.groups[group_index];
+            for( size_t pos = 0; pos < pockets.size(); ++pos ) {
+                const auto &group = view.groups[pockets[pos]];
+                const bool has_next = pos + 1 < pockets.size();
                 ImGui::PushID( group.pocket_index );
+                // Pocket index is stable within its owner item, unlike an ImGui
+                // ID or a pointer that changes when this panel is reopened.
+                const std::string pocket_key = "fp3d_inventory_pocket_open_" +
+                                               std::to_string( group.pocket_index );
+                bool expanded = owner->get_var( pocket_key,
+                                                std::string( group.nearby ? "1" : "0" ) ) == "1";
                 const ImVec2 pocket_min = ImGui::GetCursorScreenPos();
                 const float pocket_width = ImGui::GetContentRegionAvail().x;
                 ImGui::BeginGroup();
-                if( !multiple_pockets || ImGui::TreeNodeEx( group.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen ) ) {
-                    if( group.capacity_l > 0 ) {
-                        ImGui::Text( "%.2f / %.2f L", group.used_l, group.capacity_l );
+                if( ImGui::Selectable( "##pocket", false, ImGuiSelectableFlags_AllowDoubleClick,
+                                       ImVec2( 0, 36 * scale ) ) ) {
+                    expanded = !expanded;
+                    owner->set_var( pocket_key, std::string( expanded ? "1" : "0" ) );
+                }
+                const ImVec2 row_min = ImGui::GetItemRectMin();
+                const ImVec2 row_max = ImGui::GetItemRectMax();
+                parent_row_highlight( row_min, row_max, depth + 1, true,
+                                      ImGui::IsItemHovered(), false );
+                tree_guides( row_min, row_max, depth + 1, has_next, pos > 0, tracks,
+                             expanded && !group.entries.empty() );
+                if( !group.entries.empty() ) {
+                    tree_arrow( row_min, row_max, depth + 1, expanded );
+                }
+                std::string label = group.name;
+                const size_t pocket_name = label.find( " / 口袋 " );
+                if( pocket_name != std::string::npos ) {
+                    label = label.substr( pocket_name + 3 );
+                }
+                if( group.capacity_l > 0 ) {
+                    label += "  (" + string_format( "%.2f / %.2f L", group.used_l, group.capacity_l ) + ")";
+                }
+                if( group.entries.empty() ) {
+                    label += "  [空]";
+                }
+                const ImVec2 text_pos( row_min.x + ( 42 + ( depth + 1 ) * 22 ) * scale,
+                                       row_min.y + ( 36 * scale - ImGui::GetFontSize() ) * .5f );
+                const int chars = std::max( 1, static_cast<int>( ( row_max.x - text_pos.x - 5 * scale ) /
+                                            ( ImGui::GetFontSize() * .5f ) ) );
+                const std::string shown = utf8_truncate( label, chars );
+                ImGui::GetWindowDrawList()->AddText( text_pos,
+                        ImGui::GetColorU32( ImGuiCol_Text ), shown.c_str() );
+                if( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip( "%s\n将物品拖放到这里可放入对应口袋。", label.c_str() );
+                }
+                if( expanded ) {
+                    std::vector<bool> child_tracks = tracks;
+                    child_tracks.push_back( has_next );
+                    for( size_t i = 0; i < group.entries.size(); ++i ) {
+                        item_card( group.entries[i], depth + 2, true, false,
+                                   i + 1 < group.entries.size(), i > 0, child_tracks );
                     }
-                    const bool simple = std::none_of( group.entries.begin(), group.entries.end(), [&]( size_t index ) {
-                        return container_pocket_count( view.entries[index].location ) > 0;
-                    } );
-                    if( simple ) {
-                        const int columns = std::max( 1, static_cast<int>( ImGui::GetContentRegionAvail().x / ( 90 * scale ) ) );
-                        const int rows = ( group.entries.size() + columns - 1 ) / columns;
-                        ImGuiListClipper clipper;
-                        clipper.Begin( rows, 82 * scale );
-                        while( clipper.Step() ) {
-                            for( int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row ) {
-                                const float y = ImGui::GetCursorPosY();
-                                for( int column = 0; column < columns; ++column ) {
-                                    const size_t entry = row * columns + column;
-                                    if( entry >= group.entries.size() ) { break; }
-                                    if( column ) { ImGui::SameLine(); }
-                                    ImGui::BeginGroup();
-                                    const auto index = group.entries[entry];
-                                    item_card( index, depth + 1, true, true );
-                                    ImGui::EndGroup();
-                                }
-                                ImGui::SetCursorPosY( y + 82 * scale );
-                            }
-                        }
-                    } else {
-                        for( size_t index : group.entries ) {
-                            item_card( index, depth + 1, true );
-                        }
-                    }
-                    if( group.entries.empty() ) {
-                        ImGui::TextDisabled( "空" );
-                    }
-                    if( multiple_pockets ) { ImGui::TreePop(); }
                 }
                 ImGui::EndGroup();
                 const ImVec2 pocket_max( pocket_min.x + pocket_width, ImGui::GetItemRectMax().y );
-                if( ImGui::BeginDragDropTargetCustom( ImRect( pocket_min, pocket_max ), ImGui::GetID( "pocket_drop" ) ) ) {
+                if( ImGui::BeginDragDropTargetCustom( ImRect( pocket_min, pocket_max ),
+                        ImGui::GetID( "pocket_drop" ) ) ) {
                     if( const auto *payload = ImGui::AcceptDragDropPayload( "FP3D_ITEM" ) ) {
                         const size_t index = *static_cast<const size_t *>( payload->Data );
                         if( index < view.entries.size() ) {
@@ -503,8 +627,18 @@ class panel : public cataimgui::window
                 ImGui::PushID( static_cast<int>( group_index ) );
                 const ImVec2 group_min = ImGui::GetCursorScreenPos();
                 const float group_width = ImGui::GetContentRegionAvail().x;
+                // The inventory's top-level section should stay visible on a
+                // fresh character; a manual collapse is saved with the avatar.
+                if( !nearby ) {
+                    const diag_value *saved = you.maybe_get_value( "fp3d_inventory_group_open" );
+                    const bool open = !saved || saved->str() != "0";
+                    ImGui::SetNextItemOpen( open, ImGuiCond_Always );
+                }
                 const bool expanded = ImGui::CollapsingHeader( nearby ? group.name.c_str() : "随身容器",
-                                      ImGuiTreeNodeFlags_DefaultOpen );
+                                      nearby ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None );
+                if( !nearby && ImGui::IsItemToggledOpen() ) {
+                    you.set_value( "fp3d_inventory_group_open", std::string( expanded ? "1" : "0" ) );
+                }
                 if( group.container ) {
                     target( fp3d_inventory::operation_kind::insert, group.container, std::nullopt, false,
                             group.pocket_index );
@@ -559,27 +693,9 @@ class panel : public cataimgui::window
                     }
                     return view.entries[a].name < view.entries[b].name;
                 } );
-                const int columns = std::max( 1,
-                                              static_cast<int>( ImGui::GetContentRegionAvail().x / ( 90 * scale ) ) );
-                int column = 0;
-                for( const size_t index : indices ) {
-                    const bool has_pockets = container_pocket_count( view.entries[index].location ) > 0;
-                    if( has_pockets ) {
-                        if( column != 0 ) {
-                            ImGui::NewLine();
-                            column = 0;
-                        }
-                        item_card( index, 0, true );
-                        ImGui::NewLine();
-                        continue;
-                    }
-                    if( column != 0 ) {
-                        ImGui::SameLine();
-                    }
-                    ImGui::BeginGroup();
-                    item_card( index, 0, false, true );
-                    ImGui::EndGroup();
-                    column = ( column + 1 ) % columns;
+                // A single vertical list keeps container, pocket and leaf branches aligned.
+                for( size_t i = 0; i < indices.size(); ++i ) {
+                    item_card( indices[i], 0, true, false, i + 1 < indices.size(), i > 0 );
                 }
                 if( nearby && !indices.empty() && ImGui::SmallButton( "拿取本组全部物品" ) ) {
                     fp3d_inventory::operation action;
@@ -717,7 +833,8 @@ class panel : public cataimgui::window
                 }
                 if( note_edit_position != map_selection ) {
                     note_edit_position = map_selection;
-                    note_draft = selected->note_text;
+                    note_draft = selected->note;
+                    note_color_choice = fp3d_map::marker_color_index( selected->note_text );
                     note_status.clear();
                     confirm_note_delete = false;
                 }
@@ -726,9 +843,24 @@ class panel : public cataimgui::window
                 ImGui::BeginDisabled( !selected->editable );
                 ImGui::InputTextMultiline( "##标记内容", &note_draft,
                                            ImVec2( -1, 90 * scale ) );
+                if( ImGui::BeginCombo( "X 标记颜色", fp3d_map::marker_color_name( note_color_choice ) ) ) {
+                    for( int color = 0; color < fp3d_map::marker_palette_size; ++color ) {
+                        if( ImGui::Selectable( fp3d_map::marker_color_name( color ),
+                                               note_color_choice == color ) ) {
+                            note_color_choice = color;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                const auto tint = fp3d_map::marker_color( fp3d_map::format_marker( "x", note_color_choice ) );
+                ImGui::TextColored( ImVec4( tint.red / 255.0f, tint.green / 255.0f,
+                                            tint.blue / 255.0f, 1.0f ), "X" );
+                ImGui::SameLine();
+                ImGui::TextUnformatted( "标记会显示在地图和罗盘上" );
                 ImGui::BeginDisabled( note_draft.empty() );
                 if( ImGui::Button( "保存标记" ) ) {
-                    pending_note = std::make_pair( selected->position, note_draft );
+                    pending_note = std::make_pair( selected->position,
+                                                   fp3d_map::format_marker( note_draft, note_color_choice ) );
                     confirm_note_delete = false;
                 }
                 ImGui::EndDisabled();
@@ -792,7 +924,8 @@ class panel : public cataimgui::window
                     map_selection = map_center;
                 }
                 map_view = fp3d_map::capture( you, map_center, map_radius );
-                overmap_icons.clear();
+                // Keep cached terrain icons when panning: they only need clearing
+                // when the selected tileset revision changes.
                 map_center = map_view.center;
                 map_loaded = true;
             }
@@ -857,8 +990,12 @@ class panel : public cataimgui::window
                 const ImVec2 note_min = ImGui::GetItemRectMin();
                 const ImVec2 note_max = ImGui::GetItemRectMax();
                 const ImVec4 note_clip( note_min.x, note_min.y, note_max.x, note_max.y );
-                ImGui::GetWindowDrawList()->AddText( ImGui::GetFont(), ImGui::GetFontSize(), note_min,
-                                                    ImGui::GetColorU32( ImGuiCol_Text ), row.note.c_str(), nullptr, 0, &note_clip );
+                const auto marker_tint = fp3d_map::marker_color( row.note_text );
+                ImGui::GetWindowDrawList()->AddText( note_min,
+                        IM_COL32( marker_tint.red, marker_tint.green, marker_tint.blue, 255 ), "X" );
+                ImGui::GetWindowDrawList()->AddText( ImGui::GetFont(), ImGui::GetFontSize(),
+                        ImVec2( note_min.x + 19 * scale, note_min.y ),
+                        ImGui::GetColorU32( ImGuiCol_Text ), row.note.c_str(), nullptr, 0, &note_clip );
                 if( ImGui::IsItemHovered() ) {
                     ImGui::BeginTooltip();
                     ImGui::PushTextWrapPos( 300 * scale );
@@ -889,23 +1026,103 @@ class panel : public cataimgui::window
             origin.x += std::max( 0.0f, ( available.x - extent ) * .5f );
             ImGui::SetCursorScreenPos( origin );
             ImGui::InvisibleButton( "##map_cells", ImVec2( extent, extent ) );
+            if( ImGui::IsItemActivated() ) {
+                map_drag_start = ImGui::GetIO().MousePos;
+                map_drag_anchor = map_center;
+            }
+            // Left-drag pans the overmap without moving the character or spending turns.
+            if( ImGui::IsItemActive() && ImGui::IsMouseDragging( ImGuiMouseButton_Left, 4 * scale ) ) {
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                const int dx = static_cast<int>( std::lround( ( mouse.x - map_drag_start.x ) / tile ) );
+                const int dy = static_cast<int>( std::lround( ( mouse.y - map_drag_start.y ) / tile ) );
+                const tripoint_abs_omt shifted = map_drag_anchor + tripoint_rel_omt( -dx, -dy, 0 );
+                if( shifted != map_center ) {
+                    map_center = shifted;
+                    map_loaded = false;
+                }
+            }
             if( ImGui::IsItemHovered() ) {
                 const auto mouse = ImGui::GetIO().MousePos;
                 const int x = std::clamp( static_cast<int>( ( mouse.x - origin.x ) / tile ), 0, diameter - 1 );
                 const int y = std::clamp( static_cast<int>( ( mouse.y - origin.y ) / tile ), 0, diameter - 1 );
                 const auto &row = map_view.cells[y * diameter + x];
-                if( ImGui::IsItemClicked() ) {
+                if( ImGui::IsItemClicked( ImGuiMouseButton_Left ) ) {
                     map_selection = row.position;
                 }
-                ImGui::BeginTooltip();
-                ImGui::PushTextWrapPos( 300 * scale );
-                ImGui::TextUnformatted( row.name.c_str() );
-                ImGui::Text( "%d, %d / 层 %d", row.position.x(), row.position.y(), row.position.z() );
-                if( !row.note.empty() ) {
-                    ImGui::TextWrapped( "%s", row.note.c_str() );
+                if( ImGui::IsItemClicked( ImGuiMouseButton_Right ) ) {
+                    map_selection = row.position;
+                    map_context_position = row.position;
+                    ImGui::OpenPopup( "地图单格操作" );
                 }
-                ImGui::PopTextWrapPos();
-                ImGui::EndTooltip();
+                if( !ImGui::IsMouseDragging( ImGuiMouseButton_Left, 4 * scale ) ) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos( 300 * scale );
+                    ImGui::TextUnformatted( row.name.c_str() );
+                    ImGui::Text( "%d, %d / 层 %d", row.position.x(), row.position.y(), row.position.z() );
+                    if( !row.note.empty() ) {
+                        ImGui::TextWrapped( "%s", row.note.c_str() );
+                    }
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+            }
+            bool open_marker_popup = false;
+            if( ImGui::BeginPopup( "地图单格操作" ) ) {
+                if( map_context_position ) {
+                    const auto found = std::find_if( map_view.cells.begin(), map_view.cells.end(),
+                    [&]( const fp3d_map::cell &entry ) {
+                        return entry.position == *map_context_position;
+                    } );
+                    if( found != map_view.cells.end() ) {
+                        ImGui::Text( "%d, %d / 层 %d", found->position.x(), found->position.y(),
+                                     found->position.z() );
+                        ImGui::Separator();
+                        const bool can_travel = found->known &&
+                            found->position.z() == you.posz() &&
+                            found->position != map_view.player;
+                        if( ImGui::MenuItem( "移动到此处…", nullptr, false, can_travel ) ) {
+                            pending_travel = found->position;
+                        }
+                        if( ImGui::MenuItem( found->note_text.empty() ? "添加 X 标记…" :
+                                             "编辑 X 标记…", nullptr, false, found->editable ) ) {
+                            map_selection = found->position;
+                            note_edit_position = found->position;
+                            note_draft = found->note;
+                            note_color_choice = fp3d_map::marker_color_index( found->note_text );
+                            note_status.clear();
+                            open_marker_popup = true;
+                        }
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            if( open_marker_popup ) {
+                ImGui::OpenPopup( "编辑 X 地图标记" );
+            }
+            if( ImGui::BeginPopupModal( "编辑 X 地图标记", nullptr, ImGuiWindowFlags_AlwaysAutoResize ) ) {
+                ImGui::TextUnformatted( "标记说明" );
+                ImGui::SetNextItemWidth( 290 * scale );
+                ImGui::InputText( "##弹窗标记内容", &note_draft );
+                if( ImGui::BeginCombo( "标记颜色", fp3d_map::marker_color_name( note_color_choice ) ) ) {
+                    for( int i = 0; i < fp3d_map::marker_palette_size; ++i ) {
+                        if( ImGui::Selectable( fp3d_map::marker_color_name( i ), note_color_choice == i ) ) {
+                            note_color_choice = i;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::BeginDisabled( note_draft.empty() || !map_context_position );
+                if( ImGui::Button( "保存 X 标记" ) && map_context_position ) {
+                    pending_note = std::make_pair( *map_context_position,
+                                      fp3d_map::format_marker( note_draft, note_color_choice ) );
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if( ImGui::Button( "取消" ) ) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
             auto *draw = ImGui::GetWindowDrawList();
             for( size_t i = 0; i < map_view.cells.size(); ++i ) {
@@ -941,8 +1158,19 @@ class panel : public cataimgui::window
                     draw->AddRectFilled( ImVec2( middle.x - 2, middle.y - 2 ),
                                          ImVec2( middle.x + 2, middle.y + 2 ), IM_COL32( 70, 150, 255, 255 ) );
                 }
-                if( !row.note.empty() ) {
-                    draw->AddRectFilled( start, ImVec2( start.x + 4, start.y + 4 ), IM_COL32( 255, 220, 50, 255 ) );
+                if( !row.note_text.empty() ) {
+                    const auto tint = fp3d_map::marker_color( row.note_text );
+                    const ImU32 color = IM_COL32( tint.red, tint.green, tint.blue, 255 );
+                    const float arm = std::max( 2.0f, std::min( 10.0f * scale, tile * .31f ) );
+                    // Draw high-contrast crossed strokes instead of a missing image.
+                    const ImVec2 a( middle.x - arm, middle.y - arm );
+                    const ImVec2 b( middle.x + arm, middle.y + arm );
+                    const ImVec2 c( middle.x - arm, middle.y + arm );
+                    const ImVec2 d( middle.x + arm, middle.y - arm );
+                    draw->AddLine( a, b, IM_COL32( 10, 9, 8, 240 ), 4.0f * scale );
+                    draw->AddLine( c, d, IM_COL32( 10, 9, 8, 240 ), 4.0f * scale );
+                    draw->AddLine( a, b, color, 2.4f * scale );
+                    draw->AddLine( c, d, color, 2.4f * scale );
                 }
                 if( row.objective || row.position == map_view.player ||
                     ( map_selection && row.position == *map_selection ) ) {
@@ -2360,7 +2588,7 @@ class panel : public cataimgui::window
                     std::string error;
                     if( fp3d_map::write_note( pending_note->first, pending_note->second, error ) ) {
                         note_status = pending_note->second.empty() ? "标记已删除。" : "标记已保存。";
-                        note_draft = pending_note->second;
+                        note_draft = fp3d_map::marker_label( pending_note->second );
                         map_loaded = false;
                     } else {
                         note_status = std::move( error );

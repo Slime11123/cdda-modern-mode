@@ -38,6 +38,14 @@ struct data {
     std::string mission;
     int active_slot = 0;
     std::optional<float> navigation_heading;
+    struct map_marker {
+        float heading = 0.0f;
+        int distance = 0;
+        unsigned char red = 255;
+        unsigned char green = 220;
+        unsigned char blue = 80;
+    };
+    std::vector<map_marker> map_markers;
     int navigation_distance = 0;
     int navigation_z = 0;
     std::vector<std::string> slots;

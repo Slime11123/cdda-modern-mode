@@ -7,7 +7,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "fp3d_material_aux.h"
 #include "calendar.h"
 #include "sdl_wrappers.h"
 
@@ -78,6 +80,22 @@ bool ready();
 bool bind();
 void unbind();
 std::optional<uv_rect> lookup( const std::string &id );
+// Same UVs as colour atlas, usable while the auxiliary shader owns GL textures.
+// Read-only; deliberately does not perform SDL_GL_BindTexture.
+std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id );
+// Lazily generate and cache normal/ORM from the actual current tileset slot.
+// Does not alter the colour atlas or enable PBR lighting by itself.
+// Call only with the SDL renderer active, before binding the atlas to GL.
+const fp3d_material_aux::maps *auxiliary( const std::string &id );
+// Pixel generation must happen on the SDL side, before SDL_RenderFlush.
+// Runs at most 'budget' 64x64 tile readbacks; result is CPU-only.
+unsigned prefetch_auxiliary( unsigned budget );
+struct auxiliary_tile {
+    unsigned slot = 0;
+    const fp3d_material_aux::maps *data = nullptr;
+};
+// Cached tile pixels and their exact colour-atlas slot indices for a later GL upload.
+std::vector<auxiliary_tile> auxiliary_tiles();
 struct furniture_uv {
     std::optional<uv_rect> top;
     std::optional<uv_rect> front;

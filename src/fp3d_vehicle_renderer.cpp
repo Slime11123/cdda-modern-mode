@@ -565,6 +565,31 @@ silhouette build_silhouette( const vehicle_view &v, const shell_profile &profile
     if( first_frame || first_roof || !profile.enclosed ) {
         return result;
     }
+    // V12: a longitudinal min/max row is NOT necessarily a solid body.
+    // A missing native frame inside a row, a disconnected row, or a gap
+    // between adjacent rows must not be covered with an invented car floor,
+    // bumper and greenhouse. Use the per-part modular renderer instead.
+    bool first_row = true;
+    int previous_x = 0;
+    std::pair<int, int> previous_span{};
+    for( const auto &[x, span] : result.rows ) {
+        if( !first_row &&
+            ( x != previous_x + 1 ||
+              span.first > previous_span.second + 1 ||
+              span.second < previous_span.first - 1 ) ) {
+            return result;
+        }
+        for( int z = span.first; z <= span.second; ++z ) {
+            const auto frame = profile.cells.find( {x, z} );
+            if( frame == profile.cells.end() || !frame->second.frame ||
+                frame->second.broken_frame ) {
+                return result;
+            }
+        }
+        first_row = false;
+        previous_x = x;
+        previous_span = span;
+    }
     result.usable = true;
     result.left = result.z_min - .46f - v.pivot_y;
     result.right = result.z_max + .46f - v.pivot_y;
@@ -614,6 +639,50 @@ silhouette build_silhouette( const vehicle_view &v, const shell_profile &profile
         }
     }
     return result;
+}
+
+// V12: each native frame row has its OWN exterior contour. Global min/max
+// width is valid only for a rectangular vehicle; tapered cars and irregular
+// original assemblies must not inherit a fictitious full-width end cap.
+float native_side_at_row( const vehicle_view &v, const silhouette &shape,
+                          int x, bool right )
+{
+    const auto row = shape.rows.find( x );
+    if( row == shape.rows.end() ) {
+        return right ? shape.right : shape.left;
+    }
+    return float( right ? row->second.second : row->second.first ) +
+           ( right ? .46f : -.46f ) - v.pivot_y;
+}
+
+float native_roof_edge_at_row( const vehicle_view &v,
+                               const shell_profile &profile,
+                               const silhouette &shape, int x, bool right )
+{
+    bool found = false;
+    int min_z = 0, max_z = 0;
+    for( const auto &[mount, cell] : profile.cells ) {
+        if( mount.first != x || !cell.roof || cell.broken_roof ) {
+            continue;
+        }
+        if( !found ) {
+            min_z = max_z = mount.second;
+            found = true;
+        } else {
+            min_z = std::min( min_z, mount.second );
+            max_z = std::max( max_z, mount.second );
+        }
+    }
+    if( !found ) {
+        return right ? shape.roof_right : shape.roof_left;
+    }
+    // Native roof graphics can overhang their roof-mount centres, but never
+    // overhang beyond the actual side wall of this longitudinal frame row.
+    const float lower = native_side_at_row( v, shape, x, false ) + .18f;
+    const float upper = native_side_at_row( v, shape, x, true ) - .18f;
+    const float roof_edge = float( right ? max_z : min_z ) +
+                            ( right ? .78f : -.78f ) - v.pivot_y;
+    return std::clamp( roof_edge, lower, upper );
 }
 
 bool has_visual_side_glass( const shell_profile &profile,
@@ -690,6 +759,14 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
     const float roof_front_x = shape.roof_x_max + .46f - v.pivot_x;
     const float width = shape.right - shape.left;
     const float center = ( shape.left + shape.right ) * .5f;
+    const float front_left = native_side_at_row( v, shape, shape.x_max, false );
+    const float front_right = native_side_at_row( v, shape, shape.x_max, true );
+    const float rear_left = native_side_at_row( v, shape, shape.x_min, false );
+    const float rear_right = native_side_at_row( v, shape, shape.x_min, true );
+    const float front_width = front_right - front_left;
+    const float rear_width = rear_right - rear_left;
+    const float front_center = ( front_left + front_right ) * .5f;
+    const float rear_center = ( rear_left + rear_right ) * .5f;
     constexpr float belt = .82f;
     constexpr float halfboard_top = .59f;
     constexpr float roof_y = 1.42f;
@@ -814,27 +891,27 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
     // floating 1x1 tile on top of the front engine.
     const float nose_root = roof_front_x + .67f;
     if( front > nose_root + .05f ) {
-        painted_quad( {nose_root, 1.02f, shape.left + .12f},
-                      {front, .82f, shape.left + .17f},
-                      {front, .82f, shape.right - .17f},
-                      {nose_root, 1.02f, shape.right - .12f}, paint );
-        seam( {nose_root, 1.025f, shape.left + .14f},
-              {front, .825f, shape.left + .18f}, edges );
-        seam( {nose_root, 1.025f, shape.right - .14f},
-              {front, .825f, shape.right - .18f}, edges );
+        painted_quad( {nose_root, 1.02f, shape.roof_left + .12f},
+                      {front, .82f, front_left + .17f},
+                      {front, .82f, front_right - .17f},
+                      {nose_root, 1.02f, shape.roof_right - .12f}, paint );
+        seam( {nose_root, 1.025f, shape.roof_left + .14f},
+              {front, .825f, front_left + .18f}, edges );
+        seam( {nose_root, 1.025f, shape.roof_right - .14f},
+              {front, .825f, front_right - .18f}, edges );
     }
     // Actual forward and rear silhouette: bumper/grille on the front (+X);
     // rear lights and boot are on the rear (-X), never interchangeable.
     // End caps connect the underbody to the bonnet and rear deck.
     // They are deliberately painted bodywork (not broad dark vents).
-    cuboid( front - .11f, center, .22f, width * .94f, .36f, .81f, paint );
-    cuboid( front, center, .11f, width * .91f, .32f, .47f, dark );
-    cuboid( front + .012f, center, .13f, width * .42f, .52f, .66f,
+    cuboid( front - .11f, front_center, .22f, front_width * .94f, .36f, .81f, paint );
+    cuboid( front, front_center, .11f, front_width * .91f, .32f, .47f, dark );
+    cuboid( front + .012f, front_center, .13f, front_width * .42f, .52f, .66f,
             color3{ .17f, .19f, .21f } );
     if( shape.body_type != silhouette::shape::pickup ) {
-        cuboid( rear + .11f, center, .22f, width * .93f, .36f, .87f, paint );
+        cuboid( rear + .11f, rear_center, .22f, rear_width * .93f, .36f, .87f, paint );
     }
-    cuboid( rear, center, .13f, width * .91f, .32f, .46f, dark );
+    cuboid( rear, rear_center, .13f, rear_width * .91f, .32f, .46f, dark );
 
     // Native lights are embedded into the bumper. Do not additionally
     // draw every headlight as a full independent beige crate.
@@ -848,8 +925,10 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
         if( !head && !tail ) {
             continue; // indicators/flashers are handled separately later
         }
+        const float lamp_left = tail ? rear_left : front_left;
+        const float lamp_right = tail ? rear_right : front_right;
         const float z = std::clamp( float( part.mount_y - v.pivot_y ),
-                                    shape.left + .28f, shape.right - .28f );
+                                    lamp_left + .28f, lamp_right - .28f );
         const color3 lens = part.broken ?
                             color3{ .12f, .12f, .12f } :
                             tail ? color3{ .63f, .12f, .10f } :
@@ -944,8 +1023,8 @@ void draw_closed_silhouette( const vehicle_view &v, const shell_profile &profile
         }
         for( int side = 0; side < 2; ++side ) {
             const int native_z = side == 0 ? row->second.first : row->second.second;
-            const float outside = side == 0 ? shape.left : shape.right;
-            const float inside = side == 0 ? shape.roof_left : shape.roof_right;
+            const float outside = native_side_at_row( v, shape, ix, side == 1 );
+            const float inside = native_roof_edge_at_row( v, profile, shape, ix, side == 1 );
             const auto cell = profile.cells.find( {ix,native_z} );
             const bool frame_present = cell != profile.cells.end() &&
                                        ( ( cell->second.frame && !cell->second.broken_frame ) ||
@@ -1083,6 +1162,11 @@ void draw_closed_silhouette_glass( const vehicle_view &v,
     const float roof_rear = shape.roof_x_min - .46f - v.pivot_x;
     const float front = shape.x_max + .49f - v.pivot_x;
     const float rear = shape.x_min - .49f - v.pivot_x;
+    const float front_left = native_side_at_row( v, shape, shape.x_max, false );
+    const float front_right = native_side_at_row( v, shape, shape.x_max, true );
+    const float rear_left = native_side_at_row( v, shape, shape.x_min, false );
+    const float rear_right = native_side_at_row( v, shape, shape.x_min, true );
+
     const float low_front = std::min( front - .28f, roof_front + .78f );
     // Semi-transparent glazing shared between the actual A pillars, roof
     // frame and bonnet. Unlike P2, one pane spans the cabin's front, not
@@ -1095,8 +1179,8 @@ void draw_closed_silhouette_glass( const vehicle_view &v,
         panes.push_back( { a, b, c, d } );
     };
     if( shape.front_glass ) {
-        pane( {low_front, 1.02f, shape.left + .23f},
-              {low_front, 1.02f, shape.right - .23f},
+        pane( {low_front, 1.02f, front_left + .23f},
+              {low_front, 1.02f, front_right - .23f},
               {roof_front, 1.355f, shape.roof_right - .07f},
               {roof_front, 1.355f, shape.roof_left + .07f} );
     }
@@ -1115,8 +1199,8 @@ void draw_closed_silhouette_glass( const vehicle_view &v,
             // +/- .40 and expose thin air strips at both frame ends.
             const float x0 = ix - .445f - v.pivot_x;
             const float x1 = ix + .445f - v.pivot_x;
-            const float outside = side == 0 ? shape.left : shape.right;
-            const float inside = side == 0 ? shape.roof_left : shape.roof_right;
+            const float outside = native_side_at_row( v, shape, ix, side == 1 );
+            const float inside = native_roof_edge_at_row( v, profile, shape, ix, side == 1 );
             // Start just above the native lower door skin (.82), leaving
             // a realistic rubber window seal rather than a see-through gap.
             pane( {x0, .852f, outside},
@@ -1148,8 +1232,8 @@ void draw_closed_silhouette_glass( const vehicle_view &v,
         const float bottom = sedan ? std::max( rear, roof_rear - .74f ) : rear;
         pane( {roof_rear, 1.34f, shape.roof_left + .13f},
               {roof_rear, 1.34f, shape.roof_right - .13f},
-              {bottom, .95f, shape.right - .22f},
-              {bottom, .95f, shape.left + .22f} );
+              {bottom, .95f, rear_right - .22f},
+              {bottom, .95f, rear_left + .22f} );
     }
     // Panes were previously emitted in a fixed order, even as the car
     // turns and the camera walks around it. Alpha blending is not
@@ -1431,11 +1515,9 @@ void geometry( const vehicle_view &v )
     // interior, preserving their mutual alignment through 360-degree
     // turns. Genuine wheels are drawn separately with round tires.
     glPushMatrix();
-    if( profile.enclosed ) {
-        glScalef( 1.f, enclosed_cab_vertical_scale, 1.f );
-    }
     const silhouette shape = build_silhouette( v, profile );
     if( shape.usable ) {
+        glScalef( 1.f, enclosed_cab_vertical_scale, 1.f );
         // V5 main pipeline: emit ONE car body with front, cabin and rear.
         // Keep only real, independently visible equipment. The old P1-P4
         // pipeline had generated an extra red box for every roof/door/frame.
@@ -1454,11 +1536,15 @@ void geometry( const vehicle_view &v )
             }
         }
     } else {
-        // Bicycles, open DIY frames, fully stripped wrecks and modded
-        // structures still use their own true, individual native parts.
+        // V12: no synthetic filled shell on disjoint/missing native frame
+        // mounts. Force an actual modular floor/roof/body for these cars;
+        // the former enclosed=true skipped ALL their chassis and body parts.
+        shell_profile modular = profile;
+        modular.enclosed = false;
+        modular.centerline_motorcycle_cabin = false;
         for( const part_view &part : v.parts ) {
             if( part.kind != role::wheel ) {
-                one_part( v, part, profile );
+                one_part( v, part, modular );
             }
         }
     }

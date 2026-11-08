@@ -154,7 +154,7 @@ TEST_CASE( "fp3d_map_edits_native_notes_without_exploration_or_simulation", "[fp
     CHECK( row->editable );
     CHECK_FALSE( row->known );
     CHECK( row->note_text == revised );
-    CHECK( row->note == "!:G;物资已取走 留待返回" );
+    CHECK( row->note == "物资已取走 留待返回" );
     CHECK( overmap_buffer.seen( position ) == om_vision_level::unseen );
 
     // Native overmap view serialization, with no FP3D fields or alternate note storage.
@@ -179,6 +179,39 @@ TEST_CASE( "fp3d_map_edits_native_notes_without_exploration_or_simulation", "[fp
     CHECK( you.get_moves() == moves );
     CHECK( rng_get_engine() == engine );
     CHECK( you.omt_path == route );
+}
+
+TEST_CASE( "fp3d_map_native_colored_x_markers_round_trip", "[fp3d][map_ui]" )
+{
+    clear_avatar();
+    clear_map();
+    avatar &you = get_avatar();
+    const tripoint_abs_omt location = you.pos_abs_omt() + tripoint_rel_omt( 3, 0, 0 );
+    const std::string old_note = overmap_buffer.note( location );
+    const bool had_note = overmap_buffer.has_note( location );
+    on_out_of_scope restore( [&]() {
+        std::string error;
+        CHECK( fp3d_map::write_note( location, had_note ? old_note : std::string(), error ) );
+    } );
+    for( int i = 0; i < fp3d_map::marker_palette_size; ++i ) {
+        const std::string written = fp3d_map::format_marker( "物资仓库", i );
+        CHECK( fp3d_map::marker_color_index( written ) == i );
+        CHECK( fp3d_map::marker_label( written ) == "物资仓库" );
+        std::string error;
+        REQUIRE( fp3d_map::write_note( location, written, error ) );
+        CHECK( overmap_buffer.note( location ) == written );
+        const auto view = fp3d_map::capture( you, location, 4 );
+        const auto found = std::find_if( view.cells.begin(), view.cells.end(),
+        [&]( const fp3d_map::cell & entry ) {
+            return entry.position == location;
+        } );
+        REQUIRE( found != view.cells.end() );
+        CHECK( found->note == "物资仓库" );
+        const auto nearby = fp3d_map::compass_markers( you.pos_abs_omt() );
+        CHECK( std::any_of( nearby.begin(), nearby.end(), [&]( const auto &marker ) {
+            return marker.position == location;
+        } ) );
+    }
 }
 
 TEST_CASE( "fp3d_map_note_writes_reject_unloaded_regions_and_invalid_layers", "[fp3d][map_ui]" )

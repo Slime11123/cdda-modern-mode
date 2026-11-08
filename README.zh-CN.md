@@ -32,17 +32,17 @@
 
 *以上均为开发者提供的真实游戏截图；画面效果、帧数与所选图块包和电脑硬件有关。*
 
-## Alpha 0.3.1：性能与界面缩放优化
+## Alpha 0.3.2：现代生存菜单、地图与车辆改进
 
-本版重点是 **2026 年 11 月 8 日的性能优化、玩家版界面缩放一致性修复**。详见 [Alpha 0.3.1 完整更新日志](docs/RELEASE_NOTES_alpha0.3.1.md)。
+**2026 年 11 月 9 日更新**。本版整合现代菜单与地图交互、车辆 V12 车架轮廓，以及 Photon 风格法线/材质研究的隔离测试模块。详见 [Alpha 0.3.2 更新日志](docs/RELEASE_NOTES_alpha0.3.2.md)。
 
-- **减少场景准备开销：** 复用地图缓存、减少重复场景快照工作，避免每回合对楼梯连接进行不必要的全量扫描。
-- **降低渲染负担：** 场景无相关反光表面时跳过湿路反射遮罩 Pass，优化车辆可见性距离计算。
-- **修复玩家版界面过小：** 调整 Windows 3D 首次启动的默认字体及终端网格，让文字与菜单更清楚，同时尽量维持原有窗口大小。
-- **保留 Alpha 0.3.0 特性：** 多层建筑、车辆立体结构、现代射击与交互，以及 Photon 风格的天空、阴影和反射。
+- **现代背包界面：** 改进装备、真实口袋与容器树的展开操作及状态保留；上方实机截图展示了当前背包布局。
+- **地图与罗盘：** 地图支持鼠标拖拽平移、右键操作；使用原版地图备注实现彩色 X 标记，并在顶部罗盘提示附近标记方向。
+- **3D 车辆 V12：** 车壳、车顶与玻璃沿实际完整车架逐排轮廓构造；破损、不连贯车架回退到模块式车体，减少凭空补壳。
+- **实验性光影研发：** 新增法线/ORM 材质数据、GPU 材质图集与地面/墙面属性 FBO 的 **QA 专用验证链路**。普通玩家模式不默认开启这些额外 Pass，也尚未实现完整 PBR 或 Minecraft Photon/Iris 多阶段渲染。
+- **延续 Alpha 0.3.1：** 保留已发布的场景准备优化、反射开销减少和 Windows 初始文字/界面缩放调整。
 
-*优化不等于所有电脑都能获得固定帧数提升。实际 FPS 受 CPU、GPU、地图复杂度和画质影响，仍需更大范围测试。*
-
+*此版本仍为 Alpha：不同 GPU、复杂车辆与建筑、地图标记、图块包和长时间游戏尚需更广泛测试。未验证的功能不宣传为稳定版。*
 ## Windows x64 下载与安装
 
 1. 前往 [GitHub Releases 下载页面](https://github.com/Slime11123/cdda-modern-mode/releases)，选择最新版带 **Windows-x64** 名称的 ZIP。GitHub 自动生成的 **Source code** 压缩包不是可直接游玩的游戏。
@@ -78,7 +78,7 @@
 
 本项目仍是 **Alpha 实验版**，复杂车辆、跨层建筑、不同光影包、硬件兼容、长时间生存和旧存档迁移等方面尚未完成全面验收。
 
-- [Alpha 0.3.1 更新日志](docs/RELEASE_NOTES_alpha0.3.1.md) · [光影兼容性说明](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D 开发进度](docs/FP3D_PROGRESS.md)
+- [Alpha 0.3.2 更新日志](docs/RELEASE_NOTES_alpha0.3.2.md) · [Alpha 0.3.1 更新日志](docs/RELEASE_NOTES_alpha0.3.1.md) · [光影兼容性说明](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D 开发进度](docs/FP3D_PROGRESS.md)
 - [开发状态](docs/DEVELOPMENT_STATUS.md) · [现代化操作](docs/FP3D_0I1_MODERN_CONTROLS.md) · [版权署名](docs/ATTRIBUTION.md)
 - 开发构建：Windows / CMake / SDL2 Tiles / OpenGL，配置 `TILES=ON` 与 `ENABLE_FP3D=ON`，参考 [CMake 编译指南](doc/c++/COMPILING-CMAKE.md)。
 

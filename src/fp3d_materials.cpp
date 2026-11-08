@@ -36,6 +36,10 @@ const SDL_Renderer_Ptr *renderer_owner = nullptr;
 SDL_Texture_Ptr atlas;
 unsigned material_revision = 0;
 std::unordered_map<std::string, unsigned> slots;
+// Colour-atlas insertion order is the authoritative 64x64 slot order.
+std::vector<std::string> slot_keys;
+std::size_t auxiliary_cursor = 0;
+std::unordered_map<std::string, fp3d_material_aux::maps> auxiliary_cache;
 std::unordered_map<std::string, std::array<float, 3>> vehicle_colors;
 season_type season = SPRING;
 float texture_width = 1;
@@ -342,6 +346,9 @@ void set_tileset( std::shared_ptr<const tileset> set, const SDL_Renderer_Ptr &re
     // Called only after the native loader finishes, including forced reloads.
     atlas.reset();
     slots.clear();
+    slot_keys.clear();
+    auxiliary_cursor = 0;
+    auxiliary_cache.clear();
     vehicle_colors.clear();
     selected = std::move( set );
     renderer_owner = &renderer;
@@ -437,6 +444,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         season = scene.season;
         atlas.reset();
         slots.clear();
+        slot_keys.clear();
+        auxiliary_cursor = 0;
+        auxiliary_cache.clear();
         vehicle_colors.clear();
     }
     struct request {
@@ -861,6 +871,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         }
         slots.emplace( id, index );
+        slot_keys.push_back( id );
     }
     // Appending slots preserves every existing UV. Only atlas resets above
     // invalidate cached geometry; a new terrain ID changes its own chunk key.
@@ -918,6 +929,92 @@ std::optional<uv_rect> lookup( const std::string &id )
                     ( y + 2.5f ) / atlas_size * texture_height,
                     ( x + slot_size - 2.5f ) / atlas_size * texture_width,
                     ( y + slot_size - 2.5f ) / atlas_size * texture_height };
+}
+
+std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
+{
+    const auto it = slots.find( id );
+    if( !atlas || failed || it == slots.end() ) {
+        return std::nullopt;
+    }
+    // Keep identical padding and SDL_GL_BindTexture scale as the live
+    // colour atlas: same per-material UVs across all three atlas textures.
+    const float x = ( it->second % slots_per_row ) * slot_size;
+    const float y = ( it->second / slots_per_row ) * slot_size;
+    return uv_rect{ ( x + 2.5f ) / atlas_size * texture_width,
+                    ( y + 2.5f ) / atlas_size * texture_height,
+                    ( x + slot_size - 2.5f ) / atlas_size * texture_width,
+                    ( y + slot_size - 2.5f ) / atlas_size * texture_height };
+}
+
+const fp3d_material_aux::maps *auxiliary( const std::string &id )
+{
+    // No GPU-side effects until a caller explicitly requests PBR data.
+    const auto cached = auxiliary_cache.find( id );
+    if( cached != auxiliary_cache.end() ) {
+        return &cached->second;
+    }
+    const auto index = slots.find( id );
+    if( index == slots.end() || !atlas || failed || bound || !renderer_owner ||
+        !*renderer_owner ) {
+        return nullptr;
+    }
+    SDL_Renderer *renderer = renderer_owner->get();
+    saved_renderer_state saved( renderer );
+    if( SDL_SetRenderTarget( renderer, atlas.get() ) != 0 ) {
+        return nullptr;
+    }
+    // Reading this *one* existing 64x64 atlas tile is deliberately lazy:
+    // no 2048x2048 framebuffer readback on startup or every 3D frame.
+    const SDL_Rect region{ static_cast<int>( index->second % slots_per_row ) * slot_size,
+                           static_cast<int>( index->second / slots_per_row ) * slot_size,
+                           slot_size, slot_size };
+    std::array<std::uint8_t, slot_size * slot_size * 4> pixels{};
+    SDL_RenderFlush( renderer );
+    if( SDL_RenderReadPixels( renderer, &region, SDL_PIXELFORMAT_RGBA32,
+                              pixels.data(), slot_size * 4 ) != 0 ) {
+        DebugLog( D_WARNING, D_MAIN ) << "fp3d: auxiliary texture sampling unavailable: "
+                                       << SDL_GetError();
+        return nullptr;
+    }
+    const auto inserted = auxiliary_cache.emplace( id,
+                          fp3d_material_aux::generate( id, pixels.data(),
+                                  slot_size, slot_size, slot_size * 4 ) );
+    return &inserted.first->second;
+}
+
+unsigned prefetch_auxiliary( unsigned budget )
+{
+    unsigned generated = 0;
+    // Deterministic traversal; retry a failed read only after a tileset reset,
+    // not on every idle game frame.
+    while( auxiliary_cursor < slot_keys.size() && generated < budget ) {
+        const std::string &id = slot_keys[auxiliary_cursor++];
+        const auto material = fp3d_material_aux::classify( id );
+        // Sprite cutouts, water, sky, or unknown keys need no invented bump.
+        if( material.normal_strength == 0.0f && material.metallic == 0.0f ) {
+            continue;
+        }
+        if( auxiliary( id ) ) {
+            ++generated;
+        }
+    }
+    return generated;
+}
+
+std::vector<auxiliary_tile> auxiliary_tiles()
+{
+    std::vector<auxiliary_tile> result;
+    result.reserve( auxiliary_cache.size() );
+    for( const auto &id : slot_keys ) {
+        const auto slot = slots.find( id );
+        const auto tile = auxiliary_cache.find( id );
+        if( slot != slots.end() && tile != auxiliary_cache.end() &&
+            tile->second.width == slot_size && tile->second.height == slot_size ) {
+            result.push_back( { slot->second, &tile->second } );
+        }
+    }
+    return result;
 }
 
 furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
@@ -1336,6 +1433,9 @@ void release()
     unbind();
     atlas.reset();
     slots.clear();
+    slot_keys.clear();
+    auxiliary_cursor = 0;
+    auxiliary_cache.clear();
     vehicle_colors.clear();
     selected.reset();
     renderer_owner = nullptr;

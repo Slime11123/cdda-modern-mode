@@ -1086,6 +1086,29 @@ static void draw_fp3d_hud()
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 255 );
     SDL_RenderDrawLine( renderer.get(), compass_x + compass_width / 2, top + font->height + pad,
                         compass_x + compass_width / 2, top + compass_box.h - 2 );
+    // Colored X symbols show the bearings of saved overmap notes. A marker
+    // outside the visible 84-degree compass arc stays pinned at the relevant edge.
+    // The nearest six markers are shown to prevent a crowded compass.
+    for( const auto &marker : hud.map_markers ) {
+        const float delta = std::remainder( marker.heading - heading, 360.0f );
+        const float clipped_delta = std::clamp( delta, -41.0f, 41.0f );
+        const int marker_x = compass_x + compass_width / 2 +
+                             static_cast<int>( clipped_delta / 84.0f * compass_width );
+        const int marker_y = top + compass_box.h - pad - 6;
+        const int arm = std::max( 3, pad / 2 );
+        SDL_SetRenderDrawColor( renderer.get(), 5, 5, 5, 255 );
+        for( int extra = -1; extra <= 1; ++extra ) {
+            SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y - arm + extra,
+                                marker_x + arm, marker_y + arm + extra );
+            SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y + arm + extra,
+                                marker_x + arm, marker_y - arm + extra );
+        }
+        SDL_SetRenderDrawColor( renderer.get(), marker.red, marker.green, marker.blue, 255 );
+        SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y - arm,
+                            marker_x + arm, marker_y + arm );
+        SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y + arm,
+                            marker_x + arm, marker_y - arm );
+    }
 
     for( int i = 0; i < 8; ++i ) {
         SDL_Rect slot{ hotbar_x + i * ( slot_size + slot_gap ), hotbar_y, slot_size, slot_size };

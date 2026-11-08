@@ -7,6 +7,7 @@
 #include "catacharset.h"
 #include "creature_tracker.h"
 #include "fp3d_inventory.h"
+#include "fp3d_map.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_targeting.h"
 #include "item.h"
@@ -239,6 +240,20 @@ data capture( avatar &you )
                                                     static_cast<float>( -offset.y() ) ) * 180 / 3.14159265f;
             result.navigation_distance = square_dist( destination.xy(), you.pos_abs_omt().xy() );
             result.navigation_z = offset.z();
+        }
+    }
+    if( show_navigation ) {
+        const tripoint_abs_omt player = you.pos_abs_omt();
+        for( const fp3d_map::compass_marker &marker : fp3d_map::compass_markers( player ) ) {
+            const auto offset = marker.position - player;
+            if( offset.x() == 0 && offset.y() == 0 ) {
+                continue;
+            }
+            const float bearing = std::atan2( static_cast<float>( offset.x() ),
+                                             static_cast<float>( -offset.y() ) ) * 180.0f / 3.14159265f;
+            result.map_markers.push_back( { bearing,
+                                            square_dist( marker.position.xy(), player.xy() ),
+                                            marker.tint.red, marker.tint.green, marker.tint.blue } );
         }
     }
     return result;

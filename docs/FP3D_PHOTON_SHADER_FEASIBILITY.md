@@ -90,4 +90,4 @@
 
 已在当前开发源码中实现第一批可编程后处理、HDR+可采样深度目标、原生 GLSL 后处理包扫描及 ZIP 加载、Minecraft 风格 F5/F6 列表、质量档位、关闭/编译失败回退，以及使用原版太阳/月光快照驱动的场景光源方向和强度。实际变更和 OpenGL 测试记录见 [FP3D_SHADERPACKS_IMPLEMENTATION.md](FP3D_SHADERPACKS_IMPLEMENTATION.md)。
 
-仍未实现 Photon/Iris 的完整 ZIP 直接兼容，也尚未完成原计划 P3 的正统阴影贴图/PCF、P4 的体积光/SSR、P5 的完整 PBR/TAA 与 P6 的性能及多设备验收。不要把当前“光影包选择器 + CDDA 后处理包”描述成“完整 Photon 光影已移植”。开发源码仍保持与现有 2D/3D 切换、游戏规则和现有图块包兼容；所有实机与 GPU 断言以对应 QA 日志为准。
+后续同日的更新已经推进到 P3 双级太阳阴影与 3×3 PCF、P4 屏幕空间 SSR 和阴影遮挡体积阳光；v18 处理了近墙假阴影，v6b 修复了雨天道路反射格子裂缝。但完整逐材质法线/PBR、时域历史稳定性、原版 Iris/Photon 多 Pass 兼容及 P6 全帧性能/多设备验收仍未完成。不能把 CDDA 的 Photon 视觉桥描述成“原版 Photon 已完整移植”；所有验证仅对相应场景和 QA 日志成立。**继续开发的工单、依赖顺序与验收标准请以 [FP3D_PHOTON_NEXT_PHASE_PLAN_20261108.md](FP3D_PHOTON_NEXT_PHASE_PLAN_20261108.md) 为准。**

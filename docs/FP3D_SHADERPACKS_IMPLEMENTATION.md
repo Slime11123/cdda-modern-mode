@@ -182,3 +182,15 @@ QA 图片截断曾来自 SDL 遗留的 GL_PACK_ROW_LENGTH；现在仅在截图�
 ## 2026-11-08 v4 室内外日照与 Photon 连续性修复
 
 太阳深度阴影、SSR、8 步体积光不再被玩家是否处于室外整屏禁用；全场 ambient 不再按玩家跨门槛跳变。把实际天空是否可见与玩家是否在室外分开。测试中的真实 Photon v1.4 游戏画面在 QA 模拟室内标志后，太阳阴影仍有效且窗外道路平均亮度比 1.000。完整说明与限制见 docs/FP3D_INDOOR_OUTDOOR_DAYLIGHT_FIX.md。
+
+## 2026-11-08 后续 P3–P6 实施计划入口
+
+本文件记录已经完成的源码/QA；后续**尚未实施**的任务、依赖链、材质法线与 PBR 接入方式、SSR 时域稳定性、质量档预算及完整验收标准，请参阅 [FP3D_PHOTON_NEXT_PHASE_PLAN_20261108.md](FP3D_PHOTON_NEXT_PHASE_PLAN_20261108.md)。新增计划本身不构成游戏源码、渲染效果或发行包更新。
+
+## 2026-11-08 P5 材质 GPU atlas 验证
+
+新增仅用于隔离 QA 的逐图块 GPU Normal/ORM atlas、真实 GL texel 读回和预览采样，已通过 Windows ENABLE_FP3D=ON 构建与 Photon v1.4 Ultra 的独立测试。这是未来 PBR 管线的输入准备，并**非**正式材质法线光照已经实现。具体代码、GPU 验收、预览和限制参见 [FP3D_PHOTON_P5_GPU_ATLAS_EXECUTION_20261108.md](FP3D_PHOTON_P5_GPU_ATLAS_EXECUTION_20261108.md)。
+
+## 2026-11-09 P5-B Surface 属性通道实机验证
+
+已新增只用于隔离 QA 的世界空间法线/粗糙度输出 FBO，通过可见墙面和地面的原场景深度遮挡、图块 UV、GPU Normal/ORM atlas 与 GLSL 1.20 采样生成。真实 Photon v1.4 Ultra 测试通过，但含全帧 GPU→CPU 读回时每次 15–68ms，**尚未进入正式玩家 PBR 光照路径**。具体见 [FP3D_PHOTON_P5_SURFACE_PASS_EXECUTION_20261109.md](FP3D_PHOTON_P5_SURFACE_PASS_EXECUTION_20261109.md)。

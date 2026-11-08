@@ -30,6 +30,8 @@
 #include "imgui/imgui.h"
 #include "fp3d_inventory.h"
 #include "fp3d_materials.h"
+#include "fp3d_material_gpu.h"
+#include "fp3d_surface_pass.h"
 #include "fp3d_shaderpacks.h"
 #include "fp3d_shadow.h"
 #include "fp3d_scene.h"
@@ -1080,6 +1082,16 @@ void compose()
         prepared_generation = latest_scene->render_generation;
         prepared_material_revision = fp3d_materials::revision();
     }
+    // Experimental P5 GPU atlases only in isolated screenshot QA. CPU readback
+    // must happen while SDL still owns its renderer (before GL compositing).
+    const bool qa_material_gpu = latest_scene &&
+                                 env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+                                 env_enabled( "CDDA_FP3D_QA_MATERIAL_GPU" );
+    if( qa_material_gpu ) {
+        fp3d_materials::prefetch_auxiliary( 32 );
+    }
+    const auto material_tiles = qa_material_gpu ? fp3d_materials::auxiliary_tiles() :
+                                std::vector<fp3d_materials::auxiliary_tile>{};
     if( SDL_RenderFlush( renderer ) != 0 || SDL_GL_GetCurrentContext() != context ) {
         disable( "flush failed or renderer context changed" );
         return;
@@ -1093,8 +1105,18 @@ void compose()
     if( SDL_GetRendererOutputSize( renderer, &width, &height ) != 0 || width <= 0 || height <= 0 ) {
         return;
     }
+    bool qa_material_gpu_verified = false;
+    bool qa_material_previewed = false;
+    bool qa_surface_previewed = false;
+    fp3d_surface_pass::result qa_surface;
     {
         saved_gl_state saved;
+        if( qa_material_gpu && !material_tiles.empty() &&
+            fp3d_material_gpu::sync( fp3d_materials::revision(), material_tiles ) ) {
+            // Real OpenGL pixel readback checks two atlas textures. No shader
+            // input or colour changes until the separate surface-Pass stage.
+            qa_material_gpu_verified = fp3d_material_gpu::verify_texels( material_tiles );
+        }
         if( latest_scene ) {
             // Optional viewpoint override for screenshots of isolated QA saves
             // that spawn facing an opaque wall. Never active in normal games.
@@ -1259,6 +1281,22 @@ void compose()
                               offset, construction_preview, interaction_available( aim ),
                               held_swing.amount( SDL_GetTicks() ), aim );
             fp3d_materials::unbind();
+            if( qa_material_gpu_verified && depth_texture &&
+                env_enabled( "CDDA_FP3D_QA_MATERIAL_SURFACE" ) ) {
+                qa_surface = fp3d_surface_pass::render( *latest_scene, yaw, pitch,
+                    static_cast<float>( texture_width ) / texture_height,
+                    frame_camera, texture_width, texture_height, depth_texture,
+                    fp3d_material_gpu::current().normal,
+                    fp3d_material_gpu::current().orm );
+                if( qa_surface.valid &&
+                    env_enabled( "CDDA_FP3D_QA_SURFACE_PREVIEW" ) ) {
+                    qa_surface_previewed = fp3d_surface_pass::draw_qa_preview();
+                }
+            }
+            if( qa_material_gpu_verified &&
+                env_enabled( "CDDA_FP3D_QA_MATERIAL_PREVIEW" ) ) {
+                qa_material_previewed = fp3d_material_gpu::draw_qa_preview( material_tiles );
+            }
             // Material-aware SSR mask: render only visible native water/road
             // tiles, with original world depth attached read-only. Neither
             // colour nor the existing scene depth can be overwritten here.
@@ -1516,6 +1554,21 @@ void compose()
                     << " reflective_mask_error=" << qa_mask_error
                     << " vehicles=" << latest_scene->vehicles.size()
                     << " vehicle_parts=" << latest_scene->visible_vehicle_parts
+                    << " material_aux_uploaded=" << fp3d_material_gpu::current().uploaded
+                    << " material_aux_normal_tex=" << fp3d_material_gpu::current().normal
+                    << " material_aux_orm_tex=" << fp3d_material_gpu::current().orm
+                    << " material_aux_verified=" << static_cast<int>( qa_material_gpu_verified )
+                    << " material_aux_previewed=" << static_cast<int>( qa_material_previewed )
+                    << " surface_fbo=" << qa_surface.framebuffer
+                    << " surface_texture=" << qa_surface.texture
+                    << " surface_valid=" << static_cast<int>( qa_surface.valid )
+                    << " surface_floors=" << qa_surface.floors
+                    << " surface_wall_faces=" << qa_surface.wall_faces
+                    << " surface_covered_pixels=" << qa_surface.covered_pixels
+                    << " surface_upward_pixels=" << qa_surface.upward_pixels
+                    << " surface_wall_pixels=" << qa_surface.upright_wall_pixels
+                    << " surface_cpu_readback_ms=" << qa_surface.cpu_readback_ms
+                    << " surface_previewed=" << static_cast<int>( qa_surface_previewed )
                     << " daylight=" << latest_scene->sky.daylight
                     << " sun_y=" << latest_scene->sky.sun_y
                     << " sky_visible=" << latest_scene->sky.visible
@@ -1623,6 +1676,8 @@ void release()
         if( renderer ) {
             SDL_RenderFlush( renderer );
         }
+        fp3d_surface_pass::release();
+        fp3d_material_gpu::release();
         fp3d_shaderpacks::release();
         fp3d_shadow::release();
         fp3d_scene::release();
