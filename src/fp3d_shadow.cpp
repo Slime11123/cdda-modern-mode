@@ -167,6 +167,60 @@ void wall_run( float x, float z, float bottom, float top,
     glPopMatrix();
 }
 
+// The native radio tower is an open red/grey steel lattice, NOT a solid
+// one-metre obstruction. Its caster must match the thin beams in
+// fp3d_scene::radio_tower_geometry; otherwise Ultra draws large black
+// rectangles on every walkway and on the tower itself.
+void radio_tower_shadow( float x, float z, float bottom, float top )
+{
+    constexpr float half = .34f;
+    const float height = top - bottom;
+    const auto beam = [&]( float x0, float y0, float z0,
+                           float x1, float y1, float z1, float thickness ) {
+        const float dx = x1 - x0;
+        const float dy = y1 - y0;
+        const float dz = z1 - z0;
+        const float horizontal = std::hypot( dx, dz );
+        const float length = std::hypot( horizontal, dy );
+        if( length < .0001f ) {
+            return;
+        }
+        glPushMatrix();
+        glTranslatef( x + ( x0 + x1 ) * .5f,
+                      bottom + ( y0 + y1 ) * .5f,
+                      z + ( z0 + z1 ) * .5f );
+        if( horizontal > .0001f ) {
+            glRotatef( std::atan2( horizontal, dy ) * 180.f / 3.14159265f,
+                       dz, 0, -dx );
+        }
+        glScalef( thickness, length, thickness );
+        box( 0, 0, -.5f, .5f );
+        glPopMatrix();
+    };
+    for( const float sx : { -half, half } ) {
+        for( const float sz : { -half, half } ) {
+            beam( sx, 0, sz, sx, height, sz, .075f );
+        }
+    }
+    for( int level = 0; level <= 2; ++level ) {
+        const float y = height * level / 2.f;
+        for( const float side : { -half, half } ) {
+            beam( -half, y, side, half, y, side, .052f );
+            beam( side, y, -half, side, y, half, .052f );
+        }
+    }
+    for( int level = 0; level < 2; ++level ) {
+        const float lo = height * level / 2.f;
+        const float hi = height * ( level + 1 ) / 2.f;
+        for( const float side : { -half, half } ) {
+            beam( -half, lo, side, half, hi, side, .041f );
+            beam( half, lo, side, -half, hi, side, .041f );
+            beam( side, lo, -half, side, hi, half, .041f );
+            beam( side, lo, half, side, hi, -half, .041f );
+        }
+    }
+}
+
 // Match the scene's 16-sided pole geometry instead of giving a thin lamp
 // post a wide square shadow. Both box and cylinder read the SAME native
 // furniture part data as the player's actual 3D scene.
@@ -371,9 +425,13 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
                 glPopMatrix();
             }
             glPopMatrix();
+        } else if( !qa_only_props && cell.terrain == "t_radio_tower" ) {
+            // Match the visible, transparent steel tower; NEVER cast an
+            // opaque one-metre cube from its native obstacle category.
+            radio_tower_shadow( x, z, bottom, top );
         } else if( !qa_only_props &&
                    cell.kind == fp3d_snapshot::terrain_kind::obstacle ) {
-            // Actual native 3D terrain obstacle uses a .98-m box 1-m tall.
+            // Other solid native obstacles retain their box shadow.
             box( x, z, bottom, bottom + 1.0f, .49f );
         }
         if( cell.furniture && !qa_suppress_props ) {
@@ -411,6 +469,9 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
         // same mask, otherwise an invisible slab still casts dark footprints.
         // Do not invent occluding upper floors from unknown map cells.
         if( !qa_only_props && cell.ceiling_present && !cell.open_air &&
+            // A tower is open lattice and has NO full-width ceiling mesh.
+            // Its steel members already cast their individual shadows.
+            cell.terrain != "t_radio_tower" &&
             // Tree crowns have sparse branches rather than an opaque roof.
             // Never cast a full-tile shadow from an invisible canopy slab.
             cell.terrain.compare( 0, 9, "t_treetop" ) != 0 &&

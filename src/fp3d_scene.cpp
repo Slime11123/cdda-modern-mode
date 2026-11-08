@@ -19,6 +19,7 @@
 #endif
 
 #include "fp3d_snapshot.h"
+#include "fp3d_compositor.h"
 #include "fp3d_materials.h"
 #include "fp3d_shaderpacks.h"
 #include "fp3d_vehicle_renderer.h"
@@ -48,9 +49,31 @@ void floor( float x, float z, float y, const std::optional<fp3d_materials::uv_re
     glEnd();
 }
 
+// Metal gratings have no direct sunlight on their lower face; fixed-function
+// downward normals previously made alternate underside tiles nearly black.
+// Use a modest, daylight-dependent bounced term on exposed metal only.
+// Keep every other material under the ordinary world lighting model.
+void floor_underside( float x, float z, float height,
+                      const std::optional<fp3d_materials::uv_rect> &material,
+                      bool metal, float brightness, float daylight )
+{
+    glPushAttrib( GL_ENABLE_BIT | GL_CURRENT_BIT );
+    if( metal ) {
+        glDisable( GL_LIGHTING );
+        const float bounce = brightness * ( .18f + .44f * std::clamp( daylight, 0.f, 1.f ) );
+        glColor3f( bounce, bounce, bounce );
+    }
+    glPushMatrix();
+    glTranslatef( x, height, z );
+    glRotatef( 180, 1, 0, 0 );
+    floor( 0, 0, 0, material );
+    glPopMatrix();
+    glPopAttrib();
+}
+
 void box( float x, float z, float width, float depth, float bottom, float top,
           const std::optional<fp3d_materials::uv_rect> &material, bool tile_sides = false,
-          const fp3d_materials::furniture_uv *faces = nullptr )
+          const fp3d_materials::furniture_uv *faces = nullptr, bool draw_top = true )
 {
     const float l = x - width / 2;
     const float r = x + width / 2;
@@ -64,15 +87,21 @@ void box( float x, float z, float width, float depth, float bottom, float top,
         glDisable( GL_TEXTURE_2D );
     }
     glBegin( GL_QUADS );
-    glNormal3f( 0, 1, 0 );
-    glTexCoord2f( uv.left, uv.top );
-    glVertex3f( l, top, n );
-    glTexCoord2f( uv.left, uv.bottom );
-    glVertex3f( l, top, s );
-    glTexCoord2f( uv.right, uv.bottom );
-    glVertex3f( r, top, s );
-    glTexCoord2f( uv.right, uv.top );
-    glVertex3f( r, top, n );
+    // A floor slab owns its top; its separate reversed floor() draws only
+    // the underside. A wall, lintel or door reaching the next storey has
+    // no exposed top where an upper floor already occupies that plane.
+    // Suppress only those covered caps to prevent coplanar Z-fighting.
+    if( draw_top ) {
+        glNormal3f( 0, 1, 0 );
+        glTexCoord2f( uv.left, uv.top );
+        glVertex3f( l, top, n );
+        glTexCoord2f( uv.left, uv.bottom );
+        glVertex3f( l, top, s );
+        glTexCoord2f( uv.right, uv.bottom );
+        glVertex3f( r, top, s );
+        glTexCoord2f( uv.right, uv.top );
+        glVertex3f( r, top, n );
+    }
     const auto side = [&]( float x0, float z0, float x1, float z1, bool front = false,
                           bool back = false ) {
         const auto side_uv = faces ? ( front ? faces->front :
@@ -583,7 +612,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const std::array<float, 4> *tint = nullptr, bool defer_storage = false,
                 unsigned furniture_facing = 0, const std::array<bool, 4> &fence_neighbours = {},
                 unsigned climb_facing = 0, bool hide_vehicle_roof_ghost = false,
-                bool lower_storey_memory = false )
+                bool lower_storey_memory = false, bool metal_walkway_railing = false,
+                float daylight = .5f )
 {
     const auto color = [&]( float r, float g, float b ) {
         if( tint ) {
@@ -633,18 +663,21 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                                  ( below && below->goes_up ) );
     // V8: omit the phantom upper level sheet only where a native car
     // stands on an exposed road and its overhead support is isolated.
-    // A radio tower stacked through z-levels has open steelwork between floors.
-    // This is presentation-only; the native tower remains impassable.
-    const bool tower_floor_gap = tile.terrain == "t_radio_tower" &&
-                                 below && below->terrain == "t_radio_tower";
+    // The radio tower is impassable OPEN steel lattice at every storey,
+    // including its first and last. Native has_floor() is not evidence of
+    // a solid platform here: never draw a whole concrete slab over the X
+    // bracing, regardless of whether another tower tile is in the snapshot.
+    const bool tower_floor_gap = tile.terrain == "t_radio_tower";
     const bool tower_ceiling_gap = tile.terrain == "t_radio_tower" &&
                                    above && above->terrain == "t_radio_tower";
+    const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
     if( tile.floor_present && !treetop && !hide_vehicle_roof_ghost &&
         !tile.is_ramp && !stair_opening && !tower_floor_gap ) {
-        // The 2D chain gate/tower sprites contain fake shadow/perspective
-        // art. Keep a neutral native floor, not a giant top-down X decal.
-        const auto floor_material = tile.terrain == "t_radio_tower" ?
-                                    fp3d_materials::lookup( "t_concrete" ) :
+        // A railing on a metal tower deck rests on the SAME metal sheet,
+        // not a full dirt-coloured square around each wooden rail. Standalone
+        // railings elsewhere keep their native floor appearance.
+        const auto floor_material = metal_walkway_railing ?
+                                    fp3d_materials::lookup( "t_metal_floor_no_roof" ) :
                                     fp3d_snapshot::is_chain_gate( tile.terrain ) ?
                                     fp3d_materials::lookup( "t_dirt" ) :
                                     door ? fp3d_materials::lookup( "t_floor" ) : material;
@@ -655,12 +688,11 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         const float width = 1.0f;
         const float center = x;
         box( center, z, width, 1, -.08f, 0, floor_material );
-        glPushMatrix();
-        glTranslatef( center, -.08f, z );
-        glScalef( width, 1, 1 );
-        glRotatef( 180, 1, 0, 0 );
-        floor( 0, 0, 0, floor_material );
-        glPopMatrix();
+        const bool metal_surface = tile.terrain == "t_metal_floor_no_roof" ||
+                                   tile.terrain == "t_floor_metal_gangway" ||
+                                   metal_walkway_railing;
+        floor_underside( center, z, -.08f, floor_material,
+                         metal_surface, brightness, daylight );
         if( !tile.blood.empty() ) {
             if( const auto blood = fp3d_materials::lookup( "$blood:" + tile.blood ) ) {
                 glEnable( GL_BLEND );
@@ -678,7 +710,6 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             }
         }
     }
-    const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
     if( tile.ceiling_present && !upper_floor_surface && !treetop &&
         !( tile.vegetation == tile.terrain && tile.vegetation_height >= 4.0f ) &&
         !hide_vehicle_roof_ghost && !tower_ceiling_gap &&
@@ -690,11 +721,10 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                                    tile.ceiling_surface.empty() ? "t_floor" :
                                    tile.ceiling_surface );
         color( brightness, brightness, brightness );
-        glPushMatrix();
-        glTranslatef( x, fp3d_camera::floor_height - .08f, z );
-        glRotatef( 180, 1, 0, 0 );
-        floor( 0, 0, 0, underside );
-        glPopMatrix();
+        const bool overhead_metal = tile.ceiling_surface == "t_metal_floor_no_roof" ||
+                                    tile.ceiling_surface == "t_floor_metal_gangway";
+        floor_underside( x, z, fp3d_camera::floor_height - .08f, underside,
+                         overhead_metal, brightness, daylight );
     }
     if( treetop ) {
         // Use the corresponding original tree art, not a synthesized 3D
@@ -897,8 +927,12 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         if( material ) {
             color( brightness, brightness, brightness );
         }
+        // When the next storey's floor is present, it owns the exact
+        // shared y=2.2 surface. Keep all upright wall faces but not the
+        // hidden coplanar cap that would flicker as the view moves.
         box( x, z, .98f, .98f, 0, tile.kind == kind::wall ? fp3d_camera::floor_height : 1.0f,
-             material, tile.kind == kind::wall );
+             material, tile.kind == kind::wall, nullptr,
+             tile.kind != kind::wall || !upper_floor_surface );
     } else if( tile.kind == kind::window ) {
         const auto surround = fp3d_materials::lookup( wall_surface );
         color( brightness, brightness, brightness );
@@ -908,7 +942,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             glRotatef( 90, 0, 1, 0 );
         }
         box( 0, 0, 1, .18f, 0, .9f, surround, true );
-        box( 0, 0, 1, .18f, 2.1f, fp3d_camera::floor_height, surround, true );
+        box( 0, 0, 1, .18f, 2.1f, fp3d_camera::floor_height, surround, true,
+             nullptr, !upper_floor_surface );
         box( -.46f, 0, .08f, .22f, .9f, 2.1f, surround, true );
         box( .46f, 0, .08f, .22f, .9f, 2.1f, surround, true );
         // The box primitive has no bottom, so close the lintel underside.
@@ -940,9 +975,14 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
             glRotatef( 90, 0, 1, 0 );
         }
         for( const auto &part : fp3d_snapshot::door_parts( tile.kind ) ) {
+            // Only parts that reach the actual upper-storey floor share its
+            // horizontal plane. Keep lower door handles and broken-panel caps.
+            const bool cap_part = !upper_floor_surface ||
+                                  part.top < fp3d_camera::floor_height - .001f;
             if( tile.kind == kind::glass ) {
                 color( brightness * .46f, brightness * .52f, brightness * .56f );
-                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, std::nullopt );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                     std::nullopt, false, nullptr, cap_part );
             } else if( tile.kind == kind::damaged_door && material ) {
                 // Map each surviving piece to its region of the original door art.
                 const float u = material->right - material->left;
@@ -954,9 +994,11 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                     material->bottom - v * part.bottom / fp3d_camera::floor_height
                 };
                 const fp3d_materials::furniture_uv faces{ front, front, front };
-                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, material, false, &faces );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                     material, false, &faces, cap_part );
             } else {
-                box( part.x, part.z, part.width, part.depth, part.bottom, part.top, material );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                     material, false, nullptr, cap_part );
             }
         }
         glPopMatrix();
@@ -1389,6 +1431,11 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                          tile->kind == fp3d_snapshot::terrain_kind::glass ||
                          tile->kind == fp3d_snapshot::terrain_kind::window );
     };
+    const auto metal_walkway_railing = []( const fp3d_snapshot::cell &tile ) {
+        // Resolve the material from the owned snapshot, not from the subset
+        // of upper-level neighbours currently admitted by native LOS.
+        return tile.metal_deck_railing;
+    };
     // Floor z+1 is 2.2 m, only 0.27 m above a V7 car's 1.93 m roof.
     // An isolated native floor/ceiling at that elevation appears as a
     // dark wooden floating polygon. Only a real, intact vehicle roof on
@@ -1640,6 +1687,12 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             for( const auto *tile : chunk.tiles ) {
                 hash_value( signature, std::hash<tripoint_abs_ms> {}( tile->position ) );
                 hash_value( signature, std::hash<std::string> {}( tile->terrain ) );
+                // The metal-underside bounce is compiled into this chunk.
+                // Rebuild when daylight changes, as well as when the native
+                // structural material classification changes.
+                hash_value( signature, static_cast<int>(
+                                std::clamp( scene.sky.daylight, 0.f, 1.f ) * 100.f ) );
+                hash_value( signature, metal_walkway_railing( *tile ) );
                 hash_value( signature, std::hash<std::string> {}( tile->ceiling_surface ) );
                 hash_value( signature, std::hash<std::string> {}( tile->vegetation ) );
                 hash_value( signature, std::hash<std::string> {}( tile->blood ) );
@@ -1715,7 +1768,8 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                                climb_facing( *tile ),
                                vehicle_roof_ghosts.count( tile->position ) != 0,
                                tile->known == fp3d_snapshot::knowledge::remembered &&
-                               tile->position.z() < scene.origin.z() );
+                               tile->position.z() < scene.origin.z(),
+                               metal_walkway_railing( *tile ), scene.sky.daylight );
                 }
                 if( mesh.list ) {
                     glEndList();
@@ -1798,9 +1852,11 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             return;
         }
         const auto material = fp3d_materials::lookup( fp3d_materials::sprite_key( image ) );
+        const float flash = image.kind == fp3d_snapshot::sprite_kind::monster ?
+                            fp3d_compositor::hit_flash( image.position ) : 0.0f;
         if( material ) {
             glEnable( GL_TEXTURE_2D );
-            glColor3f( .9f, .9f, .9f );
+            glColor3f( .9f + flash * .1f, .9f - flash * .60f, .9f - flash * .60f );
         } else {
             glDisable( GL_TEXTURE_2D );
             glColor3f( .8f, .25f, .7f );
@@ -1896,7 +1952,65 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 glColor3f( .8f, .25f, .7f );
             }
         }
+        if( flash > 0.0f && material ) {
+            // Preserve the native sprite silhouette; tint the cut-out itself,
+            // not an opaque red rectangle around the zombie.
+            glDisable( GL_LIGHTING );
+            glColor3f( 1.0f, .9f - .72f * flash, .9f - .72f * flash );
+        }
         quad( 0, 0 );
+        if( flash > 0.0f && material ) {
+            glColor3f( .9f, .9f, .9f );
+            glEnable( GL_LIGHTING );
+        }
+        // Status badges are independent cut-out billboards, not part of the
+        // creature texture. They follow native perception and the active pack.
+        unsigned displayed = 0;
+        const auto draw_badge = [&]( const std::string &badge ) {
+            if( displayed >= 4 ) {
+                return;
+            }
+            const auto icon = fp3d_materials::lookup( "$status:" + badge );
+            if( !icon ) {
+                return; // Missing native tileset art is not a purple tile.
+            }
+            constexpr float size = .30f;
+            const float side = image.height * .33f + displayed * ( size + .02f );
+            const float cx = x + right_x * side;
+            const float cz = z + right_z * side;
+            const float rise = image.height + .16f;
+            const float dx_icon = right_x * size * .5f;
+            const float dz_icon = right_z * size * .5f;
+            glDisable( GL_LIGHTING );
+            glEnable( GL_TEXTURE_2D );
+            glColor3f( 1.0f, 1.0f, 1.0f );
+            glDepthMask( GL_FALSE );
+            glBegin( GL_QUADS );
+            glTexCoord2f( icon->left, icon->bottom );
+            glVertex3f( cx - dx_icon, rise - size * .5f, cz - dz_icon );
+            glTexCoord2f( icon->right, icon->bottom );
+            glVertex3f( cx + dx_icon, rise - size * .5f, cz + dz_icon );
+            glTexCoord2f( icon->right, icon->top );
+            glVertex3f( cx + dx_icon, rise + size * .5f, cz + dz_icon );
+            glTexCoord2f( icon->left, icon->top );
+            glVertex3f( cx - dx_icon, rise + size * .5f, cz - dz_icon );
+            glEnd();
+            glDepthMask( GL_TRUE );
+            glEnable( GL_LIGHTING );
+            ++displayed;
+        };
+        if( image.revivable ) {
+            draw_badge( "zombie_revival_indicator" );
+        }
+        if( image.alerted ) {
+            draw_badge( "overlay_effect_attention" );
+        }
+        if( image.bleeding ) {
+            draw_badge( "overlay_effect_bleed" );
+        }
+        for( const std::string &effect_icon : image.status_icons ) {
+            draw_badge( effect_icon );
+        }
         glPopMatrix();
     };
     const auto storage_item = [&]( const fp3d_snapshot::sprite &image ) {

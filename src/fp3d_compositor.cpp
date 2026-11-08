@@ -88,6 +88,16 @@ fp3d_camera::follower camera;
 fp3d_camera::rider_follower boarded_camera;
 fp3d_camera::swing held_swing;
 bool swing_pending = false;
+struct recent_hit_record {
+    tripoint_abs_ms position;
+    int damage = 0;
+    int hp = 0;
+    int maximum = 0;
+    unsigned at = 0;
+};
+std::vector<recent_hit_record> recent_hits;
+float crouch_eye_offset = 0.0f;
+unsigned crouch_eye_tick = 0;
 std::optional<tripoint_abs_ms> accepted_walk;
 float viewport_x = 0;
 float viewport_y = 0;
@@ -100,10 +110,17 @@ fp3d_camera::offset visual_camera( unsigned now )
     if( !latest_scene ) {
         return {};
     }
-    if( latest_scene->rider && boarded_camera.active() ) {
-        return boarded_camera.relative_to( latest_scene->origin, now );
-    }
-    return camera.relative_to( latest_scene->origin, now );
+    // Native stance controls posture. Smooth only the camera's presentation
+    // offset; physics, aiming and interaction share this exact eye position.
+    const float desired = latest_scene->player_crouching && !latest_scene->rider ? -.43f : 0.0f;
+    const float elapsed = crouch_eye_tick ? std::min( 1.0f, ( now - crouch_eye_tick ) / 135.0f ) : 1.0f;
+    crouch_eye_tick = now;
+    crouch_eye_offset += ( desired - crouch_eye_offset ) * elapsed;
+    fp3d_camera::offset result = latest_scene->rider && boarded_camera.active() ?
+                                 boarded_camera.relative_to( latest_scene->origin, now ) :
+                                 camera.relative_to( latest_scene->origin, now );
+    result.height += crouch_eye_offset;
+    return result;
 }
 
 void sync_mouse()
@@ -912,6 +929,45 @@ void begin_action()
 {
     fp3d_regression::action_boundary();
     accepted_walk.reset();
+}
+
+void record_hit( const tripoint_abs_ms &position, int damage, int hp, int maximum )
+{
+    if( !view_3d() || damage <= 0 ) {
+        return;
+    }
+    const unsigned now = SDL_GetTicks();
+    recent_hits.erase( std::remove_if( recent_hits.begin(), recent_hits.end(), [&]( const auto & hit ) {
+        return now - hit.at > 1250;
+    } ), recent_hits.end() );
+    if( recent_hits.size() >= 8 ) {
+        recent_hits.erase( recent_hits.begin() );
+    }
+    recent_hits.push_back( { position, damage, std::max( 0, hp ), std::max( 1, maximum ), now } );
+}
+
+float hit_flash( const tripoint_abs_ms &position )
+{
+    const unsigned now = SDL_GetTicks();
+    for( auto it = recent_hits.rbegin(); it != recent_hits.rend(); ++it ) {
+        if( it->position == position && now - it->at < 260 ) {
+            return 1.0f - ( now - it->at ) / 260.0f;
+        }
+    }
+    return 0.0f;
+}
+
+std::optional<hit_feedback> latest_hit()
+{
+    if( recent_hits.empty() ) {
+        return std::nullopt;
+    }
+    const auto &last = recent_hits.back();
+    const unsigned elapsed = SDL_GetTicks() - last.at;
+    if( elapsed >= 1250 ) {
+        return std::nullopt;
+    }
+    return hit_feedback{ last.damage, last.hp, last.maximum, elapsed / 1250.0f };
 }
 
 void melee_swing()

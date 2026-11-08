@@ -332,6 +332,15 @@ class flexbuffer_disk_cache
                                        *root_relative_source_path.begin() != std::filesystem::u8path( "achievements" ) &&
                                        *root_relative_source_path.begin() != std::filesystem::u8path( "templates" );
                 if( stale_game_data ) {
+#if defined(ENABLE_FP3D)
+                    // This actively developed 3D build deliberately updates its
+                    // data/raw JSON in place. An old disk flexbuffer is already
+                    // invalidated immediately below and freshly reparsed on the
+                    // same load; it must not interrupt play with a modal error.
+                    // Genuine malformed JSON still raises its normal parse error.
+                    DebugLog( D_WARNING, D_MAIN ) << "fp3d: stale parsed-data cache discarded and regenerated: " <<
+                                                  filepath_and_name;
+#else
                     if( get_option<bool>( "WARN_ON_MODIFIED" ) ) {
                         debugmsg( "Stale game data detected at %s, did you overwrite old files?  When updating the game you must install to a fresh folder, overwriting old files will cause errors.",
                                   filepath_and_name );
@@ -340,6 +349,7 @@ class flexbuffer_disk_cache
                         DebugLog( D_WARNING, D_MAIN ) << "Stale game data detected (error disabled by user): " <<
                                                       filepath_and_name;
                     }
+#endif
                 }
                 // Cached flexbuffer on disk is out of date, remove it.
                 remove_file( disk_entry->second.flexbuffer_path.u8string() );

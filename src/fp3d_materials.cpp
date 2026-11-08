@@ -378,6 +378,49 @@ SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image )
     return icon;
 }
 
+SDL_Texture_Ptr tileset_icon( const std::string &id )
+{
+    if( !selected || !renderer_owner || !*renderer_owner || id.empty() ) {
+        return {};
+    }
+    // Native overmap IDs can carry the om# namespace prefix. Preserve the
+    // actual ID from the map loader, rather than inventing terrain artwork.
+    const std::string name = id.rfind( "om#", 0 ) == 0 ? id.substr( 3 ) : id;
+    const tile_type *tile = nullptr;
+    if( auto found = selected->find_tile_type_by_season( name, season ) ) {
+        tile = &found->tile();
+    } else if( auto found = selected->find_tile_type_by_season( "overmap_terrain_" + name,
+                          season ) ) {
+        tile = &found->tile();
+    }
+    if( !tile ) {
+        return {};
+    }
+    SDL_Renderer *renderer = renderer_owner->get();
+    saved_renderer_state saved( renderer );
+    SDL_Texture_Ptr icon( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA8888,
+                          SDL_TEXTUREACCESS_TARGET, slot_size, slot_size ) );
+    if( !icon || SDL_SetRenderTarget( renderer, icon.get() ) != 0 ) {
+        return {};
+    }
+    SDL_RenderSetLogicalSize( renderer, 0, 0 );
+    SDL_RenderSetScale( renderer, 1, 1 );
+    SDL_RenderSetViewport( renderer, nullptr );
+    SDL_RenderSetClipRect( renderer, nullptr );
+    SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
+    SDL_RenderClear( renderer );
+    const auto sprites = choose_sprites( *tile, name );
+    const SDL_Rect dest{ 0, 0, slot_size, slot_size };
+    const bool painted_bg = paint( sprites.background, dest );
+    const bool painted_fg = paint( sprites.foreground, dest );
+    if( !painted_bg && !painted_fg ) {
+        return {};
+    }
+    SDL_SetTextureBlendMode( icon.get(), SDL_BLENDMODE_BLEND );
+    SDL_RenderFlush( renderer );
+    return icon;
+}
+
 std::string vehicle_key( const fp3d_vehicle::part_view &part )
 {
     return "$vehicle:" + part.id +
@@ -406,9 +449,40 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool fence = false;
         bool vehicle = false;
         std::string vehicle_looks_like = {};
+        bool status = false; // Camera-facing badge using a native tileset icon.
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
+    // Reserve the tiny shared status icons before terrain fills the atlas.
+    // Missing icons in another tileset stay absent rather than purple squares.
+    std::unordered_set<std::string> unique_status_icons;
+    const auto queue_status = [&]( const std::string &icon ) {
+        const std::string key = "$status:" + icon;
+        if( !unique_status_icons.insert( icon ).second || slots.count( key ) ||
+            pending.size() >= max_slots || !selected->find_tile_type( icon ) ) {
+            return;
+        }
+        request entry;
+        entry.key = key;
+        entry.status = true;
+        pending.push_back( std::move( entry ) );
+    };
+    // A badge occupies one shared atlas slot regardless of how many actors
+    // carry that effect. All icons come from the currently selected tileset.
+    for( const auto &image : scene.sprites ) {
+        if( image.revivable ) {
+            queue_status( "zombie_revival_indicator" );
+        }
+        if( image.alerted ) {
+            queue_status( "overlay_effect_attention" );
+        }
+        if( image.bleeding ) {
+            queue_status( "overlay_effect_bleed" );
+        }
+        for( const std::string &icon : image.status_icons ) {
+            queue_status( icon );
+        }
+    }
     const auto prioritize_cell = [&]( const fp3d_snapshot::cell &tile ) {
         if( ( tile.kind == fp3d_snapshot::terrain_kind::ladder ||
               tile.kind == fp3d_snapshot::terrain_kind::downspout ) && pending.size() < max_slots ) {
@@ -513,6 +587,11 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             add( "t_concrete", nullptr );
         } else if( tile.kind == fp3d_snapshot::terrain_kind::downspout || tile.kind == fp3d_snapshot::terrain_kind::fence ) {
             add( "t_dirt", nullptr );
+            if( tile.terrain == "t_railing" ) {
+                // When a railing borders a metal tower deck, its lower
+                // 8cm foundation uses the same metal atlas material.
+                add( "t_metal_floor_no_roof", nullptr );
+            }
         } else if( tile.kind == fp3d_snapshot::terrain_kind::window ) {
             add( "t_floor", nullptr );
             add( "t_wall", nullptr );
@@ -613,7 +692,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
         const bool transparent = entry.image || entry.plant || entry.window || entry.blood ||
-                                 entry.fence || entry.vehicle;
+                                 entry.fence || entry.vehicle || entry.status;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         SDL_RenderFillRect( renderer, &slot );
@@ -673,6 +752,10 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 }
                 name = next;
             }
+        } else if( entry.status ) {
+            if( auto found = selected->find_tile_type_by_season( id.substr( 8 ), season ) ) {
+                tile = &found->tile();
+            }
         } else if( entry.blood ) {
             std::string name = id.substr( 7 );
             for( int tries = 0; tries < 10 && !name.empty(); ++tries ) {
@@ -716,6 +799,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             DebugLog( D_INFO, D_MAIN ) << "fp3d: vehicle part missing in selected tileset: " << id;
             SDL_SetRenderDrawColor( renderer, 115, 122, 127, 255 );
             SDL_RenderFillRect( renderer, &slot );
+        } else if( !painted && entry.status ) {
+            // A tileset can intentionally omit this marker: no magenta fallback.
         } else if( !painted && entry.plant ) {
             // Missing cutout vegetation must stay transparent. An opaque
             // debug checker is not foliage and was especially conspicuous

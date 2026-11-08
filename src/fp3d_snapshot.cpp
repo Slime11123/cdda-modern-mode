@@ -26,6 +26,7 @@
 #include "enums.h"
 #include "field.h"
 #include "field_type.h"
+#include "effect.h"
 #include "fp3d_camera.h"
 #include "item.h"
 #include "item_location.h"
@@ -344,11 +345,18 @@ terrain_kind classify( const std::string &id )
     }
     return definition.movecost == 0 ? terrain_kind::obstacle : terrain_kind::floor;
 }
-sprite describe_creature( const Creature &critter )
+sprite describe_creature( const Creature &critter, const avatar &you, const map &here )
 {
     sprite image;
     image.position = critter.pos_abs();
     image.mirrored = critter.facing == FacingDirection::LEFT;
+    // Copy already-present native effect IDs once; never synthesize gameplay
+    // statuses from damage or reveal unseen actor metadata.
+    std::unordered_set<std::string> active_effects;
+    for( const auto &active : critter.get_effects() ) {
+        active_effects.insert( active.get().get_id().str() );
+    }
+    image.bleeding = active_effects.count( "bleed" ) != 0;
     switch( critter.get_size() ) {
         case creature_size::tiny:
             image.height = .35f;
@@ -374,6 +382,8 @@ sprite describe_creature( const Creature &critter )
         } else {
             image.id = mon->type->id.str();
             image.overlays = mon->get_overlay_ids();
+            // Only mark genuinely aggressive monsters with current native LOS.
+            image.alerted = mon->attitude( &you ) == MATT_ATTACK && mon->sees( here, you );
         }
     } else if( const Character *character = critter.as_character() ) {
         image.kind = sprite_kind::character;
@@ -390,6 +400,74 @@ sprite describe_creature( const Creature &critter )
             image.overlays = character->get_overlay_ids_when_override_look();
         }
     }
+    // The native attention effect can also request the same alert artwork.
+    image.alerted = image.alerted || active_effects.count( "attention" ) != 0;
+    // Map every remaining UndeadPeople effect marker to its exact active
+    // effect ID. The pack-only temp/morale_wet art stays dormant unless an
+    // optional mod actually registers that effect. Urgent effects come first;
+    // four displayed badges per creature avoid long ribbons across the world.
+    static constexpr const char *extra_effects_by_priority[] = {
+        "onfire",
+        "stunned",
+        "downed",
+        "grabbed",
+        "webbed",
+        "poison",
+        "badpoison",
+        "paralyzepoison",
+        "zapped",
+        "shattered",
+        "winded",
+        "hypovolemia",
+        "asthma",
+        "dazed",
+        "fetid_goop",
+        "teargas",
+        "boomered",
+        "spores",
+        "nausea",
+        "flu",
+        "common_cold",
+        "foodpoison",
+        "frostbite",
+        "blisters",
+        "cold",
+        "hot",
+        "glowing",
+        "slimed",
+        "laserlocked",
+        "glare",
+        "snow_glare",
+        "deaf",
+        "visuals",
+        "drunk",
+        "high",
+        "sleep",
+        "shrieking",
+        "pacified",
+        "docile",
+        "pet",
+        "evil",
+        "happy",
+        "sad",
+        "earphones",
+        "playing_instrument",
+        "milked",
+        "bouldering",
+        "teleglow",
+        "morale_wet",
+        "temp"
+    };
+    const unsigned reserved = static_cast<unsigned>( image.alerted ) +
+                              static_cast<unsigned>( image.bleeding );
+    for( const char *id : extra_effects_by_priority ) {
+        if( reserved + image.status_icons.size() >= 4 ) {
+            break;
+        }
+        if( active_effects.count( id ) != 0 ) {
+            image.status_icons.emplace_back( std::string( "overlay_effect_" ) + id );
+        }
+    }
     image.height *= 1.2f;
     return image;
 }
@@ -400,6 +478,8 @@ sprite describe_item( const item &object, const tripoint_abs_ms &position )
     image.position = position;
     image.kind = sprite_kind::item;
     image.id = item_sprite_id( object );
+    // Pulped, skinned and otherwise non-revivable corpses must lose the badge.
+    image.revivable = object.can_revive();
     if( object.has_itype_variant() ) {
         image.variant = object.itype_variant().id;
     }
@@ -432,7 +512,7 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
     // Clear terrain visibility is necessary, but not sufficient for a creature.
     // Keep native concealment checks, but ignore lighting for 3D presentation.
     if( critter && !critter->is_avatar() && you.Creature::sees( here, *critter, true ) ) {
-        sprite image = describe_creature( *critter );
+        sprite image = describe_creature( *critter, you, here );
         if( !image.id.empty() ) {
             scene.sprites.push_back( std::move( image ) );
         }
@@ -749,6 +829,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
     const bool blind = you.is_blind();
     scene_snapshot result;
     result.origin = you.pos_abs();
+    result.player_crouching = you.is_crouching();
     // The player's discrete map cell is for CDDA collision/interactions,
     // not necessarily the centre of a rotating 3D passenger seat. Publish
     // the exact native mount transformed by the same rigid vehicle root
@@ -980,6 +1061,27 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
             }
         }
     }
+    // Treat the structural floor under an outdoor railing as metal when it
+    // actually touches a metal walkway. Determining this from real terrain
+    // once, at snapshot time, avoids material changes as the upper-level
+    // visibility cache flickers while the camera rotates.
+    const auto metal_rail = [&]( const tripoint_bub_ms &p ) {
+        if( !here.inbounds( p ) || here.ter( p ).id().str() != "t_railing" ) {
+            return false;
+        }
+        for( const auto &dir : { tripoint_rel_ms::north, tripoint_rel_ms::south,
+                tripoint_rel_ms::east, tripoint_rel_ms::west } ) {
+            const auto n = p + dir;
+            if( !here.inbounds( n ) ) {
+                continue;
+            }
+            const std::string id = here.ter( n ).id().str();
+            if( id == "t_metal_floor_no_roof" || id == "t_floor_metal_gangway" ) {
+                return true;
+            }
+        }
+        return false;
+    };
     result.cells.reserve( ( radius * 2 + 1 ) * ( radius * 2 + 1 ) );
     for( int z = result.min_z; z <= result.max_z; ++z ) {
         for( int dy = -radius; dy <= radius; ++dy ) {
@@ -1040,6 +1142,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                         const std::string id = here.ter( p ).id().str();
                         return id == "t_radio_tower" || id == "t_railing" ||
                                id == "t_metal_floor_no_roof" ||
+                               id == "t_floor_metal_gangway" ||
                                id == "t_ladder_up_down" ||
                                id == "t_ladder_up" || id == "t_ladder_down";
                     } )();
@@ -1056,7 +1159,28 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                     !you.cant_see( p ) &&
                     square_dist( player, p ) <= you.unimpaired_range() &&
                     here.has_floor( p );
-                if( upper_floor_boundary && !tower_exterior_surface ) {
+                // Do not turn unseen upper radio-tower metal, railings or
+                // open lattice into a fake brown t_floor. Native shadowcast
+                // may omit the endpoint while retaining the air below it.
+                // Only this small whitelist of external structural geometry
+                // is revealed; furniture, interior floors and contents stay
+                // behind the normal visibility gate.
+                const bool tower_upper_boundary = upper_floor_boundary && ( [&] {
+                    const std::string id = here.ter( p ).id().str();
+                    return id == "t_radio_tower" || id == "t_railing" ||
+                           id == "t_metal_floor_no_roof" ||
+                           id == "t_floor_metal_gangway" ||
+                           id == "t_ladder_up_down" || id == "t_ladder_up" ||
+                           id == "t_ladder_down";
+                } )();
+                // Outdoor roof and platform tiles should preserve the actual
+                // known exterior surface, not a generic wooden "t_floor"
+                // proxy. This is limited to the exposed upper boundary below
+                // a natively visible air shaft; indoor floors stay private.
+                const bool upper_exposed_outdoor = upper_floor_boundary &&
+                    here.is_outside( p ) && !here.is_open_air( p );
+                if( upper_floor_boundary && !tower_exterior_surface &&
+                    !tower_upper_boundary && !upper_exposed_outdoor ) {
                     tile.terrain = "t_floor";
                     tile.kind = terrain_kind::floor;
                     tile.known = knowledge::visible;
@@ -1075,7 +1199,8 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                            !you.cant_see( p ) && square_dist( player, p ) <= you.unimpaired_range() &&
                                            here.has_floor( p );
                 tile.exterior_only = fresh && !visible && ( room_surface || lower_surface ||
-                                     tower_exterior_surface ||
+                                     tower_exterior_surface || tower_upper_boundary ||
+                                     upper_exposed_outdoor ||
                                      exposed_surface( you, here, p, beside_visible_air, blind ) );
                 if( visible || tile.exterior_only ) {
                     tile.terrain = here.ter( p ).id().str();
@@ -1117,6 +1242,10 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 tile.floor_present = ( visible || tile.exterior_only ) ? here.has_floor( p ) :
                                      !definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR ) &&
                                      !definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR_WATER );
+                if( ( visible || tile.exterior_only ) && tile.floor_present &&
+                    tile.terrain == "t_railing" ) {
+                    tile.metal_deck_railing = metal_rail( p );
+                }
                 const auto overhead = p + tripoint_rel_ms::above;
                 const bool visible_air_above = p.z() < result.max_z &&
                                                ( perception[index( overhead )] & air_bit );
@@ -1130,17 +1259,28 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                     // be absent from the 3D LOS cache.
                     const bool actual_floor_above = here.inbounds( overhead ) &&
                                                    here.has_floor( overhead );
-                    tile.ceiling_present = actual_floor_above ||
-                        ( here.inbounds( overhead ) && !here.is_outside( p ) &&
-                          !visible_air_above && !here.is_open_air( overhead ) );
-                    if( actual_floor_above ) {
-                        // Materialize a real, exposed metal deck underside even
-                        // if its upper cell was rejected by endpoint LOS.
-                        // No nonstructural upper terrain/contents are copied.
-                        const std::string overhead_id = here.ter( overhead ).id().str();
+                    const std::string overhead_id = actual_floor_above ?
+                                                    here.ter( overhead ).id().str() : "";
+                    // t_radio_tower is an OPEN steel lattice, even though
+                    // native has_floor() may treat its impassable terrain as
+                    // supporting a floor. It must not create a wooden ceiling.
+                    const bool overhead_lattice = overhead_id == "t_radio_tower";
+                    tile.ceiling_present = !overhead_lattice &&
+                        ( actual_floor_above ||
+                          ( here.inbounds( overhead ) && !here.is_outside( p ) &&
+                            !visible_air_above && !here.is_open_air( overhead ) ) );
+                    if( actual_floor_above && !overhead_lattice ) {
+                        // Retain the metal deck's appearance on the underside
+                        // of a known upper floor without reading its contents.
                         if( overhead_id == "t_metal_floor_no_roof" ||
                             overhead_id == "t_floor_metal_gangway" ) {
                             tile.ceiling_surface = overhead_id;
+                        } else if( metal_rail( overhead ) ) {
+                            // A tower railing is built on the same metal
+                            // platform as its neighbours. Both the rail tile
+                            // and the ceiling proxy under it must resolve to
+                            // the same material regardless of upper LOS.
+                            tile.ceiling_surface = "t_metal_floor_no_roof";
                         }
                     }
                 }

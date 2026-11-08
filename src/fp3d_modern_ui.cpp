@@ -123,6 +123,8 @@ class panel : public cataimgui::window
         std::string gear_part;
         bool map_loaded = false;
         fp3d_map::model map_view;
+        std::map<std::string, SDL_Texture_Ptr> overmap_icons;
+        unsigned overmap_icons_revision = 0;
         tripoint_abs_omt map_center;
         std::optional<tripoint_abs_omt> map_selection;
         int map_radius = 12;
@@ -780,12 +782,17 @@ class panel : public cataimgui::window
             compatible( ACTION_MAP, "旅行 / 完整地图（原版）" );
         }
         void map_page() {
+            if( overmap_icons_revision != fp3d_materials::revision() ) {
+                overmap_icons.clear();
+                overmap_icons_revision = fp3d_materials::revision();
+            }
             if( !map_loaded ) {
                 if( !map_selection ) {
                     map_center = you.pos_abs_omt();
                     map_selection = map_center;
                 }
                 map_view = fp3d_map::capture( you, map_center, map_radius );
+                overmap_icons.clear();
                 map_center = map_view.center;
                 map_loaded = true;
             }
@@ -912,7 +919,19 @@ class panel : public cataimgui::window
                 draw->AddRectFilled( start, end, row.known ? ImGui::ColorConvertFloat4ToU32(
                                          ImVec4( foreground.x * .3f, foreground.y * .3f, foreground.z * .3f, 1 ) ) :
                                      IM_COL32( 15, 20, 26, 255 ) );
-                if( !row.symbol.empty() && tile >= ImGui::GetFontSize() * .8f &&
+                bool native_tile_drawn = false;
+                if( row.known && !row.tileset_id.empty() ) {
+                    auto found = overmap_icons.find( row.tileset_id );
+                    if( found == overmap_icons.end() ) {
+                        found = overmap_icons.emplace( row.tileset_id,
+                                                       fp3d_materials::tileset_icon( row.tileset_id ) ).first;
+                    }
+                    if( found->second ) {
+                        draw->AddImage( ( ImTextureID )( intptr_t )found->second.get(), start, end );
+                        native_tile_drawn = true;
+                    }
+                }
+                if( !native_tile_drawn && !row.symbol.empty() && tile >= ImGui::GetFontSize() * .8f &&
                     ImGui::GetFont()->FindGlyphNoFallback( static_cast<ImWchar>( UTF8_getch( row.symbol ) ) ) ) {
                     const auto size = ImGui::CalcTextSize( row.symbol.c_str() );
                     draw->AddText( ImVec2( middle.x - size.x * .5f, middle.y - size.y * .5f ),
@@ -2297,6 +2316,8 @@ class panel : public cataimgui::window
         std::optional<fp3d_inventory::operation> run() {
             input_context context( "FP3D_PANEL", keyboard_mode::keycode );
             context.register_action( "QUIT" );
+            // Close on the same physical Tab used to open the survival panel.
+            context.register_action( "FP3D_PANEL" );
             context.register_action( "ANY_INPUT" );
             context.register_action( "SELECT" );
             context.register_action( "MOUSE_MOVE" );
@@ -2386,8 +2407,12 @@ class panel : public cataimgui::window
                     continue;
                 }
                 const auto &action = context.handle_input( 16 );
-                if( action == "QUIT" || ( !ImGui::GetIO().WantTextInput &&
-                                          profile.input_to_action( context.get_raw_input() ) == "FP3D_PANEL" ) ) {
+                const bool tab_pressed = context.get_raw_input().type == input_event_t::keyboard_code &&
+                                         context.get_raw_input().get_first_input() == SDLK_TAB;
+                if( action == "QUIT" || action == "FP3D_PANEL" ||
+                    ( tab_pressed && !ImGui::GetIO().WantTextInput ) ||
+                    ( !ImGui::GetIO().WantTextInput &&
+                      profile.input_to_action( context.get_raw_input() ) == "FP3D_PANEL" ) ) {
                     if( details_open ) {
                         details_open = false;
                     } else if( !ImGui::IsPopupOpen( nullptr, ImGuiPopupFlags_AnyPopupId ) ) {

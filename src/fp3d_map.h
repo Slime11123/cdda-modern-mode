@@ -14,6 +14,8 @@ struct cell {
     tripoint_abs_omt position;
     std::string name = "未探索";
     std::string symbol;
+    // Native overmap tileset ID at this exact vision level.
+    std::string tileset_id;
     std::string note;
     std::string note_text;
     bool editable = false;

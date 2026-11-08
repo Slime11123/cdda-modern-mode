@@ -63,6 +63,16 @@ void set_input_context( const std::string &category );
 void publish( fp3d_snapshot::scene_snapshot scene );
 void begin_action();
 void melee_swing();
+struct hit_feedback {
+    int damage = 0;
+    int hp = 0;
+    int maximum = 0;
+    float progress = 0;
+};
+// Read-only rendering feedback from damage actually resolved by native combat.
+void record_hit( const tripoint_abs_ms &position, int damage, int hp, int maximum );
+float hit_flash( const tripoint_abs_ms &position );
+std::optional<hit_feedback> latest_hit();
 void movement_finished( const tripoint_abs_ms &before, const tripoint_abs_ms &after,
                         const tripoint_rel_ms &expected );
 bool tick();

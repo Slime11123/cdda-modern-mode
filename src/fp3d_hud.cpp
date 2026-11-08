@@ -195,6 +195,20 @@ data capture( avatar &you )
                                          present ? you.get_part_hp_max( part ) : 0,
                                          display::get_bodygraph_bp_color( you, part, bodygraph_var::hp ) } );
     }
+    // The compact effect column sits immediately below the anatomical HP
+    // figure. Match actual native effect IDs to tileset overlay art.
+    for( const auto &reference : you.get_effects() ) {
+        const effect &state = reference.get();
+        const std::string id = state.get_id().str();
+        if( id.empty() ) {
+            continue;
+        }
+        const std::string tile = "overlay_effect_" + id;
+        if( std::none_of( result.effect_icons.begin(), result.effect_icons.end(),
+            [&]( const data::effect_icon & entry ) { return entry.tile_id == tile; } ) ) {
+            result.effect_icons.push_back( { tile, state.disp_name() } );
+        }
+    }
     result.slots = fp3d_inventory::slot_names( you );
     result.hotbar_icons = fp3d_inventory::slot_icons( you );
     result.active_slot = fp3d_inventory::active_slot();

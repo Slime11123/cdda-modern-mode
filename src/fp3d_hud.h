@@ -44,6 +44,11 @@ struct data {
     std::vector<fp3d_inventory::slot_icon> hotbar_icons;
     std::vector<message_entry> messages;
     std::vector<status_entry> status_entries;
+    struct effect_icon {
+        std::string tile_id;
+        std::string label;
+    };
+    std::vector<effect_icon> effect_icons;
     // Head, torso, left/right arm, left/right leg, in front-view anatomical order.
     std::vector<body_region> body_regions;
     std::vector<std::string> expanded;

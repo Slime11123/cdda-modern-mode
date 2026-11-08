@@ -216,6 +216,9 @@ bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
         return false;
     }
     const int moves = you.get_moves();
+    const int hp_before = critter->get_hp();
+    const int hp_maximum = critter->get_hp_max();
+    const tripoint_abs_ms impact_position = critter->pos_abs();
     // Native combat directly: a stunned movement command could redirect to
     // another tile, displace a pet or walk after the selected creature dies.
     you.melee_attack( *critter, true );
@@ -229,6 +232,10 @@ bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
             critter->die( &here, &you );
         }
         g->draw_hit_mon( p, *mon, mon->is_dead_state() );
+    }
+    const int damage = std::max( 0, hp_before - critter->get_hp() );
+    if( critter->as_monster() && damage > 0 ) {
+        fp3d_compositor::record_hit( impact_position, damage, critter->get_hp(), hp_maximum );
     }
     fp3d_compositor::melee_swing();
     return true;
@@ -614,7 +621,26 @@ bool fire( avatar &you, map &here )
     // Reuse CDDA's physical firing path (gun/marksman skill dispersion, recoil,
     // projectiles, cover, burst mode, ammo/energy, sound, time and practice).
     // Only target acquisition and the aiming UI are replaced in first-person.
-    return you.fire_gun( here, destination, mode.qty, *mode ) > 0;
+    // Record actual monsters before the shot, not only the one under the
+    // reticle. Native dispersion, penetration and bursts may hit another
+    // creature, and only the native post-shot HP difference is displayed.
+    std::vector<std::pair<shared_ptr_fast<monster>, int>> before;
+    for( const auto &mon : get_creature_tracker().get_monsters_list() ) {
+        if( mon && mon->get_hp() > 0 && here.inbounds( here.get_bub( mon->pos_abs() ) ) ) {
+            before.emplace_back( mon, mon->get_hp() );
+        }
+    }
+    const bool fired = you.fire_gun( here, destination, mode.qty, *mode ) > 0;
+    if( fired ) {
+        for( const auto &entry : before ) {
+            const auto &mon = entry.first;
+            const int damage = std::max( 0, entry.second - mon->get_hp() );
+            if( damage > 0 ) {
+                fp3d_compositor::record_hit( mon->pos_abs(), damage, mon->get_hp(), mon->get_hp_max() );
+            }
+        }
+    }
+    return fired;
 }
 
 std::optional<request> resolve( const std::string &command,

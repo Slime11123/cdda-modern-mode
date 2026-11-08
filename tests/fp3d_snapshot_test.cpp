@@ -792,9 +792,27 @@ TEST_CASE( "fp3d_radio_tower_upper_walkway_is_metal_from_ground",
     const auto *steel = find_cell( scene, here.get_abs( frame ) );
     REQUIRE( steel );
     CHECK( steel->terrain == "t_radio_tower" );
+    // Steel-frame terrain must NEVER manufacture an opaque ceiling in
+    // the open space underneath it merely because native has_floor()
+    // considers the impassable lattice a supporting tile.
+    const auto *under_steel = find_cell( scene,
+                                        here.get_abs( frame + tripoint_rel_ms::below ) );
+    if( under_steel ) {
+        CHECK_FALSE( under_steel->ceiling_present );
+        CHECK( under_steel->ceiling_surface.empty() );
+    }
     const auto *guardrail = find_cell( scene, here.get_abs( rail ) );
     REQUIRE( guardrail );
     CHECK( guardrail->kind == fp3d_snapshot::terrain_kind::fence );
+    // The tower's metal railing base must have the same appearance even if
+    // its neighbouring metal panels are excluded from the 3D render cache.
+    // The material decision is taken from the native map during capture.
+    CHECK( guardrail->metal_deck_railing );
+    const auto *under_rail = find_cell( scene,
+                                       here.get_abs( rail + tripoint_rel_ms::below ) );
+    if( under_rail && under_rail->ceiling_present ) {
+        CHECK( under_rail->ceiling_surface == "t_metal_floor_no_roof" );
+    }
 }
 
 TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilevel]" )

@@ -5016,7 +5016,7 @@
   { "type": "keybinding", "id": "FP3D_PANEL", "category": "FP3D", "name": "3D panel", "bindings": [ { "input_method": "keyboard_code", "key": "TAB" } ] },
   { "type": "keybinding", "id": "FP3D_RELOAD", "category": "FP3D", "name": "3D reload", "bindings": [ { "input_method": "keyboard_code", "key": "r" } ] },
   { "type": "keybinding", "id": "FP3D_RUN", "category": "FP3D", "name": "3D run", "bindings": [ { "input_method": "keyboard_code", "key": "LEFT_SHIFT" } ] },
-  { "type": "keybinding", "id": "FP3D_CROUCH", "category": "FP3D", "name": "3D crouch", "bindings": [ { "input_method": "keyboard_code", "key": "LEFT_CTRL" } ] },
+  { "type": "keybinding", "id": "FP3D_CROUCH", "category": "FP3D", "name": "3D crouch", "bindings": [ { "input_method": "keyboard_code", "key": "z" } ] },
   { "type": "keybinding", "id": "FP3D_MAP", "category": "FP3D", "name": "3D map", "bindings": [ { "input_method": "keyboard_code", "key": "m" } ] },
   { "type": "keybinding", "id": "FP3D_WAIT", "category": "FP3D", "name": "3D wait", "bindings": [ { "input_method": "keyboard_code", "key": "SPACE" } ] },
   { "type": "keybinding", "id": "FP3D_STATUS", "category": "FP3D", "name": "3D status", "bindings": [ { "input_method": "keyboard_code", "key": "LEFT_ALT" } ] },

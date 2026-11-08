@@ -8,36 +8,43 @@
 
 > **Status: experimental Windows preview (November 2026).** Development builds may have crashes, compatibility issues, and inconsistent performance. This is not an official CDDA product, and full manual gameplay validation is still in progress.
 
-## Alpha 0.2.0 — November 5–7, 2026
+## Alpha 0.3.0 — November 7–8, 2026
 
-The current project release is **Alpha 0.2.0** (tag: `alpha0.2.0`). This development milestone brings together the following changes:
+**Alpha 0.3.0** (Git tag: `alpha0.3.0`) builds on Alpha 0.2.0, covering the latest 3D development and fixes from November 7–8:
 
-- **November 5:** expanded first-person 3D bathrooms, appliances, chairs, furniture materials, connected stair flights, climbing markers, blood decals, and corpse pickup interactions.
-- **November 6:** paged 3D radial action menus, ladder/downspout models, updated modern UI and character creation, native-weather-driven rain/snow, clouds, fog and lightning; an in-development searchable monster bestiary with kill counts.
-- **November 7:** preserve original colored crafting/construction requirement labels; correct 3D vending machines, low display cabinets, filing cabinet drawers, anvil and other furniture; model a hollow stone kiln from individual rocks with an interior visual flame.
+- **Vehicles and geometry:** expanded 3D vehicle shells, cabins, roofs, seats and frames; corrected holes, overlaps and distorted interiors; improved furniture, radio tower, thin gates, multistorey ceilings/floors and visibility across levels.
+- **Lighting and shaderpacks:** HDR, sunlight shadow maps, experimental cascaded shadows, daylight in buildings, wet-road reflections, wall shadow artifacts, material normals and Photon-style visual adaptation, with graphics quality controls.
+- **Modern gameplay input:** direct 3D reticle shooting using native CDDA accuracy/dispersion; E-based directional target selection; pipe/ladder climbing actions; Tab to open and close survival UI.
+- **Latest work-in-progress fixes:** crouch eye-height smoothing, hit-flash/damage and HP feedback, status effect icons under the health figure, and survival-map tileset icons.
 
-Some new features still require full in-game and cross-device testing. See the [dated release notes](docs/RELEASE_NOTES_alpha0.2.0.md) for scope, known limitations and license notices.
+The Windows build includes experimental Photon *visual adaptation*, **not** the original Iris/OptiFine/Photon multipass renderer. Some features remain unverified in real gameplay. See [Alpha 0.3.0 release notes](docs/RELEASE_NOTES_alpha0.3.0.md) for the verified scope and limitations.
 
 ## Download and play
 
 Visit the [Releases page](https://github.com/Slime11123/cdda-modern-mode/releases) to see whether a Windows ZIP preview is available. Choose an asset labeled **Windows-x64**. GitHub's automatically generated **Source code** archives are *not* ready-to-play Windows builds.
 
 1. **Extract the entire ZIP** to a writable folder outside `Program Files`. Do not launch the executable from inside the ZIP.
-2. **Double-click `cataclysm-tiles.exe`** (the real game executable). No CMD or second EXE is needed in the Alpha 0.2.0 Windows package. Keep the DLLs, `data/`, `gfx/`, and `lang/` folders together.
+2. **Double-click `cataclysm-tiles.exe`** (the real game executable). No CMD or second EXE is needed in the Alpha 0.3.0 Windows package. Keep the DLLs, `data/`, `gfx/`, and `lang/` folders together.
 3. Create a new world and character in-game. Saves and settings are stored under the extracted `user/` folder; back them up before upgrading.
 4. Press **F5 or F6** to open the unified settings menu. Select the 2D/3D view, classic/modern controls, and classic sidebar/modern HUD independently, then apply and save.
 
 The Windows package includes redistributable assets from the upstream-derived source tree, but does not bundle separately downloaded third-party tilesets. Please report issues in [GitHub Issues](https://github.com/Slime11123/cdda-modern-mode/issues).
 
-## Development preview: shaderpacks (not included in the published Alpha 0.2.0)
+## Shaderpacks in Alpha 0.3.0 — experimental
 
-A newer local **development build** adds a Minecraft-style shaderpack selection screen under **F5/F6 → Shaderpacks** (or use the **Open shaderpacks folder** shortcut in the F5/F6 settings). It scans `shaderpacks/` beside the game's executable, supports `post.frag` in a folder or CDDA ZIP, and provides Off, Soft Glow, Warm Cinema and Low/Medium/High/Ultra quality options. The scene renderer now has an HDR color target, sampleable depth and game-calendar-driven sun/moon lighting. These development features **do not mean the published Alpha 0.2.0 asset contains them**; rebuild from the updated source to test them.
+Open **F5/F6 → Shaderpacks**, then use **Open shaderpacks folder** to place compatible CDDA `post.frag` packs or Minecraft shaderpack ZIP files into the game's `shaderpacks/` directory. Choose a pack, rescan/reload and select a quality level. HDR, weather/daylight, shadows and reflections are under active development.
 
-**Local development update:** Built-in shaders on Ultra now have an independent Experimental nearby sun shadows checkbox. It can be disabled without turning off other post-effects. Rescan/reload recompiles native CDDA post.frag. These are not features of the published Alpha 0.2.0.
+The current **Photon visual bridge** detects certain Minecraft/OptiFine/Iris shaderpack settings and renders a *CDDA-built approximation* (sky, sunlight, shadows, bloom and reflections). It does **not** execute the full Photon multi-pass pipeline or guarantee matching visuals, shader behavior, or performance. Simple compatible `final.fsh` programs may run as a limited final pass. See [shaderpack compatibility](docs/MC_SHADERPACK_COMPATIBILITY.md).
 
-**Minecraft shaderpack support (local development only):** Standalone GLSL 1.20 final.fsh programs may run directly as a limited final pass. Photon and other complex Iris/OptiFine ZIPs can be selected and produce a CDDA visual adaptation using HDR, sky clouds, sun lighting, Bloom and nearby shadows. These are NOT the original Photon multi-pass shaders or a guarantee that arbitrary Minecraft shaderpacks work faithfully. See docs/MC_SHADERPACK_COMPATIBILITY.md for the exact scope.
+## Recommended shaderpack: Photon (download separately)
 
-Photon enhancement (local test build): F5/F6 → Shaderpacks → MC visual enhancement (50–200%, default 145%). Strengthens CDDA-bridged sunlight, shadows, bloom and sky contrast; the original Iris/Photon multi-pass renderer remains unsupported.
+For an **enhanced lighting and atmosphere experience**, we recommend trying **Photon Shaders** by sixthsurge with Alpha 0.3.0's experimental visual bridge. It may provide an appealing Photon-inspired look when selected in the 3D shaderpack menu; results vary, and native Minecraft Photon rendering is **not** fully supported.
+
+> **CDDA Modern Mode does not provide, bundle or redistribute the Photon shaderpack.** Obtain it yourself from its author and follow its license. This repository contains no Photon ZIP, assets or copied shaders.
+
+**Official downloads:** [Photon on Modrinth](https://modrinth.com/shader/photon-shader/versions) · [Author's source/project page](https://github.com/sixthsurge/photon).
+
+Download the shaderpack ZIP and place it under the game's `shaderpacks/` directory. Open **F5/F6 → Shaderpacks**, rescan and choose the pack; try the **Ultra** profile only if your PC can handle it. The MC compatibility bridge may require experimenting with quality, shadow and visual-intensity settings.
 
 ## Recommended tileset: UndeadPeople
 

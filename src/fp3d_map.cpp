@@ -37,6 +37,7 @@ model capture( const avatar &you, const tripoint_abs_omt &center, int radius )
                     row.known = true;
                     row.name = remove_color_tags( terrain->get_name( vision ) );
                     row.symbol = terrain->get_symbol( vision );
+                    row.tileset_id = terrain->get_tileset_id( vision );
                     row.color = terrain->get_color( vision );
                 }
             }

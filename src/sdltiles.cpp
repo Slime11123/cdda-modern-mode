@@ -928,8 +928,10 @@ static void draw_fp3d_hud()
     constexpr unsigned char fp3d_ui_white = 15; // WHITE in data/raw/colors.json
     static unsigned icon_revision = 0;
     static std::unordered_map<std::string, SDL_Texture_Ptr> hotbar_icons;
+    static std::unordered_map<std::string, SDL_Texture_Ptr> effect_icons;
     if( icon_revision != fp3d_materials::revision() ) {
         hotbar_icons.clear();
+        effect_icons.clear();
         icon_revision = fp3d_materials::revision();
     }
     const SDL_bool was_clipped = SDL_RenderIsClipEnabled( renderer.get() );
@@ -952,6 +954,24 @@ static void draw_fp3d_hud()
         SDL_RenderFillRect( renderer.get(), &hint );
         draw_string( *font, renderer, geometry, prompt, point( text_x, text_y ), fp3d_ui_white );
     }
+    // The floating combat text reflects native HP after damage resolution.
+    // No synthetic hit points or second damage calculation is performed here.
+    if( const auto hit = fp3d_compositor::latest_hit() ) {
+        const int center_x = area[0] + area[2] / 2;
+        const int center_y = area[1] + area[3] / 2;
+        const int drift_x = static_cast<int>( hit->progress * 56 );
+        const int rise = static_cast<int>( hit->progress * 92 );
+        const std::string text = "-" + std::to_string( hit->damage ) + "  HP " +
+                                 std::to_string( hit->hp ) + "/" + std::to_string( hit->maximum );
+        const int text_x = center_x + 22 + drift_x;
+        const int text_y = center_y - 27 - rise;
+        const int width = utf8_width( text ) * font->width;
+        const Uint8 opacity = static_cast<Uint8>( 185 * ( 1.0f - hit->progress ) );
+        SDL_SetRenderDrawColor( renderer.get(), 15, 9, 9, opacity );
+        const SDL_Rect behind{ text_x - 5, text_y - 3, width + 10, font->height + 6 };
+        SDL_RenderFillRect( renderer.get(), &behind );
+        draw_string( *font, renderer, geometry, text, point( text_x, text_y ), 9 );
+    }
     const auto &scene_lines = lines;
     const int pad = std::max( 6, font->width / 2 );
     const int left_width = std::max( 15 * font->width, area[2] / 4 );
@@ -968,8 +988,13 @@ static void draw_fp3d_hud()
     const int health_preferred_height = std::max( 180, font->height * 6 + 2 * pad );
     const int mini = std::min( { 26 * font->width, area[2] / 3, area[3] / 2,
                                  std::max( 1, status_y - top - health_preferred_height - 2 * pad ) } );
+    const int effect_row_height = std::max( 22, font->height + 3 );
+    const int effect_available = std::max( 0, status_y - top - mini - 3 * pad - 90 );
+    const int max_effect_rows = effect_available / effect_row_height;
+    const int effect_count = std::min( static_cast<int>( hud.effect_icons.size() ), max_effect_rows );
+    const int effect_height = effect_count * effect_row_height;
     const int health_height = std::min( health_preferred_height,
-                                       std::max( 0, status_y - top - mini - 2 * pad ) );
+                                       std::max( 90, status_y - top - mini - 2 * pad - effect_height ) );
     SDL_Rect map_box{ area[0] + pad, top, mini, mini };
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 205 );
     SDL_RenderFillRect( renderer.get(), &map_box );
@@ -996,8 +1021,34 @@ static void draw_fp3d_hud()
         SDL_RenderDrawRect( renderer.get(), &map_box );
     }
 
-    draw_fp3d_body_health( hud, SDL_Rect{ map_box.x, map_box.y + map_box.h + pad,
-                           mini, health_height }, pad );
+    const int body_y = map_box.y + map_box.h + pad;
+    draw_fp3d_body_health( hud, SDL_Rect{ map_box.x, body_y, mini, health_height }, pad );
+    // Actual player effects, vertical below the body-health silhouette.
+    // Missing artwork from the selected pack is simply skipped.
+    int effect_y = body_y + health_height;
+    for( const auto &effect : hud.effect_icons ) {
+        if( effect_y + effect_row_height > status_y - pad ) {
+            break;
+        }
+        auto icon = effect_icons.find( effect.tile_id );
+        if( icon == effect_icons.end() ) {
+            icon = effect_icons.emplace( effect.tile_id,
+                                        fp3d_materials::tileset_icon( effect.tile_id ) ).first;
+        }
+        if( !icon->second ) {
+            continue;
+        }
+        const int size = std::min( 22, effect_row_height - 2 );
+        const SDL_Rect dest{ map_box.x + pad, effect_y, size, size };
+        SDL_RenderCopy( renderer.get(), icon->second.get(), nullptr, &dest );
+        const int available = std::max( 0, mini - size - 3 * pad );
+        if( available >= font->width ) {
+            draw_string( *font, renderer, geometry,
+                         utf8_truncate( effect.label, available / font->width ),
+                         point( dest.x + size + pad, effect_y ), fp3d_ui_white );
+        }
+        effect_y += effect_row_height;
+    }
 
     const int compass_width = std::min( area[2] - 2 * pad, 34 * font->width );
     const int compass_x = area[0] + ( area[2] - compass_width ) / 2;

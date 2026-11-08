@@ -70,6 +70,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene,
               const fp3d_snapshot::cell *preview = nullptr );
 // An independently owned menu icon, not a UV borrowed from the world atlas.
 SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image );
+// Draw a small genuine tile from whichever tileset the native renderer loaded.
+// Unlike item_icon this has no fake/magenta placeholder on absent art.
+SDL_Texture_Ptr tileset_icon( const std::string &id );
 unsigned revision();
 bool ready();
 bool bind();

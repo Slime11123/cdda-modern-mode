@@ -95,6 +95,10 @@ struct cell {
     // presentation-only boundary, never copy upstairs contents.
     std::string ceiling_surface;
     bool floor_present = true;
+    // Visual-only material override for a wooden railing built on the
+    // exposed metal walkway of a radio tower. Determined from real adjacent
+    // terrain while the cell is visible, not from partially visible sprites.
+    bool metal_deck_railing = false;
     bool open_air = false;
     bool goes_up = false;
     bool goes_down = false;
@@ -113,6 +117,11 @@ struct sprite {
     bool male = true;
     bool mirrored = false;
     bool multiple_items = false;
+    bool revivable = false;   // Native corpse.can_revive(); visual badge only.
+    bool alerted = false;     // Hostile monster currently sees the avatar.
+    bool bleeding = false;    // Native effect_bleed; no gameplay simulation.
+    // Extra visible native effect badges, ordered by urgency; at most four total.
+    std::vector<std::string> status_icons;
     float height = 1.8f;
     float elevation = 0;
 };
@@ -146,6 +155,7 @@ struct scene_snapshot {
     unsigned enumerated_vehicles = 0;
     unsigned visible_vehicle_parts = 0;
     std::optional<sprite> held_item;
+    bool player_crouching = false;
     int min_z = 0;
     int max_z = 0;
     double capture_ms = 0;
