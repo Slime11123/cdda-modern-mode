@@ -145,6 +145,9 @@ struct scene_snapshot {
     fp3d_weather::state weather;
     fp3d_hud::data hud;
     std::vector<cell> cells;
+    // Capture has already grouped neighbouring stair tiles. Publishing must
+    // not repeat this full-scene pass on every native player action.
+    bool stairs_connected = false;
     std::vector<landscape_patch> landscape;
     std::vector<sprite> sprites;
     // P0-V: one owned, native-perception-filtered copy per loaded vehicle.

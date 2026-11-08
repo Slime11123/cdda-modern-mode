@@ -1,144 +1,85 @@
 # CDDA Modern Mode
 
-> **AI 生成声明：本项目由 OpenAI GPT 生成并协助开发。** 本项目基于开源游戏 Cataclysm: Dark Days Ahead 的源码改造，并非 OpenAI 或 CDDA 官方产品。
+**让《大灾变：浩劫余生》（CDDA）拥有第一人称 3D 画面与现代化操作。**
 
-[English](README.md) · [发布与下载](https://github.com/Slime11123/cdda-modern-mode/releases) · [开发进度](docs/DEVELOPMENT_STATUS.md) · [CDDA 原版](https://github.com/CleverRaven/Cataclysm-DDA)
+> **AI 生成项目声明：** 本项目由 OpenAI GPT 生成并协助开发，基于 CDDA 官方 **0.I-1（Ito-1）** 源码独立开发。项目为**非官方衍生版本**，不代表 OpenAI 或 CDDA 官方。
 
-**CDDA Modern Mode** 是基于 **Cataclysm: Dark Days Ahead（CDDA）0.I-1 / Ito-1** 的非官方现代化改造项目，在保留原版回合制、行动点、战斗、世界模拟和存档机制的基础上，加入第一人称 3D 画面、现代 2D 操作与鼠标友好的综合界面。
+[English](README.md) · [**下载 Windows 游戏**](https://github.com/Slime11123/cdda-modern-mode/releases) · [提交问题反馈](https://github.com/Slime11123/cdda-modern-mode/issues) · [开发状态](docs/DEVELOPMENT_STATUS.md)
 
-> **状态：Windows 实验性预览版（2026 年 11 月）**。当前开发版本仍可能存在崩溃、输入兼容及性能问题；不是 CDDA 官方产品，也不保证全部玩法已通过完整人工验收。
+---
 
-## Alpha 0.3.0 — 2026 年 11 月 7—8 日
+## 在第一人称世界中体验 CDDA
 
-本次版本为 **Alpha 0.3.0**（Git 标签：`alpha0.3.0`），在 Alpha 0.2.0 的基础上整理 11 月 7—8 日最新的开发内容：
+探索第一人称 3D 建筑、车辆、家具、天气与怪物，同时保留 CDDA 原本的回合制行动、枪械技能、战斗结算、世界生成与存档逻辑。玩家可以随时切换经典 2D 与现代 3D，无需重新启动游戏。
 
-- **3D 车辆与建筑：** 继续完善车壳、车架、车厢、座椅、车顶等模型，修复车内空洞和穿模；改进家具、无线发射塔、细栅栏、多层建筑地板/天花板与跨层可见性。
-- **光影系统：** HDR、太阳阴影、实验性多级级联阴影、室内日照、湿路反射、墙面阴影伪影、材质法线，以及 Photon 风格视觉适配与质量选项。
-- **现代操作：** 3D 准星直射（沿用原版枪械命中与散布计算）、E 键方向目标选择、水管/梯子上下攀爬交互、Tab 打开和关闭综合生存菜单。
-- **仍在验证的最新改动：** 蹲伏时平滑降低视角高度、僵尸/怪物受击反馈与血量提示、人物健康图标下方的状态图标，以及综合地图使用当前图块包图标。
+| 3D 世界 | 现代生存操作 | 实验性光影 |
+| :--- | :--- | :--- |
+| 多层建筑、家具、车辆、天气和精灵素材 | WASD、鼠标准星、交互轮盘、背包与生存综合菜单 | OpenGL、HDR、太阳阴影、雨天反射与光影质量设置 |
 
-目前 **Photon 仅通过 CDDA 自有渲染管线提供视觉适配**，不是完整的 Iris/OptiFine/Photon 多阶段原生渲染。部分新功能尚未完成全面实机测试，请查看[Alpha 0.3.0 发行说明](docs/RELEASE_NOTES_alpha0.3.0.md)。
+## 实机画面
 
-## 下载安装
+| 雨天：云层、降雨与地面反射 | 晴天：蓝天、阳光与车辆阴影 |
+| :---: | :---: |
+| ![CDDA Modern Mode 雨天 Photon 风格光影](docs/images/photon-rainy-2026-11-08.png) | ![CDDA Modern Mode 晴天 Photon 风格光影](docs/images/photon-clear-2026-11-08.png) |
 
-Windows 玩家可前往 [Releases 页面](https://github.com/Slime11123/cdda-modern-mode/releases) 查看是否提供 Windows ZIP 预览包。下载时优先选择名称含 **Windows-x64** 的压缩包；GitHub 自动生成的「Source code」仅包含源代码，不能直接运行。
+**3D 室内与家具场景**
 
-1. 将 Windows ZIP **完整解压**至有写入权限的英文路径（建议非 `Program Files`），不要直接在压缩包内双击。
-2. **直接双击 `cataclysm-tiles.exe`**（真正的游戏主程序）。Alpha 0.3.0 Windows 版无需 CMD 或第二个 EXE；请保持 DLL、`data/`、`gfx/` 和 `lang/` 等目录结构完整。
-3. 新玩家从游戏主菜单新建世界、创建角色；个人设置及存档位于解压目录的 `user/`，**请自行备份**。
-4. 在游戏中按 **F5 或 F6** 打开统一模式设置，分别选择 2D/3D 画面、经典/现代键位、原版侧栏/现代 HUD。点击「完成」保存并应用。
+![CDDA Modern Mode 第一人称厨房实机截图](docs/images/ingame-demo-kitchen-3d.png)
 
-若 ZIP 内缺少 `cataclysm-tiles.exe`、`data/`、`gfx/` 或 DLL，它不是完整玩家包。发行包仅包含源码自带且允许再分发的资源，不捆绑另行下载的第三方素材。Windows 版仍为实验性预览，问题反馈请提交至 [Issues](https://github.com/Slime11123/cdda-modern-mode/issues)。
+*以上均为开发者提供的真实游戏截图；画面效果、帧数与所选图块包和电脑硬件有关。*
 
-## Alpha 0.3.0 光影包功能（实验性）
+## Alpha 0.3.1：性能与界面缩放优化
 
-进入 **F5/F6 → 光影包**，点击 **打开光影包文件夹**，把 CDDA 专用 `post.frag` 光影包或 Minecraft 光影 ZIP 放到游戏目录的 `shaderpacks/`，随后重新扫描/重载并选择画质。HDR、天气与太阳光照、阴影和反射仍在持续改进中。
+本版重点是 **2026 年 11 月 8 日的性能优化、玩家版界面缩放一致性修复**。详见 [Alpha 0.3.1 完整更新日志](docs/RELEASE_NOTES_alpha0.3.1.md)。
 
-当前的 **Photon 视觉桥接**会读取部分 Minecraft/OptiFine/Iris 光影设置，使用 CDDA 自身的天空、阳光、阴影、Bloom、反射等效果进行**视觉适配**。这**不等于运行 Photon 原版完整多阶段渲染管线**，不保证画质、功能和性能与 Minecraft 一致。少量独立 `final.fsh` 程序只能以有限最终 Pass 运行。详见[光影兼容说明](docs/MC_SHADERPACK_COMPATIBILITY.md)。
+- **减少场景准备开销：** 复用地图缓存、减少重复场景快照工作，避免每回合对楼梯连接进行不必要的全量扫描。
+- **降低渲染负担：** 场景无相关反光表面时跳过湿路反射遮罩 Pass，优化车辆可见性距离计算。
+- **修复玩家版界面过小：** 调整 Windows 3D 首次启动的默认字体及终端网格，让文字与菜单更清楚，同时尽量维持原有窗口大小。
+- **保留 Alpha 0.3.0 特性：** 多层建筑、车辆立体结构、现代射击与交互，以及 Photon 风格的天空、阴影和反射。
 
-## 推荐光影包：Photon（需自行下载）
+*优化不等于所有电脑都能获得固定帧数提升。实际 FPS 受 CPU、GPU、地图复杂度和画质影响，仍需更大范围测试。*
 
-为了获得**更好的光照、阴影和氛围效果**，推荐在 Alpha 0.3.0 中尝试搭配 **sixthsurge 制作的 Photon 光影包**。游戏的实验性光影兼容层可提供 Photon 风格的视觉适配；实际效果依赖硬件和场景，**不等于完整支持 Minecraft Photon 的原版渲染管线**。
+## Windows x64 下载与安装
 
-> **本仓库不提供、不捆绑、不重新分发 Photon 光影包。** 请玩家前往作者页面自行下载并遵守其授权要求。本项目发行 ZIP 不包含 Photon ZIP、原版光影源文件或素材。
+1. 前往 [GitHub Releases 下载页面](https://github.com/Slime11123/cdda-modern-mode/releases)，选择最新版带 **Windows-x64** 名称的 ZIP。GitHub 自动生成的 **Source code** 压缩包不是可直接游玩的游戏。
+2. 将 ZIP **完整解压**到可写入的新文件夹，保留全部 DLL 以及 `data/`、`gfx/`、`lang/`、`config/` 目录。
+3. **直接双击 `cataclysm-tiles.exe`**，无需 CMD、第二个启动器或特殊环境变量。
+4. 按 **F5/F6** 更改 2D/3D、控制方式、HUD 和光影质量。升级前备份旧版 `user/` 存档与设置。
 
-**官方下载地址：** [Photon（Modrinth 版本下载）](https://modrinth.com/shader/photon-shader/versions) · [作者 GitHub 仓库](https://github.com/sixthsurge/photon)。
+全新安装会采用更清楚的 Windows 3D 字体大小；已有玩家自行保存的字体、终端尺寸和缩放设置不会被强制清除。
 
-将下载的光影 ZIP 放在游戏根目录的 `shaderpacks/` 中，进入 **F5/F6 → 光影包**，重新扫描并选择 Photon。画质较高时可尝试 **Ultra**，出现性能或阴影问题可下调质量、光影强度或关闭实验性太阳阴影。
+## 默认操作
 
-### Photon 风格光影实机演示
+| 按键 | 操作 |
+| :--- | :--- |
+| **W / A / S / D** | 现代模式移动 |
+| **鼠标** | 观察、准星瞄准和物体选择 |
+| **E** | 交互、方向选择、爬梯及攀爬水管 |
+| **Q** | 快捷行动轮盘 |
+| **Tab** | 打开／关闭综合生存菜单 |
+| **Z（3D 模式）** | 蹲伏 |
+| **F5 / F6** | 统一画面、操作与 HUD 设置 |
 
-以下两张由开发者提供的实机截图，展示不同天气下的实验性 3D 光照、天空云层、阴影与湿路反射。
+所有重要行动仍遵循原版 CDDA 的行动点、技能和规则；复杂操作可能沿用原版对话框。
 
-**雨天 — 阴云、降雨与湿路反射**
+## 推荐第三方资源（本项目均不提供）
 
-![CDDA Modern Mode 雨天 Photon 风格光影实机演示，显示阴云、地面反射及 3D 车辆](docs/images/photon-rainy-2026-11-08.png)
+**Photon 光影包 — 推荐搭配使用：** [Photon 官方 Modrinth 下载](https://modrinth.com/shader/photon-shader/versions) · [作者 GitHub 仓库](https://github.com/sixthsurge/photon)。玩家可自行把下载的 ZIP 放入 `shaderpacks/`，在 F5/F6 光影菜单扫描选择。**本仓库及发行包不提供、不捆绑、不重新分发 Photon。** 当前采用的是 CDDA 自身的 **Photon 风格视觉适配**，不是完整运行 Minecraft Iris/OptiFine 的原版多 Pass 光影。
 
-**晴天 — 日间天空、户外阴影与 3D 车辆**
+**UndeadPeople（不死人）图块包 — 推荐搭配使用：** [维护者 GitHub 仓库](https://github.com/Xenikos/UndeadPeopleTileset)。请自行下载安装到 `gfx/` 并在游戏选项中选择。**本项目不提供、不捆绑、不重新分发不死人图块包。** 不同图块版本可能存在兼容问题。
 
-![CDDA Modern Mode 晴天 Photon 风格光影实机演示，显示蓝天、建筑阴影和车辆](docs/images/photon-clear-2026-11-08.png)
+所有第三方素材均归原作者所有，请遵守其授权与署名要求。
 
-*以上为 CDDA Modern Mode 真实游戏截图，并不代表完整运行 Minecraft Photon 的原版多阶段渲染。本仓库不提供第三方 Photon 光影包。*
-## 推荐图块包：UndeadPeople（不死人）
+## 开发状态与开源许可
 
-为了获得**更好的视觉体验**，推荐搭配 **UndeadPeople（不死人 / MSX++UnDeadPeopleEdition）图块包**使用，特别适合 3D 建筑、家具和物品的呈现。
+本项目仍是 **Alpha 实验版**，复杂车辆、跨层建筑、不同光影包、硬件兼容、长时间生存和旧存档迁移等方面尚未完成全面验收。
 
-> **本项目不提供、不捆绑、也不重新分发不死人图块包。** 这是独立的第三方素材，请玩家自行从维护者仓库下载并遵守相关许可和署名要求。本项目基于 CDDA 0.I-1，不同版本的图块包可能存在兼容性差异。
+- [Alpha 0.3.1 更新日志](docs/RELEASE_NOTES_alpha0.3.1.md) · [光影兼容性说明](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D 开发进度](docs/FP3D_PROGRESS.md)
+- [开发状态](docs/DEVELOPMENT_STATUS.md) · [现代化操作](docs/FP3D_0I1_MODERN_CONTROLS.md) · [版权署名](docs/ATTRIBUTION.md)
+- 开发构建：Windows / CMake / SDL2 Tiles / OpenGL，配置 `TILES=ON` 与 `ENABLE_FP3D=ON`，参考 [CMake 编译指南](doc/c++/COMPILING-CMAKE.md)。
 
-**图块包仓库及下载地址：** [Xenikos / UndeadPeopleTileset（GitHub）](https://github.com/Xenikos/UndeadPeopleTileset)。
+CDDA 原始项目与贡献者见 [CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA)。上游主要源码与内容采用 **CC BY-SA 3.0**，字体、运行库等组件可能有单独许可证。参见 [LICENSE.txt](LICENSE.txt) 和 [版权说明](docs/ATTRIBUTION.md)。
 
-**安装方法：** 将下载得到的 `MSX++UnDeadPeopleEdition` 文件夹放入游戏的 `gfx/` 目录；在游戏中前往 **选项 → 图形 → 选择图块包（Choose Tileset）**，选择 **UNDEAD_PEOPLE**（以实际列出的名称为准）。如未立即生效，请重新启动游戏。
+---
 
-## 实机演示
-
-以下为项目开发者提供的第一人称 3D 实机截图：
-
-![CDDA Modern Mode — 第一人称 3D 厨房场景实机截图](docs/images/ingame-demo-kitchen-3d.png)
-
-*开发中的实机截图；实际画面会因所选图块包及版本而有所差异。*
-
-## 主要功能
-
-| 类别 | 实现情况 |
-| --- | --- |
-| **独立画面 / 键位 / HUD** | F5/F6 统一设置：2D/3D 画面、经典/现代操作、原版侧栏/现代 HUD 分别选择并保存 |
-| **现代 2D** | WASD、360° 圆形平滑移镜、Tab 综合生存菜单、右键地图情境菜单与 Q 行动轮盘；可共用现代工作台、NPC 对话和交易页面 |
-| **第一人称 3D** | 地形、建筑与多层楼板/楼梯、坡道、天空及远景、家具、可见实体和当前图块包贴图 |
-| **交互与战斗** | 准星/目标轮廓、E 情境轮盘、Q 快捷轮盘、定点近战、砸击、原版确认与安全检查 |
-| **综合生存界面** | 背包/口袋、装备、健康、制作、建造、地图、任务、NPC、变异、仿生装置和武术入口 |
-| **制作与建筑** | 配方搜索/收藏/批量、工作台简易制作、原版材料消耗和活动、楼梯/坡道/家具建造预览 |
-| **家具与车辆** | 桌椅床、柜体、木箱、书架等 3D 基础几何，部分材质分面与邻墙朝向；车辆操作窗口仍在完善 |
-| **NPC** | 鼠标对话、头像、双栏交易、队友守卫/跟随；结算和任务仍由原版规则处理 |
-
-这些功能已进入开发源码，不代表所有界面均完成实际游玩或多设备兼容验收。部分复杂操作仍会调用原版界面。
-
-## 常用操作
-
-| 操作 | 按键 |
-| --- | --- |
-| 统一模式/按键/HUD 设置 | **F5 / F6** |
-| 现代模式移动 | **WASD**（3D 相对视角，2D 平面方向） |
-| 3D 视角 / 2D 现代探看 | 鼠标移动（行为因模式而异） |
-| 综合生存菜单 | **Tab** |
-| 3D 交互 / 长按目标轮盘 | **E** |
-| 快捷行动轮盘 | **Q** |
-| 现代 2D 地图情境菜单 | 地图上**鼠标右键** |
-| 3D 准星攻击 / 砸击 | **鼠标左键**（符合原版目标检查） |
-
-所有按键均应以游戏中当前配置为准；模式选择不会改变原版战斗/时间结算。
-
-## 开发进度、局限及源码编译
-
-目前仍在开发复杂场景性能、车辆与家具精细表现、各类操作的端到端人工验证、中文输入法与不同硬件兼容。开发测试中的「自动回归通过」不代表玩家版本已完整验收。
-
-- [开发状态](docs/DEVELOPMENT_STATUS.md) · [详细日志](docs/FP3D_PROGRESS.md) · [现代控制](docs/FP3D_0I1_MODERN_CONTROLS.md)
-- [统一模式设置](docs/FP3D_MODE_SETTINGS.md) · [现代 2D 右键菜单](docs/MODERN_2D_CONTEXT_MENU.md) · [共享简单交互](docs/MODERN_2D_SIMPLE_INTERACTIONS.md)
-- [建造流程](docs/FP3D_CONSTRUCTION_START.md) · [家具朝向](docs/FP3D_FURNITURE_FACING.md) · [车辆方案](docs/FP3D_VEHICLE_VISUAL_DESIGN.md)
-
-开发环境为 **Windows / CMake / SDL2 Tiles / OpenGL**。编译源码请先参照[官方 CMake 编译指南](doc/c++/COMPILING-CMAKE.md)，并启用 `TILES=ON`、`ENABLE_FP3D=ON`。本地 `tools/run-fp3d.ps1` 是开发脚本，依赖仓库外的编译输出，不能作为玩家安装器。
-
-## 许可、署名与项目关系
-
-此项目为独立 GitHub 仓库，**并非官方 CDDA 项目**；原版来源及作者贡献不会因独立托管而消失。
-
-- CDDA 原版：[CleverRaven/Cataclysm-DDA](https://github.com/CleverRaven/Cataclysm-DDA)，基于官方 `0.I-1`（`7b2efa5cea38e4d4d97dd0e63b28b9148623da59`）。
-- 原版主要代码和游戏内容采用 **CC BY-SA 3.0**；字体、依赖等有各自许可。参阅 [LICENSE.txt](LICENSE.txt)、[版权和素材说明](docs/ATTRIBUTION.md)、[原版 README](docs/UPSTREAM_README.md)。
-- 分发包仅应包含明确允许再分发的内容，并保留相应声明；不包含用户个人存档、开发测试记录或未经确认授权的外部图块素材。
-
-欢迎提交 [Issue](https://github.com/Slime11123/cdda-modern-mode/issues) 帮助完善项目。
-
-本地开发版近场阴影已修复相机错位、破损门实心阴影和光照边界误判，使用 3×3 PCF；仍为实验功能，具体参考 docs/FP3D_SHADERPACKS_IMPLEMENTATION.md。
-
-Raymarch v3 本地开发版：Photon 视觉桥新增独立材质遮罩的雨天湿路/水面 SSR 和阴影贴图遮挡体积光，F5/F6 光影菜单分别开关。详见 docs/FP3D_DEPTH_RAYMARCH_RENDER_PIPELINE.md。非完整原版 Iris/Photon 多 Pass。
-
-Photon 室内外光照修复（本地 v4）：进入建筑不会整屏关闭太阳阴影、体积光和 SSR，也不会让窗外环境光突然变色。详见 docs/FP3D_INDOOR_OUTDOOR_DAYLIGHT_FIX.md。
-
-本地 Photon v6：白天室内增加稳定环境补光，雨天路面反射补齐地砖缝隙并采用连续湿膜与距离渐隐；原生路灯、邮箱、车辆阴影继续保留。详见 docs/FP3D_DAYLIGHT_WET_REFLECTION_V6.md。
-
-本地光影测试 v6b：增强白天遮阴房间的柔和补光，修复雨天路面反射一格一格断裂，保留原生路灯、邮箱及车辆的阴影。技术说明：docs/FP3D_DAYLIGHT_WET_ROAD_V6B_QA.md。
-
-**本地 v7b 光照修复：** 地面血迹、掉落物、怪物精灵与草地改为接受实际世界光照，夜间不再始终保持原贴图亮度。用户手持物、交互轮廓与自发光火焰保留特殊绘制。详见 [世界地面对象光照](docs/FP3D_WORLD_GROUND_LIGHTING_V7.md)。
-
-**本地 Photon v10b（双级太阳阴影）：** Ultra 画质新增高精度近景 28 米 + 远景 96 米的真实深度投影，级联边界平滑混合，并将光影纹素网格固定到世界坐标以降低移动时的阴影漂移。保留 v9f 道路灰块修复；不支持远级贴图时安全回退原有单图。详见 [双级太阳阴影 v10b](docs/FP3D_DUAL_CASCADE_SHADOW_V10B.md)。
-
-**Photon Ultra v11c：** 修复连续墙体太阳阴影漏光接缝和角度相关的自阴影偏移，减轻重复三角形暗斑，同时保留车辆和路灯真实阴影。详见 [v11c 墙面阴影修复](docs/FP3D_PHOTON_ULTRA_WALL_SHADOW_V11C.md)。
+**CDDA Modern Mode 是非官方的玩家／开发者项目，而非 CDDA 或 OpenAI 官方游戏。**

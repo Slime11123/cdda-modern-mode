@@ -37,6 +37,9 @@ struct draw_statistics {
     unsigned visible_vehicle_parts = 0;
 };
 draw_statistics statistics();
+// Skip the Ultra reflection FBO and SSR sampling when the snapshot contains
+// no reflective water or wet pavement. Cached per published generation.
+bool has_reflective_surfaces( const fp3d_snapshot::scene_snapshot &scene, float rain );
 // Draw the native visible, material-classified road/water reflectivity mask
 // into a separate color FBO sharing the world depth attachment. World depth
 // must be read-only; do not infer or reveal unseen map geometry.

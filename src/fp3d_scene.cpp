@@ -1027,8 +1027,21 @@ std::unordered_map<tripoint_abs_ms, chunk_mesh> landscape_meshes;
 std::unordered_map<tripoint_abs_ms, chunk_mesh> meshes;
 std::vector<const fp3d_snapshot::cell *> storage_cells;
 std::vector<const fp3d_snapshot::cell *> stair_cells;
+// These only change when a new native scene snapshot is published.
+std::vector<const fp3d_snapshot::cell *> glass_cells;
+std::unordered_map<tripoint_abs_ms, const fp3d_snapshot::sprite *> storage_contents;
+std::unordered_set<const fp3d_snapshot::sprite *> storage_sprites;
+std::vector<std::optional<fp3d_materials::uv_rect>> sprite_materials;
 std::unordered_map<std::string, GLuint> storage_meshes;
 unsigned mesh_material_revision = 0;
+// The Ultra wet-surface geometry is static for the lifetime of a published
+// snapshot. Keep it in a display list; only the camera transform changes per frame.
+GLuint reflectivity_mesh = 0;
+unsigned reflectivity_generation = 0;
+float reflectivity_rain = -1.0f;
+unsigned reflectivity_coverage_generation = 0;
+float reflectivity_coverage_rain = -1.0f;
+bool reflectivity_coverage = false;
 draw_statistics last_statistics;
 
 // Hash only permitted presentation values, including neighbour dependencies.
@@ -1042,6 +1055,15 @@ void release()
 {
     // Dynamic vehicle display lists share the selected tileset atlas revision.
     fp3d_vehicle::release();
+    if( reflectivity_mesh ) {
+        glDeleteLists( reflectivity_mesh, 1 );
+        reflectivity_mesh = 0;
+    }
+    reflectivity_generation = 0;
+    reflectivity_rain = -1.0f;
+    reflectivity_coverage_generation = 0;
+    reflectivity_coverage_rain = -1.0f;
+    reflectivity_coverage = false;
     for( const auto &entry : meshes ) {
         if( entry.second.list ) {
             glDeleteLists( entry.second.list, 1 );
@@ -1054,6 +1076,10 @@ void release()
     storage_meshes.clear();
     storage_cells.clear();
     stair_cells.clear();
+    glass_cells.clear();
+    storage_contents.clear();
+    storage_sprites.clear();
+    sprite_materials.clear();
     for( const auto &entry : landscape_meshes ) {
         if( entry.second.list ) {
             glDeleteLists( entry.second.list, 1 );
@@ -1070,6 +1096,33 @@ void release()
 draw_statistics statistics()
 {
     return last_statistics;
+}
+
+bool has_reflective_surfaces( const fp3d_snapshot::scene_snapshot &scene, float rain )
+{
+    if( scene.render_generation != 0 &&
+        reflectivity_coverage_generation == scene.render_generation &&
+        reflectivity_coverage_rain == rain ) {
+        return reflectivity_coverage;
+    }
+    const bool wet_pavement = std::clamp( rain * .64f, 0.0f, .64f ) >= .02f;
+    const bool present = std::any_of( scene.cells.begin(), scene.cells.end(), [&]( const auto &cell ) {
+        if( cell.known != fp3d_snapshot::knowledge::visible || cell.exterior_only ||
+            !cell.floor_present || cell.is_ramp || cell.goes_down ) {
+            return false;
+        }
+        const std::string &id = cell.terrain;
+        return id.find( "water" ) != std::string::npos || id.find( "t_sewage" ) == 0 ||
+               ( wet_pavement && ( id.find( "t_road" ) == 0 ||
+                 id.find( "t_pavement" ) == 0 || id.find( "t_asphalt" ) == 0 ||
+                 id.find( "t_sidewalk" ) == 0 || id.find( "t_concrete" ) == 0 ) );
+    } );
+    if( scene.render_generation != 0 ) {
+        reflectivity_coverage_generation = scene.render_generation;
+        reflectivity_coverage_rain = rain;
+        reflectivity_coverage = present;
+    }
+    return present;
 }
 
 void draw_reflectivity_mask( const fp3d_snapshot::scene_snapshot &scene,
@@ -1106,9 +1159,22 @@ void draw_reflectivity_mask( const fp3d_snapshot::scene_snapshot &scene,
     // Material G-buffer-lite: R=wet reflectivity, G=surface roughness,
     // B=micro-normal strength. Preserve native classification and scene
     // occlusion, and never invent roughness for hidden terrain.
-    // Batch all tiles in one draw to avoid immediate-mode calls per cell.
-    glBegin( GL_QUADS );
-    for( const auto &cell : scene.cells ) {
+    // Compile once per snapshot (and rain value) instead of reclassifying all
+    // tiles and resubmitting their vertices on every mouse-look frame.
+    // Scene generation 0 is used by isolated callers without stable identity.
+    const bool cacheable = scene.render_generation != 0;
+    const bool rebuild = cacheable &&
+                         ( !reflectivity_mesh || reflectivity_generation != scene.render_generation ||
+                           reflectivity_rain != rain );
+    if( rebuild && !reflectivity_mesh ) {
+        reflectivity_mesh = glGenLists( 1 );
+    }
+    if( !cacheable || rebuild || !reflectivity_mesh ) {
+        if( cacheable && reflectivity_mesh ) {
+            glNewList( reflectivity_mesh, GL_COMPILE );
+        }
+        glBegin( GL_QUADS );
+        for( const auto &cell : scene.cells ) {
         if( cell.known != fp3d_snapshot::knowledge::visible ||
             cell.exterior_only || !cell.floor_present || cell.is_ramp ||
             cell.goes_down ) {
@@ -1145,8 +1211,17 @@ void draw_reflectivity_mask( const fp3d_snapshot::scene_snapshot &scene,
         glVertex3f( x+half, y, z-half );
         glVertex3f( x+half, y, z+half );
         glVertex3f( x-half, y, z+half );
+        }
+        glEnd();
+        if( cacheable && reflectivity_mesh ) {
+            glEndList();
+            reflectivity_generation = scene.render_generation;
+            reflectivity_rain = rain;
+        }
     }
-    glEnd();
+    if( cacheable && reflectivity_mesh ) {
+        glCallList( reflectivity_mesh );
+    }
     glPopMatrix();
     glMatrixMode( GL_PROJECTION );
     glPopMatrix();
@@ -1268,6 +1343,10 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         cells.clear();
         storage_cells.clear();
         stair_cells.clear();
+        glass_cells.clear();
+        storage_contents.clear();
+        storage_sprites.clear();
+        sprite_materials.clear();
         chunks.clear();
         landscape_chunks.clear();
         cells.reserve( scene.cells.size() );
@@ -1275,6 +1354,11 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             cells.emplace( tile.position, &tile );
             if( tile.furniture && fp3d_furniture::shows_contents( tile.furniture->shape ) ) {
                 storage_cells.push_back( &tile );
+            }
+            if( tile.kind == fp3d_snapshot::terrain_kind::glass ||
+                ( tile.kind == fp3d_snapshot::terrain_kind::window &&
+                  tile.pane == fp3d_snapshot::window_pane::glazed ) ) {
+                glass_cells.push_back( &tile );
             }
             if( tile.known == fp3d_snapshot::knowledge::visible && !tile.exterior_only &&
                 ( tile.terrain.find( "stairs" ) != std::string::npos ||
@@ -1286,6 +1370,25 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             }
         }
         last_statistics.indexed_cells = scene.cells.size();
+        // All billboard atlas lookups and cabinet occupancy are invariant
+        // during camera rotation. Rebuild them only when the scene changes.
+        sprite_materials.reserve( scene.sprites.size() );
+        for( const auto &image : scene.sprites ) {
+            sprite_materials.push_back( fp3d_materials::lookup( fp3d_materials::sprite_key( image ) ) );
+            if( image.kind != fp3d_snapshot::sprite_kind::item ) {
+                continue;
+            }
+            const auto it = cells.find( image.position );
+            if( it == cells.end() ) {
+                continue;
+            }
+            const auto *tile = it->second;
+            if( tile->furniture && tile->known == fp3d_snapshot::knowledge::visible &&
+                !tile->exterior_only && fp3d_furniture::shows_contents( tile->furniture->shape ) ) {
+                storage_contents.emplace( image.position, &image );
+                storage_sprites.insert( &image );
+            }
+        }
         constexpr int landscape_chunk_size = 48;
         for( const auto &patch : scene.landscape ) {
             const auto &p = patch.position;
@@ -1794,24 +1897,21 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     fp3d_vehicle::draw( scene, view, camera_offset );
     // Each cabinet exposes only its own contents. Draw back to front, writing
     // the cabinet depth before continuing to the next cabinet or the actors.
-    std::vector<const fp3d_snapshot::cell *> visible_storage;
+    // Compute each visible cabinet's distance once, rather than on every
+    // sort comparison (which can repeat O(log N) times per cabinet).
+    std::vector<std::pair<float, const fp3d_snapshot::cell *>> visible_storage;
+    visible_storage.reserve( storage_cells.size() );
     for( const auto *tile : storage_cells ) {
-        const auto offset = tile->position - scene.origin;
-        if( view.contains( offset.x() - camera_offset.x,
-                           offset.z() * fp3d_camera::floor_height + .9f - fp3d_camera::eye_height,
-                           offset.y() - camera_offset.y, 1.4f ) ) {
-            visible_storage.push_back( tile );
-        }
-    }
-    const auto storage_distance = [&]( const fp3d_snapshot::cell *tile ) {
         const auto offset = tile->position - scene.origin;
         const float x = offset.x() - camera_offset.x;
         const float z = offset.y() - camera_offset.y;
         const float y = offset.z() * fp3d_camera::floor_height + .9f - fp3d_camera::eye_height;
-        return x * x + y * y + z * z;
-    };
-    std::sort( visible_storage.begin(), visible_storage.end(), [&]( const auto *a, const auto *b ) {
-        return storage_distance( a ) > storage_distance( b );
+        if( view.contains( x, y, z, 1.4f ) ) {
+            visible_storage.emplace_back( x * x + y * y + z * z, tile );
+        }
+    }
+    std::sort( visible_storage.begin(), visible_storage.end(), []( const auto &a, const auto &b ) {
+        return a.first > b.first;
     } );
     const auto draw_storage = [&]( const fp3d_snapshot::cell &tile ) {
         const auto &model = *tile.furniture;
@@ -1851,7 +1951,9 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                             position.y() - camera_offset.y, image.height * .74f ) ) {
             return;
         }
-        const auto material = fp3d_materials::lookup( fp3d_materials::sprite_key( image ) );
+        // The image comes from scene.sprites; resolve its atlas UV once per
+        // published snapshot, not on every mouse-look frame.
+        const auto &material = sprite_materials[static_cast<std::size_t>( &image - scene.sprites.data() )];
         const float flash = image.kind == fp3d_snapshot::sprite_kind::monster ?
                             fp3d_compositor::hit_flash( image.position ) : 0.0f;
         if( material ) {
@@ -2014,25 +2116,17 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         glPopMatrix();
     };
     const auto storage_item = [&]( const fp3d_snapshot::sprite &image ) {
-        const auto *owner = known_cell( image.position );
-        return image.kind == fp3d_snapshot::sprite_kind::item && owner && owner->furniture &&
-               owner->known == fp3d_snapshot::knowledge::visible && !owner->exterior_only &&
-               fp3d_furniture::shows_contents( owner->furniture->shape );
+        return storage_sprites.count( &image ) != 0;
     };
-    std::unordered_map<tripoint_abs_ms, const fp3d_snapshot::sprite *> contents;
-    for( const auto &image : scene.sprites ) {
-        if( storage_item( image ) ) {
-            contents.emplace( image.position, &image );
-        }
-    }
     glEnable( GL_CULL_FACE );
     glFrontFace( GL_CCW );
     glCullFace( GL_BACK );
     glEnable( GL_LIGHTING );
     glDisable( GL_ALPHA_TEST );
-    for( const auto *tile : visible_storage ) {
-        const auto item = contents.find( tile->position );
-        if( item == contents.end() ) {
+    for( const auto &entry : visible_storage ) {
+        const auto *tile = entry.second;
+        const auto item = storage_contents.find( tile->position );
+        if( item == storage_contents.end() ) {
             draw_storage( *tile );
             continue;
         }
@@ -2113,35 +2207,31 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     fp3d_vehicle::draw_glass( scene, view, camera_offset );
     // Glass is drawn after all opaque geometry and actors, back to front.
     // Depth testing keeps nearer walls/actors opaque; glass never writes depth.
-    std::vector<const fp3d_snapshot::cell *> glass;
-    for( const auto &tile : scene.cells ) {
-        if( tile.kind == fp3d_snapshot::terrain_kind::glass ||
-            ( tile.kind == fp3d_snapshot::terrain_kind::window &&
-              tile.pane == fp3d_snapshot::window_pane::glazed ) ) {
-            glass.push_back( &tile );
-        }
-    }
-    const auto distance = [&]( const fp3d_snapshot::cell * tile ) {
+    // Only visible glass needs depth sorting. The full glass index is
+    // retained across frames; rebuilding it by scanning all scene cells
+    // on every camera rotation was especially costly in large cities.
+    std::vector<std::pair<float, const fp3d_snapshot::cell *>> glass;
+    glass.reserve( glass_cells.size() );
+    for( const auto *tile : glass_cells ) {
         const auto offset = tile->position - scene.origin;
         const float x = offset.x() - camera_offset.x;
         const float y = offset.z() * fp3d_camera::floor_height + 1.5f - fp3d_camera::eye_height;
         const float z = offset.y() - camera_offset.y;
-        return x * x + y * y + z * z;
-    };
-    std::sort( glass.begin(), glass.end(), [&]( const auto * a, const auto * b ) {
-        return distance( a ) > distance( b );
+        if( view.contains( x, y, z, .8f ) ) {
+            glass.emplace_back( x * x + y * y + z * z, tile );
+        }
+    }
+    std::sort( glass.begin(), glass.end(), []( const auto &a, const auto &b ) {
+        return a.first > b.first;
     } );
     glEnable( GL_BLEND );
     glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
     glDepthMask( GL_FALSE );
     glAlphaFunc( GL_GREATER, .01f );
-    for( const auto *tile : glass ) {
+    for( const auto &entry : glass ) {
+        const auto *tile = entry.second;
         const auto offset = tile->position - scene.origin;
         const float y = offset.z() * fp3d_camera::floor_height;
-        if( !view.contains( offset.x() - camera_offset.x, y + 1.5f - fp3d_camera::eye_height,
-                            offset.y() - camera_offset.y, .8f ) ) {
-            continue;
-        }
         const int ew = known_wall( tile->position + tripoint_rel_ms::east ) +
                        known_wall( tile->position + tripoint_rel_ms::west );
         const int ns = known_wall( tile->position + tripoint_rel_ms::north ) +

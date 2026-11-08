@@ -2366,7 +2366,9 @@ void options_manager::add_options_graphics()
         add( "TERMINAL_X", page_id, to_translation( "Terminal width" ),
              to_translation( "Set the size of the terminal along the X axis." ),
 #if defined(_WIN32) && defined(ENABLE_FP3D)
-             80, 960, 180, COPT_POSIX_CURSES_HIDE
+             // Keep a similar initial window size while enlarging the native
+             // Windows 3D menu glyphs; avoids tiny text in the player ZIP.
+             80, 960, 120, COPT_POSIX_CURSES_HIDE
 #else
              80, 960, 80, COPT_POSIX_CURSES_HIDE
 #endif
@@ -2375,7 +2377,7 @@ void options_manager::add_options_graphics()
         add( "TERMINAL_Y", page_id, to_translation( "Terminal height" ),
              to_translation( "Set the size of the terminal along the Y axis." ),
 #if defined(_WIN32) && defined(ENABLE_FP3D)
-             24, 270, 60, COPT_POSIX_CURSES_HIDE
+             24, 270, 40, COPT_POSIX_CURSES_HIDE
 #else
              24, 270, 24, COPT_POSIX_CURSES_HIDE
 #endif
@@ -2395,17 +2397,29 @@ void options_manager::add_options_graphics()
 
         add( "FONT_WIDTH", page_id, to_translation( "Font width" ),
              to_translation( "Set the font width.  Requires restart." ),
+#if defined(_WIN32) && defined(ENABLE_FP3D)
+             6, 100, 12, COPT_CURSES_HIDE
+#else
              6, 100, 8, COPT_CURSES_HIDE
+#endif
            );
 
         add( "FONT_HEIGHT", page_id, to_translation( "Font height" ),
              to_translation( "Set the font height.  Requires restart." ),
+#if defined(_WIN32) && defined(ENABLE_FP3D)
+             8, 100, 24, COPT_CURSES_HIDE
+#else
              8, 100, 16, COPT_CURSES_HIDE
+#endif
            );
 
         add( "FONT_SIZE", page_id, to_translation( "Font size" ),
              to_translation( "Set the font size.  Requires restart." ),
+#if defined(_WIN32) && defined(ENABLE_FP3D)
+             8, 100, 24, COPT_CURSES_HIDE
+#else
              8, 100, 16, COPT_CURSES_HIDE
+#endif
            );
 
         add( "MAP_FONT_WIDTH", page_id, to_translation( "Map font width" ),

@@ -910,7 +910,11 @@ void publish( fp3d_snapshot::scene_snapshot scene )
                                    << ", z_range=" << scene.min_z << ".." << scene.max_z
                                    << ", capture_ms=" << scene.capture_ms;
     }
-    fp3d_snapshot::connect_stairs( scene );
+    // capture() already connected these stairs; avoid a second full-scene
+    // scan and sort when publishing each turn. Synthetic scenes still work.
+    if( !scene.stairs_connected ) {
+        fp3d_snapshot::connect_stairs( scene );
+    }
     const unsigned now = SDL_GetTicks();
     camera.confirm( scene.origin, now, accepted_walk && *accepted_walk == scene.origin );
     if( scene.rider ) {
@@ -1240,6 +1244,7 @@ void compose()
                 pitch = 2.0f;
             }
         }
+        bool reflectivity_rendered = false;
         if( latest_scene ) {
             fp3d_materials::bind();
             glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
@@ -1260,11 +1265,6 @@ void compose()
             if( reflectivity_fbo && fp3d_shaderpacks::wet_ssr_enabled() &&
                 fp3d_shaderpacks::mc_visual_strength() > 0.0f &&
                 fp3d_shaderpacks::quality() >= 3 ) {
-                bind_framebuffer( GL_FRAMEBUFFER, reflectivity_fbo );
-                glViewport( 0, 0, texture_width, texture_height );
-                glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-                glClearColor( 0, 0, 0, 0 );
-                glClear( GL_COLOR_BUFFER_BIT );
                 // Optional QA-only synthetic wetness, applied to the
                 // isolated test frame, never to the game simulation.
                 const float rain =
@@ -1272,10 +1272,20 @@ void compose()
                       env_enabled( "CDDA_FP3D_QA_FORCE_WET" ) ) ? 1.0f :
                     latest_scene->weather.particles == fp3d_weather::precipitation::rain ?
                     std::clamp( latest_scene->weather.intensity, 0.0f, 1.0f ) : 0.0f;
-                fp3d_scene::draw_reflectivity_mask( *latest_scene, yaw, pitch,
-                    static_cast<float>( texture_width ) / texture_height,
-                    frame_camera, rain );
-                bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
+                // Dry terrain without visible water needs neither another FBO
+                // pass nor the full-screen SSR sampling branch.
+                if( fp3d_scene::has_reflective_surfaces( *latest_scene, rain ) ) {
+                    bind_framebuffer( GL_FRAMEBUFFER, reflectivity_fbo );
+                    glViewport( 0, 0, texture_width, texture_height );
+                    glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+                    glClearColor( 0, 0, 0, 0 );
+                    glClear( GL_COLOR_BUFFER_BIT );
+                    fp3d_scene::draw_reflectivity_mask( *latest_scene, yaw, pitch,
+                        static_cast<float>( texture_width ) / texture_height,
+                        frame_camera, rain );
+                    bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
+                    reflectivity_rendered = true;
+                }
             }
         } else {
             draw_cube();
@@ -1285,10 +1295,7 @@ void compose()
         fp3d_shadow::data light_pass;
         if( latest_scene ) {
             post_env.depth = depth_texture;
-            post_env.reflection_mask =
-                reflectivity_fbo && fp3d_shaderpacks::wet_ssr_enabled() &&
-                fp3d_shaderpacks::mc_visual_strength() > 0.0f &&
-                fp3d_shaderpacks::quality() >= 3 ? reflectivity_texture : 0;
+            post_env.reflection_mask = reflectivity_rendered ? reflectivity_texture : 0;
             post_env.daylight = latest_scene->sky.daylight;
             post_env.clouds = latest_scene->weather.clouds;
             post_env.fog_end = latest_scene->weather.fog_end;

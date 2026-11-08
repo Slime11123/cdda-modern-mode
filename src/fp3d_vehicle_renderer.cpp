@@ -1545,11 +1545,16 @@ bool in_view( const vehicle_view &v, const fp3d_snapshot::scene_snapshot &scene,
               const fp3d_camera::frustum &view, fp3d_camera::offset camera )
 {
     const tripoint_rel_ms rel = v.origin - scene.origin;
-    float extent = 1.8f;
+    // The bounding radius is independent of camera direction. Compare each
+    // part's squared mount distance and take only one square root per car,
+    // instead of one hypot() for every part on every 3D frame.
+    float farthest_mount_squared = 0.0f;
     for( const part_view &part : v.parts ) {
-        extent = std::max( extent, std::hypot( float( part.mount_x - v.pivot_x ),
-                                              float( part.mount_y - v.pivot_y ) ) + 1.8f );
+        const float dx = float( part.mount_x - v.pivot_x );
+        const float dy = float( part.mount_y - v.pivot_y );
+        farthest_mount_squared = std::max( farthest_mount_squared, dx * dx + dy * dy );
     }
+    const float extent = std::sqrt( farthest_mount_squared ) + 1.8f;
     return view.contains( rel.x() - camera.x,
                           rel.z() * fp3d_camera::floor_height + .73f - fp3d_camera::eye_height,
                           rel.y() - camera.y, extent );

@@ -141,6 +141,7 @@ void connect_stairs( scene_snapshot &scene )
             }
         }
     }
+    scene.stairs_connected = true;
 }
 
 std::string item_sprite_id( const item &object )
