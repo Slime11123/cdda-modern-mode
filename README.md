@@ -26,6 +26,10 @@ Explore CDDA's world in a first-person 3D perspective, or switch back to classic
 
 ![Kitchen gameplay](docs/images/ingame-demo-kitchen-3d.png)
 
+**Modern inventory and nested pockets**
+
+![CDDA Modern Mode inventory equipment and nested pockets screenshot](docs/images/ingame-inventory-modern-ui-2026-11-08.png)
+
 *Actual development screenshots supplied by the developer. Graphics and performance depend on settings and hardware.*
 
 ## What's new — Alpha 0.3.1

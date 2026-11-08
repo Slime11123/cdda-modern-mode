@@ -26,6 +26,10 @@
 
 ![CDDA Modern Mode 第一人称厨房实机截图](docs/images/ingame-demo-kitchen-3d.png)
 
+**现代背包与真实口袋界面**
+
+![CDDA Modern Mode 现代背包、装备与真实口袋的实机画面](docs/images/ingame-inventory-modern-ui-2026-11-08.png)
+
 *以上均为开发者提供的真实游戏截图；画面效果、帧数与所选图块包和电脑硬件有关。*
 
 ## Alpha 0.3.1：性能与界面缩放优化
