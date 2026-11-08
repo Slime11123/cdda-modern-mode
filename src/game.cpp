@@ -4201,15 +4201,24 @@ void game::draw( ui_adaptor &ui )
     }
 
     ter_view_p.z() = ( u.pos_bub() + u.view_offset ).z();
-    here.build_map_cache( ter_view_p.z() );
-    here.update_visibility_cache( ter_view_p.z() );
+#if defined(ENABLE_FP3D)
+    const bool capture_3d = fp3d_compositor::active() && ter_view_p.z() == u.posz();
+    if( capture_3d ) {
+        // This also builds and updates the player's native view caches. Doing
+        // the original preparation first would generate that lightmap twice.
+        fp3d_snapshot::prepare_view( u, here );
+    } else
+#endif
+    {
+        here.build_map_cache( ter_view_p.z() );
+        here.update_visibility_cache( ter_view_p.z() );
+    }
 
     werase( w_terrain );
     void_blink_curses();
 #if defined(ENABLE_FP3D)
     // Publish before any native map drawing so the first 3D frame can skip it.
-    if( fp3d_compositor::active() && ter_view_p.z() == u.posz() ) {
-        fp3d_snapshot::prepare_view( u, here );
+    if( capture_3d ) {
         fp3d_compositor::publish( fp3d_snapshot::capture( u, here ) );
     } else if( fp3d_compositor::uses_hud() &&
                fp3d_compositor::controls() != fp3d_input::mode::first_person_3d ) {

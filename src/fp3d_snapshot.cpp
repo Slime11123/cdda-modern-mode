@@ -905,9 +905,10 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
         return ( ( p.z() - result.min_z ) * side + p.y() - first_y ) * side + p.x() - first_x;
     };
     const auto perception_started = std::chrono::steady_clock::now();
+    const int sight_range = you.unimpaired_range();
+    const bool aiming = you.recoil < MAX_RECOIL;
     if( fresh && !blind ) {
         const int clairvoyance = you.clairvoyance();
-        const int sight_range = you.unimpaired_range();
         for( int z = result.min_z; z <= result.max_z; ++z ) {
             const auto &cache = here.access_cache( z );
             for( int y = first_y; y < first_y + side; ++y ) {
@@ -928,8 +929,13 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                     }
                     // 3D keeps native obstruction and range, but dark cells
                     // still contribute terrain, furniture, items and creatures.
-                    const auto light = map::apparent_light_helper( cache, p );
-                    if( clairvoyant || !light.obstructed ) {
+                    // Match apparent_light_helper's obstruction and aiming
+                    // gates without calculating unused light quadrants for
+                    // every opaque tile. 3D presentation is light-independent.
+                    const float visibility = distance > sight_range ? cache.camera_cache[x][y] :
+                                             std::max( cache.seen_cache[x][y], cache.camera_cache[x][y] );
+                    if( clairvoyant || ( visibility > LIGHT_TRANSPARENCY_SOLID + .1f &&
+                                         ( !aiming || !you.cant_see( p ) ) ) ) {
                         perception[index( p )] = visible_bit | ( here.is_open_air( p ) ? air_bit : 0 );
                     }
                 }
@@ -1082,8 +1088,18 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
         }
         return false;
     };
+    // Many cells share the same furniture definition (including f_null).
+    // Resolve its model/looks_like chain once per capture, so edits, mod
+    // reloads and newly connected appliances cannot leave a stale model.
+    std::unordered_map<std::string, std::optional<fp3d_furniture::model>> furniture_models;
+    const auto furniture_model = [&]( const std::string &id ) -> const std::optional<fp3d_furniture::model> & {
+        const auto entry = furniture_models.try_emplace( id );
+        if( entry.second ) { entry.first->second = fp3d_furniture::describe( id ); }
+        return entry.first->second;
+    };
     result.cells.reserve( ( radius * 2 + 1 ) * ( radius * 2 + 1 ) );
     for( int z = result.min_z; z <= result.max_z; ++z ) {
+        const auto &cache = here.access_cache( z );
         for( int dy = -radius; dy <= radius; ++dy ) {
             for( int dx = -radius; dx <= radius; ++dx ) {
                 const tripoint_bub_ms p = player + tripoint_rel_ms( dx, dy, z - player.z() );
@@ -1101,28 +1117,33 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                     // backdrop. Known room ceilings/walls still occlude it.
                     result.sky = fp3d_sky::sample( calendar::turn, true );
                 }
-                bool beside_visible_air =
-                    ( perception[index( p + tripoint_rel_ms::north )] & air_bit ) ||
-                    ( perception[index( p + tripoint_rel_ms::south )] & air_bit ) ||
-                    ( perception[index( p + tripoint_rel_ms::east )] & air_bit ) ||
-                    ( perception[index( p + tripoint_rel_ms::west )] & air_bit );
-                if( fresh && !visible && !blind && p.z() > player.z() && !beside_visible_air ) {
-                    for( int dz : { -1, 1 } ) {
-                        const auto neighbour = p + tripoint_rel_ms( 0, 0, dz );
-                        if( neighbour.z() >= result.min_z && neighbour.z() <= result.max_z &&
-                            ( perception[index( neighbour )] & air_bit ) &&
-                            here.sees( player, p, you.unimpaired_range() ) ) {
-                            beside_visible_air = true;
-                            break;
+                // Adjacent air is only used by unseen upper facade fallbacks.
+                // Visible/current/lower cells need none of these neighbour reads.
+                bool beside_visible_air = false;
+                if( fresh && !visible && !blind && p.z() > player.z() ) {
+                    beside_visible_air =
+                        ( perception[index( p + tripoint_rel_ms::north )] & air_bit ) ||
+                        ( perception[index( p + tripoint_rel_ms::south )] & air_bit ) ||
+                        ( perception[index( p + tripoint_rel_ms::east )] & air_bit ) ||
+                        ( perception[index( p + tripoint_rel_ms::west )] & air_bit );
+                    if( !beside_visible_air ) {
+                        for( int dz : { -1, 1 } ) {
+                            const auto neighbour = p + tripoint_rel_ms( 0, 0, dz );
+                            if( neighbour.z() >= result.min_z && neighbour.z() <= result.max_z &&
+                                ( perception[index( neighbour )] & air_bit ) &&
+                                here.sees( player, p, sight_range ) ) {
+                                beside_visible_air = true;
+                                break;
+                            }
                         }
                     }
                 }
                 // Geometry in a dark room must still occlude the exterior.
                 // Native geometric LOS gates surfaces; contents retain full perception checks.
                 const bool room_surface = fresh && !visible && !blind &&
+                                          cache.seen_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID + .1f &&
                                           !here.is_outside( p ) &&
-                                          here.access_cache( z ).seen_cache[p.x()][p.y()] > LIGHT_TRANSPARENCY_SOLID + .1f &&
-                                          here.sees( player, p, you.unimpaired_range() );
+                                          here.sees( player, p, sight_range );
                 // An outdoor radio tower is open steelwork, metal walkway
                 // and railings across several z-levels. Native 3D endpoint
                 // visibility often drops the upper terrain while the adjacent
@@ -1130,8 +1151,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                 // REAL material/model for these narrowly identified exterior
                 // surfaces, never upper floor contents or other indoor IDs.
                 const bool tower_exterior_surface = fresh && !visible && !blind &&
-                    p.z() > player.z() && !you.cant_see( p ) &&
-                    square_dist( player, p ) <= you.unimpaired_range() &&
+                    p.z() > player.z() &&
                     // The underside of a first-level metal deck is visible
                     // from the ground even when that ground is a paved tile,
                     // not an open-air tile. Native-visible lower terrain is
@@ -1145,7 +1165,7 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                                id == "t_floor_metal_gangway" ||
                                id == "t_ladder_up_down" ||
                                id == "t_ladder_up" || id == "t_ladder_down";
-                    } )();
+                    } )() && square_dist( player, p ) <= sight_range && !you.cant_see( p );
                 // Native 3D shadowcasting can see the air immediately
                 // beneath an overhead platform while dropping the solid
                 // platform endpoint. Show only that neutral underside:
@@ -1327,11 +1347,11 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
                     tile.vegetation_height = height;
                 }
                 if( visible && !tile.exterior_only ) {
-                    tile.furniture = fp3d_furniture::describe( furniture );
+                    tile.furniture = furniture_model( furniture );
                     if( !tile.furniture ) {
                         const auto part = here.veh_at( p ).part_with_feature( VPFLAG_APPLIANCE, false );
                         if( part ) {
-                            tile.furniture = fp3d_furniture::describe( part->info().looks_like );
+                            tile.furniture = furniture_model( part->info().looks_like );
                             if( tile.furniture ) {
                                 tile.appliance = part->info().id.str();
                             }

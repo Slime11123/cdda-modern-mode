@@ -81,7 +81,7 @@ TEST_CASE( "fp3d_radio_tower_has_open_steel_lattice_picking_geometry", "[fp3d][g
         CHECK( part.top <= fp3d_camera::floor_height );
         CHECK( part.top > part.bottom );
         // The lattice must never regain the old full-tile solid cube.
-        CHECK_FALSE( part.width > .80f && part.depth > .80f );
+        CHECK_FALSE( ( part.width > .80f && part.depth > .80f ) );
     }
     CHECK( fp3d_snapshot::terrain_model_parts( "t_dirt" ).empty() );
 }
@@ -121,7 +121,7 @@ TEST_CASE( "fp3d_chainlink_gates_have_hollow_open_and_closed_models", "[fp3d][ge
     for( const auto &part : closed ) {
         CHECK( part.width > 0.f );
         CHECK( part.depth > 0.f );
-        CHECK_FALSE( part.width > .8f && part.depth > .8f );
+        CHECK_FALSE( ( part.width > .8f && part.depth > .8f ) );
     }
     // The open leaf folds toward the hinge, leaving the center passage free.
     CHECK( opened[4].x < -.3f );
@@ -1283,6 +1283,46 @@ TEST_CASE( "fp3d_moving_capture_budget", "[fp3d][performance]" )
             report << step << ',' << prepare_ms << ',' << scene.capture_ms << ',' << scene.cells.size()
                    << ',' << scene.sprites.size() << '\n';
         }
+    }
+}
+
+TEST_CASE( "fp3d_fast_perception_retains_native_aiming_and_wall_obstruction",
+           "[fp3d][vision][performance]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int y = -12; y <= 12; ++y ) {
+        here.ter_set( player + tripoint_rel_ms( 5, y, 0 ), ter_str_id( "t_wall" ) );
+    }
+    item weapon( itype_id( "glock_19" ) );
+    REQUIRE( you.wield( weapon ) );
+    you.last_target_pos = here.get_abs( player + tripoint_rel_ms( 0, -30, 0 ) );
+    for( int recoil : { static_cast<int>( MAX_RECOIL ), 0 } ) {
+        you.recoil = recoil;
+        you.rebuild_aim_cache();
+        fp3d_snapshot::prepare_view( you, here );
+        const auto scene = fp3d_snapshot::capture( you, here, 0, 0 );
+        std::unordered_map<tripoint_abs_ms, bool> visible;
+        for( const auto &tile : scene.cells ) {
+            visible.emplace( tile.position, tile.known == fp3d_snapshot::knowledge::visible &&
+                             !tile.exterior_only );
+        }
+        const auto &cache = here.access_cache( player.z() );
+        unsigned mismatches = 0;
+        for( int y = -fp3d_snapshot::radius; y <= fp3d_snapshot::radius; ++y ) {
+            for( int x = -fp3d_snapshot::radius; x <= fp3d_snapshot::radius; ++x ) {
+                const auto p = player + tripoint_rel_ms( x, y, 0 );
+                if( !here.inbounds( p ) ) { continue; }
+                const auto found = visible.find( here.get_abs( p ) );
+                const bool captured = found != visible.end() && found->second;
+                const bool expected = !map::apparent_light_helper( cache, p ).obstructed;
+                mismatches += captured != expected;
+            }
+        }
+        INFO( "recoil=" << recoil );
+        CHECK( mismatches == 0 );
     }
 }
 
