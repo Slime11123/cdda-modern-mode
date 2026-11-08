@@ -29,6 +29,16 @@ Visit the [Releases page](https://github.com/Slime11123/cdda-modern-mode/release
 
 The Windows package includes redistributable assets from the upstream-derived source tree, but does not bundle separately downloaded third-party tilesets. Please report issues in [GitHub Issues](https://github.com/Slime11123/cdda-modern-mode/issues).
 
+## Development preview: shaderpacks (not included in the published Alpha 0.2.0)
+
+A newer local **development build** adds a Minecraft-style shaderpack selection screen under **F5/F6 → Shaderpacks** (or use the **Open shaderpacks folder** shortcut in the F5/F6 settings). It scans `shaderpacks/` beside the game's executable, supports `post.frag` in a folder or CDDA ZIP, and provides Off, Soft Glow, Warm Cinema and Low/Medium/High/Ultra quality options. The scene renderer now has an HDR color target, sampleable depth and game-calendar-driven sun/moon lighting. These development features **do not mean the published Alpha 0.2.0 asset contains them**; rebuild from the updated source to test them.
+
+**Local development update:** Built-in shaders on Ultra now have an independent Experimental nearby sun shadows checkbox. It can be disabled without turning off other post-effects. Rescan/reload recompiles native CDDA post.frag. These are not features of the published Alpha 0.2.0.
+
+**Minecraft shaderpack support (local development only):** Standalone GLSL 1.20 final.fsh programs may run directly as a limited final pass. Photon and other complex Iris/OptiFine ZIPs can be selected and produce a CDDA visual adaptation using HDR, sky clouds, sun lighting, Bloom and nearby shadows. These are NOT the original Photon multi-pass shaders or a guarantee that arbitrary Minecraft shaderpacks work faithfully. See docs/MC_SHADERPACK_COMPATIBILITY.md for the exact scope.
+
+Photon enhancement (local test build): F5/F6 → Shaderpacks → MC visual enhancement (50–200%, default 145%). Strengthens CDDA-bridged sunlight, shadows, bloom and sky contrast; the original Iris/Photon multi-pass renderer remains unsupported.
+
 ## Recommended tileset: UndeadPeople
 
 For the **best visual experience**, we recommend pairing CDDA Modern Mode with **UndeadPeople (MSX++UnDeadPeopleEdition)**, especially for 3D buildings, furniture, and item sprites.
@@ -96,3 +106,7 @@ This is an independent GitHub repository, **not an official CDDA release**. Upst
 - Redistributable packages must retain the relevant notices and exclude personal saves, test artifacts, and separately obtained assets whose rights are not confirmed.
 
 Please report bugs and suggestions via [Issues](https://github.com/Slime11123/cdda-modern-mode/issues).
+
+Raymarch v3 local development: Photon visual bridge adds a separate native reflectivity target, wet-road/water SSR and shadow-map-occluded volumetric sunlight, with independent F5/F6 toggles. See docs/FP3D_DEPTH_RAYMARCH_RENDER_PIPELINE.md. Not full Iris/Photon multi-pass.
+
+Photon indoor/outdoor lighting fix (local v4): entering a building no longer disables sunlight shadows, volumetric light, or SSR for the whole scene; exterior brightness stays consistent. See docs/FP3D_INDOOR_OUTDOOR_DAYLIGHT_FIX.md.

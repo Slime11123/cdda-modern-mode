@@ -19,6 +19,9 @@
 #include "messages.h"
 #include "mission.h"
 #include "map.h"
+#include "vehicle.h"
+#include "veh_type.h"
+#include "vpart_position.h"
 #include "omdata.h"
 #include "output.h"
 #include "overmapbuffer.h"
@@ -96,6 +99,20 @@ std::vector<data::message_entry> inspect( const avatar &you, const map &here,
         const Creature *creature = get_creature_tracker().creature_at( position );
         if( creature && !creature->is_avatar() && you.sees( here, *creature ) ) {
             lines.push_back( { creature->disp_name(), c_white } );
+        }
+    } else if( target.type == fp3d_targeting::kind::vehicle && target.vehicle_origin &&
+               target.vehicle_part >= 0 ) {
+        const auto vp = here.veh_at( position );
+        if( vp && vp->vehicle().pos_abs() == *target.vehicle_origin &&
+            target.vehicle_part < vp->vehicle().part_count() ) {
+            const vehicle_part &part = vp->vehicle().part( target.vehicle_part );
+            if( !part.removed && !part.is_fake && !part.hidden &&
+                part.mount.x() == target.vehicle_mount_x &&
+                part.mount.y() == target.vehicle_mount_y &&
+                part.info().id.str() == target.id ) {
+                lines.push_back( { vp->vehicle().name, c_yellow } );
+                lines.push_back( { part.info().name(), part.is_broken() ? c_light_red : c_white } );
+            }
         }
     } else if( target.type == fp3d_targeting::kind::item && here.could_see_items( position, you ) ) {
         const auto tile = here.maptile_at( position );

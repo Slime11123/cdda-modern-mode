@@ -67,6 +67,24 @@ const fp3d_snapshot::cell *find_cell( const fp3d_snapshot::scene_snapshot &scene
 }
 } // namespace
 
+TEST_CASE( "fp3d_radio_tower_has_open_steel_lattice_picking_geometry", "[fp3d][geometry]" )
+{
+    CHECK( fp3d_snapshot::terrain_shape( "t_radio_tower" ) ==
+           fp3d_snapshot::terrain_kind::obstacle );
+    const auto parts = fp3d_snapshot::terrain_model_parts( "t_radio_tower" );
+    REQUIRE( parts.size() == 64 ); // 4 posts, 12 rails, 48 brace proxies.
+    for( const auto &part : parts ) {
+        CHECK( part.width > 0.f );
+        CHECK( part.depth > 0.f );
+        CHECK( part.bottom >= 0.f );
+        CHECK( part.top <= fp3d_camera::floor_height );
+        CHECK( part.top > part.bottom );
+        // The lattice must never regain the old full-tile solid cube.
+        CHECK_FALSE( part.width > .80f && part.depth > .80f );
+    }
+    CHECK( fp3d_snapshot::terrain_model_parts( "t_dirt" ).empty() );
+}
+
 TEST_CASE( "fp3d_snapshot_keeps_hidden_door_memory", "[fp3d][vision]" )
 {
     prepare_scene();

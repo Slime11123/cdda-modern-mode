@@ -9,6 +9,7 @@
 #include <functional>
 #include <utility>
 #include <unordered_map>
+#include <unordered_set>
 
 #if defined(_MSC_VER) && defined(USE_VCPKG)
 #include <SDL2/SDL_opengl.h>
@@ -18,6 +19,8 @@
 
 #include "fp3d_snapshot.h"
 #include "fp3d_materials.h"
+#include "fp3d_shaderpacks.h"
+#include "fp3d_vehicle_renderer.h"
 
 namespace fp3d_scene
 {
@@ -270,7 +273,58 @@ void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
     glRotatef( -90.0f * facing, 0, 1, 0 );
     unsigned part_index = 0;
     for( const auto &part : fp3d_furniture::parts( model.shape ) ) {
-        const auto surfaces = fp3d_materials::lookup_furniture( model.id, part_index++ );
+        const unsigned index = part_index++;
+        const auto surfaces = fp3d_materials::lookup_furniture( model.id, index );
+        // The UndeadPeople mailbox and streetlamp are 2D pseudo-3D art with
+        // cast shadows baked in.  Their entire sprite cannot be mapped onto
+        // a three-dimensional box without drawing the shadow on its sides.
+        // Preserve the actual sprite palette but paint distinct physical
+        // surfaces with flat metal, timber and a clean light diffuser.
+        const bool mailbox = model.shape == fp3d_furniture::kind::mailbox;
+        const bool lamp_head = model.shape == fp3d_furniture::kind::street_light &&
+                               index >= 3;
+        if( mailbox || lamp_head ) {
+            glPushAttrib( GL_CURRENT_BIT | GL_ENABLE_BIT );
+            if( mailbox ) {
+                switch( index ) {
+                    case 0: // weathered brown wooden support
+                    case 1:
+                        glColor3f( .43f, .32f, .23f );
+                        break;
+                    case 2: // red, enamel-painted metal letterbox
+                        glColor3f( .68f, .21f, .19f );
+                        break;
+                    case 3: // dark front hatch and small outline
+                        glColor3f( .25f, .21f, .21f );
+                        break;
+                    default: // raised red collection flag
+                        glColor3f( .85f, .26f, .18f );
+                        break;
+                }
+            } else if( index == 3 ) {
+                glColor3f( .58f, .63f, .67f ); // opaque gray metal lamp shell
+            } else {
+                glDisable( GL_LIGHTING );
+                glColor3f( .95f, .92f, .76f ); // softly lit underside
+            }
+            // Untextured surfaces prevent the giant false 2D shadow/photo
+            // from stretching over mailbox sides and the underside lamp.
+            const fp3d_materials::furniture_uv flat{};
+            if( part.round ) {
+                round_furniture_part( part, flat );
+            } else {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
+                     std::nullopt );
+                glPushMatrix();
+                glTranslatef( part.x, part.bottom, part.z );
+                glScalef( part.width, 1, part.depth );
+                glRotatef( 180, 1, 0, 0 );
+                floor( 0, 0, 0, std::nullopt );
+                glPopMatrix();
+            }
+            glPopAttrib();
+            continue;
+        }
         if( part.glass ) {
             // A display case consists of visible open space, not a solid
             // blue-painted cube.  State restoration also works in GL lists.
@@ -305,12 +359,114 @@ void furniture_geometry( const fp3d_furniture::model &model, float x, float z,
     glPopMatrix();
 }
 
+// t_radio_tower is a transparent, impassable steel frame in native CDDA.
+// Build a genuine open lattice per z-level rather than stretching its X-shaped
+// 2D icon onto a one-metre opaque cube. Adjacent storeys meet at the same rails.
+void radio_tower_geometry( float x, float z, float brightness )
+{
+    constexpr float half = .34f;
+    const float height = fp3d_camera::floor_height;
+    const auto beam = [&]( float x0, float y0, float z0, float x1, float y1, float z1,
+                           float thickness, bool painted ) {
+        const float dx = x1 - x0;
+        const float dy = y1 - y0;
+        const float dz = z1 - z0;
+        const float horizontal = std::hypot( dx, dz );
+        const float length = std::hypot( horizontal, dy );
+        if( length < .0001f ) {
+            return;
+        }
+        if( painted ) {
+            glColor3f( brightness * .68f, brightness * .15f, brightness * .14f );
+        } else {
+            glColor3f( brightness * .56f, brightness * .60f, brightness * .65f );
+        }
+        glPushMatrix();
+        glTranslatef( x + ( x0 + x1 ) * .5f, ( y0 + y1 ) * .5f,
+                      z + ( z0 + z1 ) * .5f );
+        if( horizontal > .0001f ) {
+            glRotatef( std::atan2( horizontal, dy ) * 180.f / 3.14159265358979323846f,
+                       dz, 0, -dx );
+        }
+        box( 0, 0, thickness, thickness, -length * .5f, length * .5f, std::nullopt );
+        glPopMatrix();
+    };
+    glPushAttrib( GL_CURRENT_BIT | GL_ENABLE_BIT );
+    glDisable( GL_TEXTURE_2D );
+    // Corner posts: same offsets on each storey, with no zig-zag seams.
+    for( const float sx : { -half, half } ) {
+        for( const float sz : { -half, half } ) {
+            beam( sx, 0, sz, sx, height, sz, .075f, false );
+        }
+    }
+    // Horizontal square rings give the cross-bracing real anchor points.
+    for( int level = 0; level <= 2; ++level ) {
+        const float y = height * level / 2.f;
+        for( const float side : { -half, half } ) {
+            beam( -half, y, side, half, y, side, .052f, false );
+            beam( side, y, -half, side, y, half, .052f, false );
+        }
+    }
+    // Red diagonal X braces on each of the four open steel faces.
+    for( int level = 0; level < 2; ++level ) {
+        const float bottom = height * level / 2.f;
+        const float top = height * ( level + 1 ) / 2.f;
+        for( const float side : { -half, half } ) {
+            beam( -half, bottom, side, half, top, side, .041f, true );
+            beam( half, bottom, side, -half, top, side, .041f, true );
+            beam( side, bottom, -half, side, top, half, .041f, true );
+            beam( side, bottom, half, side, top, -half, .041f, true );
+        }
+    }
+    glPopAttrib();
+}
+
+// Actual open chain-link wire.  One continuous narrow metal post per tile
+// and a diagonal lattice on each half-span.  Unlike the UndeadPeople source
+// icon, this has no opaque background, fake projected shadow or billboard.
+void chain_link_mesh( float x, float z, const fp3d_furniture::part &span,
+                      float brightness )
+{
+    const bool along_x = span.width > span.depth;
+    const float middle = along_x ? span.x : span.z;
+    const float width = along_x ? span.width : span.depth;
+    const float low = middle - width * .5f;
+    const float high = middle + width * .5f;
+    constexpr int divisions = 4;
+    constexpr int levels = 11;
+    glPushAttrib( GL_ENABLE_BIT | GL_CURRENT_BIT | GL_LINE_BIT );
+    glDisable( GL_TEXTURE_2D );
+    glDisable( GL_LIGHTING );
+    glDisable( GL_ALPHA_TEST );
+    glLineWidth( 1.35f );
+    glColor3f( brightness * .60f, brightness * .68f, brightness * .72f );
+    glBegin( GL_LINES );
+    const auto vertex = [&]( float u, float y ) {
+        glVertex3f( x + ( along_x ? u : 0.f ), y,
+                    z + ( along_x ? 0.f : u ) );
+    };
+    for( int col = 0; col < divisions; ++col ) {
+        const float u0 = low + ( high - low ) * col / divisions;
+        const float u1 = low + ( high - low ) * ( col + 1 ) / divisions;
+        for( int row = 0; row < levels; ++row ) {
+            const float y0 = .13f + 1.70f * row / levels;
+            const float y1 = .13f + 1.70f * ( row + 1 ) / levels;
+            vertex( u0, y0 );
+            vertex( u1, y1 );
+            vertex( u0, y1 );
+            vertex( u1, y0 );
+        }
+    }
+    glEnd();
+    glPopAttrib();
+}
+
 void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                 const fp3d_snapshot::cell *below, const fp3d_snapshot::cell *above,
                 int ew, int ns, const std::string &wall_surface,
                 const std::array<float, 4> *tint = nullptr, bool defer_storage = false,
                 unsigned furniture_facing = 0, const std::array<bool, 4> &fence_neighbours = {},
-                unsigned climb_facing = 0 )
+                unsigned climb_facing = 0, bool hide_vehicle_roof_ghost = false )
 {
     const auto color = [&]( float r, float g, float b ) {
         if( tint ) {
@@ -324,10 +480,16 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
     const bool grass = tile.vegetation.compare( 0, 7, "t_grass" ) == 0;
     const bool door = tile.kind == kind::closed_door || tile.kind == kind::open_door ||
                       tile.kind == kind::damaged_door || tile.kind == kind::glass;
+    const bool pillar = tile.terrain == "t_column" || tile.terrain == "t_pillar" ||
+                        tile.terrain == "t_little_column" || tile.terrain == "t_column_halfway";
     const auto material = fp3d_materials::lookup(
+                              pillar ? "t_concrete" :
                               tile.kind == kind::ladder ? "t_concrete" :
                               tile.kind == kind::downspout ? "t_dirt" :
-                              tile.kind == kind::fence ? "t_dirt" :
+                              tile.kind == kind::fence ?
+                              tile.terrain == "t_concrete_railing" ||
+                              tile.terrain.compare( 0, 11, "t_guardrail" ) == 0 ?
+                              "t_concrete" : "t_dirt" :
                               tile.kind == kind::window ? "t_floor" :
                               tile.vegetation == tile.terrain && !grass ? "t_dirt" : tile.terrain );
     const float brightness = memory ? .23f : .9f;
@@ -342,7 +504,16 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
                                ( tile.kind == kind::ladder ||
                                  tile.terrain.find( "stairs" ) != std::string::npos ||
                                  ( below && below->goes_up ) );
-    if( tile.floor_present && !tile.is_ramp && !stair_opening ) {
+    // V8: omit the phantom upper level sheet only where a native car
+    // stands on an exposed road and its overhead support is isolated.
+    // A radio tower stacked through z-levels has open steelwork between floors.
+    // This is presentation-only; the native tower remains impassable.
+    const bool tower_floor_gap = tile.terrain == "t_radio_tower" &&
+                                 below && below->terrain == "t_radio_tower";
+    const bool tower_ceiling_gap = tile.terrain == "t_radio_tower" &&
+                                   above && above->terrain == "t_radio_tower";
+    if( tile.floor_present && !hide_vehicle_roof_ghost &&
+        !tile.is_ramp && !stair_opening && !tower_floor_gap ) {
         const auto floor_material = door ? fp3d_materials::lookup( "t_floor" ) : material;
         if( floor_material ) {
             color( brightness, brightness, brightness );
@@ -372,7 +543,8 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         }
     }
     const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
-    if( tile.ceiling_present && !upper_floor_surface ) {
+    if( tile.ceiling_present && !upper_floor_surface &&
+        !hide_vehicle_roof_ghost && !tower_ceiling_gap ) {
         // Neutral underside only: this is not an upstairs terrain cell.
         glPushMatrix();
         glTranslatef( x, fp3d_camera::floor_height - .08f, z );
@@ -450,22 +622,102 @@ void draw_cell( const fp3d_snapshot::cell &tile, float x, float z,
         color( brightness, brightness, brightness );
         furniture_geometry( *tile.furniture, x, z, furniture_facing );
     }
-    if( tile.kind == kind::fence ) {
+    const bool modeled_terrain = pillar || tile.kind == kind::fence;
+    const auto built_parts = modeled_terrain ?
+                             fp3d_snapshot::terrain_model_parts( tile.terrain, fence_neighbours ) :
+                             std::vector<fp3d_furniture::part>{};
+    if( !built_parts.empty() ) {
+        // The terrain tile remains native terrain (same collisions,
+        // interaction, movement and save data). Its 3D rendering now uses
+        // the same per-piece dimensions as pointer ray casting.
+        const auto source = tile.kind == kind::fence ?
+                            fp3d_materials::lookup( "$fence:" + tile.terrain ) :
+                            fp3d_materials::lookup( "t_concrete" );
+        const auto crop = [&]( float x0, float y0, float x1, float y1 ) -> std::optional<fp3d_materials::uv_rect> {
+            if( !source ) {
+                return std::nullopt;
+            }
+            const float du = source->right - source->left;
+            const float dv = source->bottom - source->top;
+            return fp3d_materials::uv_rect{ source->left + du * x0 / 31,
+                                            source->top + dv * y0 / 31,
+                                            source->left + du * x1 / 31,
+                                            source->top + dv * y1 / 31 };
+        };
+        std::optional<fp3d_materials::uv_rect> surface = source;
+        std::optional<fp3d_materials::uv_rect> rail = surface;
+        if( tile.terrain == "t_fence" ) {
+            surface = crop( 13, 8, 18, 16 ); // painted white picket, no shadows
+            rail = crop( 10, 13, 23, 17 );
+        } else if( tile.terrain == "t_privacy_fence" ) {
+            surface = crop( 9, 6, 17, 20 ); // opaque redwood, not perspective
+            rail = crop( 6, 15, 25, 19 );
+        } else if( tile.terrain == "t_concrete_railing" ) {
+            surface = crop( 3, 4, 10, 10 );
+            rail = crop( 12, 15, 21, 18 );
+        } else if( tile.terrain == "t_railing" ) {
+            surface = crop( 12, 5, 19, 12 );
+            rail = crop( 8, 12, 23, 17 );
+        } else if( tile.terrain == "t_metal_railing" ) {
+            surface = crop( 12, 7, 19, 12 );
+            rail = crop( 9, 13, 24, 17 );
+        } else if( tile.terrain.compare( 0, 11, "t_guardrail" ) == 0 ) {
+            surface = crop( 14, 13, 19, 20 );
+            rail = crop( 7, 13, 24, 20 );
+        }
+        color( brightness, brightness, brightness );
+        for( size_t i = 0; i < built_parts.size(); ++i ) {
+            const auto &p = built_parts[i];
+            // UndeadPeople's picket/metal railing pixels include black
+            // outlines and faux depth.  Repeating those on every upright
+            // produced harsh zebra stripes; keep their actual paint colors.
+            const bool matte = tile.terrain == "t_fence" ||
+                               tile.terrain == "t_metal_railing" ||
+                               tile.terrain == "t_railing";
+            if( matte ) {
+                glPushAttrib( GL_CURRENT_BIT );
+                const bool wood = tile.terrain == "t_railing";
+                const bool metal = tile.terrain == "t_metal_railing";
+                const float r = wood ? .53f : metal ? .64f : .83f;
+                const float g = wood ? .41f : metal ? .67f : .83f;
+                const float b = wood ? .29f : metal ? .69f : .79f;
+                const float factor = i > 1 ? .96f : 1.0f;
+                glColor3f( brightness * r * factor, brightness * g * factor,
+                           brightness * b * factor );
+                box( x + p.x, z + p.z, p.width, p.depth, p.bottom, p.top,
+                     std::nullopt );
+                glPopAttrib();
+            } else {
+                const auto &paint = i > 1 && tile.terrain == "t_concrete_railing" ?
+                                    rail : surface;
+                box( x + p.x, z + p.z, p.width, p.depth, p.bottom, p.top, paint );
+            }
+        }
+    } else if( tile.kind == kind::fence ) {
         const auto parts = fp3d_snapshot::fence_parts( fence_neighbours,
                            tile.terrain == "t_chainfence_posts" );
-        color( brightness * .7f, brightness * .72f, brightness * .74f );
+        // Galvanized tubes and actual see-through wirework instead of
+        // stretching a 32px faux wire texture over a black 2-metre slab.
+        glPushAttrib( GL_CURRENT_BIT );
+        glColor3f( brightness * .61f, brightness * .66f, brightness * .70f );
         const auto &post = parts.front();
-        box( x, z, post.width, post.depth, post.bottom, post.top, std::nullopt );
-        glEnable( GL_ALPHA_TEST );
-        glAlphaFunc( GL_GREATER, .5f );
-        const auto wire = fp3d_materials::lookup( "$fence:" + tile.terrain );
+        const fp3d_materials::furniture_uv plain{};
+        round_furniture_part( post, plain );
+        box( x, z, .095f, .095f, 1.95f, 2.02f, std::nullopt );
         for( size_t i = 1; i < parts.size(); ++i ) {
-            const auto &part = parts[i];
-            box( x + part.x, z + part.z, part.width, part.depth, part.bottom, part.top, wire, true );
-            box( x + part.x, z + part.z, std::max( .035f, part.width ),
-                 std::max( .035f, part.depth ), 1.91f, 1.95f, std::nullopt );
+            const auto &span = parts[i];
+            if( span.width > span.depth ) {
+                box( x + span.x, z, span.width, .030f, 1.86f, 1.915f, std::nullopt );
+                box( x + span.x, z, span.width, .025f, .11f, .145f, std::nullopt );
+            } else {
+                box( x, z + span.z, .030f, span.depth, 1.86f, 1.915f, std::nullopt );
+                box( x, z + span.z, .025f, span.depth, .11f, .145f, std::nullopt );
+            }
+            chain_link_mesh( x, z, span, brightness );
         }
-        glDisable( GL_ALPHA_TEST );
+        glPopAttrib();
+    } else if( tile.terrain == "t_radio_tower" ) {
+        radio_tower_geometry( x, z, brightness );
     } else if( tile.kind == kind::wall || tile.kind == kind::obstacle ) {
         color( memory ? .23f : .58f, memory ? .23f : .60f, memory ? .23f : .64f );
         if( material ) {
@@ -548,6 +800,7 @@ struct chunk_data {
     float bottom = 0;
 };
 std::unordered_map<tripoint_abs_ms, const fp3d_snapshot::cell *> cells;
+std::unordered_set<tripoint_abs_ms> vehicle_roof_ghosts;
 std::unordered_map<tripoint_abs_ms, chunk_data> chunks;
 std::unordered_map<tripoint_abs_ms, std::vector<const fp3d_snapshot::landscape_patch *>>
 landscape_chunks;
@@ -569,6 +822,8 @@ void hash_value( std::uint64_t &hash, std::size_t value )
 
 void release()
 {
+    // Dynamic vehicle display lists share the selected tileset atlas revision.
+    fp3d_vehicle::release();
     for( const auto &entry : meshes ) {
         if( entry.second.list ) {
             glDeleteLists( entry.second.list, 1 );
@@ -588,6 +843,7 @@ void release()
     }
     landscape_meshes.clear();
     cells.clear();
+    vehicle_roof_ghosts.clear();
     chunks.clear();
     landscape_chunks.clear();
     indexed_generation = 0;
@@ -596,6 +852,87 @@ void release()
 draw_statistics statistics()
 {
     return last_statistics;
+}
+
+void draw_reflectivity_mask( const fp3d_snapshot::scene_snapshot &scene,
+                             float yaw, float pitch, float aspect,
+                             fp3d_camera::offset camera, float rain )
+{
+    glPushAttrib( GL_ENABLE_BIT | GL_CURRENT_BIT | GL_DEPTH_BUFFER_BIT |
+                  GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT );
+    glDisable( GL_TEXTURE_2D );
+    glDisable( GL_ALPHA_TEST );
+    glDisable( GL_FOG );
+    glDisable( GL_LIGHTING );
+    glDisable( GL_BLEND );
+    glDisable( GL_CULL_FACE );
+    glEnable( GL_DEPTH_TEST );
+    glDepthFunc( GL_LEQUAL );
+    glDepthMask( GL_FALSE );
+    glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+    glMatrixMode( GL_PROJECTION );
+    glPushMatrix();
+    glLoadIdentity();
+    const double tan_x=fp3d_camera::horizontal_tangent()*fp3d_camera::near_clip;
+    glFrustum( -tan_x, tan_x, -tan_x/aspect, tan_x/aspect,
+               fp3d_camera::near_clip, fp3d_camera::far_clip );
+    glMatrixMode( GL_MODELVIEW );
+    glPushMatrix();
+    glLoadIdentity();
+    glRotatef( pitch, 1, 0, 0 );
+    glRotatef( yaw, 0, 1, 0 );
+    glTranslatef( -camera.x, -camera.height, -camera.y );
+    // Native-visible roads are a CONTINUOUS wet surface: do not draw 0.97m
+    // islands with a 0.03m unmasked crack at EVERY terrain boundary.
+    // Existing world depth still occludes walls, parked cars and furniture.
+    // Green=water so the post pass can keep water mirror-like while roads
+    // use a blurred, rougher rain sheen; red is actual reflectivity.
+    // Batch all tiles in one draw to avoid immediate-mode calls per cell.
+    glBegin( GL_QUADS );
+    for( const auto &cell : scene.cells ) {
+        if( cell.known != fp3d_snapshot::knowledge::visible ||
+            cell.exterior_only || !cell.floor_present || cell.is_ramp ||
+            cell.goes_down ) {
+            continue;
+        }
+        const std::string &id=cell.terrain;
+        const bool water=id.find( "water" ) != std::string::npos ||
+                         id.find( "t_sewage" ) == 0;
+        const bool paved=id.find( "t_road" ) == 0 ||
+                         id.find( "t_pavement" ) == 0 ||
+                         id.find( "t_asphalt" ) == 0 ||
+                         id.find( "t_sidewalk" ) == 0 ||
+                         id.find( "t_concrete" ) == 0;
+        const float reflectivity=water ? .84f :
+                                 paved ? std::clamp( rain * .64f, 0.0f, .64f ) : 0.0f;
+        if( reflectivity < .02f ) { continue; }
+        const auto rel=cell.position-scene.origin;
+        const float x=static_cast<float>( rel.x() );
+        const float z=static_cast<float>( rel.y() );
+        const float y=rel.z()*fp3d_camera::floor_height+.008f;
+        glColor4f( reflectivity, water ? 1.0f : 0.0f, 0, 1 );
+        // The real 1-m floor is continuous. Old half-width .485 left a
+        // visible 3-cm unreflective gap at every native tile boundary.
+        // Overlap by 2 mm; shared actual depth still occludes cars/walls.
+        constexpr float half = .502f;
+        glVertex3f( x-half, y, z-half );
+        glVertex3f( x+half, y, z-half );
+        glVertex3f( x+half, y, z+half );
+        glVertex3f( x-half, y, z+half );
+    }
+    glEnd();
+    glPopMatrix();
+    glMatrixMode( GL_PROJECTION );
+    glPopMatrix();
+    glMatrixMode( GL_MODELVIEW );
+    glPopAttrib();
+}
+
+bool vehicle_roof_sheet_suppressed( const tripoint_abs_ms &position,
+                                    unsigned render_generation )
+{
+    return render_generation != 0 && indexed_generation == render_generation &&
+           vehicle_roof_ghosts.find( position ) != vehicle_roof_ghosts.end();
 }
 
 void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
@@ -617,14 +954,62 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     glRotatef( yaw, 0, 1, 0 );
     const auto weather_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch() ).count();
-    const float lightning = fp3d_weather::flash( scene.weather, weather_ms ) * ( scene.sky.visible ? 1.0f : 0.0f );
-    fp3d_sky::draw( scene.sky, scene.weather.clouds, lightning, ( weather_ms % 600000 ) / 1000.0f );
-    glTranslatef( -camera_offset.x, -fp3d_camera::eye_height, -camera_offset.y );
+    // scene.sky.visible is the AVATAR'S overhead/outside test. It can
+    // switch in a single step when moving under a door lintel. It is NOT
+    // a scene-wide sky visibility flag: a surface-level window may still
+    // show daylight behind the room, and roofs already depth-occlude it.
+    // Draw a stable world sky background at surface level, letting the
+    // actual scene depth/roof/window pixels reveal or conceal it.
+    fp3d_sky::state backdrop = scene.sky;
+    backdrop.visible = scene.origin.z() >= 0;
+    const float lightning = fp3d_weather::flash( scene.weather, weather_ms );
+    fp3d_sky::draw( backdrop, scene.weather.clouds, lightning,
+                    ( weather_ms % 600000 ) / 1000.0f );
+    glTranslatef( -camera_offset.x, -camera_offset.height, -camera_offset.y );
     fp3d_weather::begin_atmosphere( scene.weather, scene.sky.daylight, lightning );
-    const float weather_light = .35f * ( 1 - scene.weather.clouds * scene.sky.daylight * .4f ) + lightning * .5f;
-    const GLfloat ambient[] = { weather_light, weather_light, weather_light, 1 };
-    const GLfloat diffuse[] = { .75f, .75f, .75f, 1 };
-    const GLfloat direction[] = { -.4f, .8f, .5f, 0 };
+    // Native calendar-driven lighting: retain a small indoor visibility floor,
+    // but never make midnight terrain as bright as the midday sun.
+    // This is presentation only; native creature visibility is unchanged.
+    const float day = std::clamp( scene.sky.daylight, 0.0f, 1.0f );
+    const float clouds = std::clamp( scene.weather.clouds, 0.0f, 1.0f );
+    const bool enhanced = fp3d_shaderpacks::usable();
+    const float moon = scene.sky.moonlight * ( 1.0f - day );
+    // GL_LIGHT0 is scene-wide. Tying it to the PLAYER's is_outside()
+    // brightened the entire exterior as soon as the avatar entered a room,
+    // and dimmed the street on the reverse transition. Use one physically
+    // consistent sky illumination and let depth-shadow occluders determine
+    // which *receivers* get direct sun. Existing Off mode is unchanged.
+    // Daytime indoor surfaces still receive indirect skylight even when
+    // the roof correctly blocks direct sun. Keep this scene-wide component
+    // continuous across windows/doorways (never based on player outdoors).
+    // Original unenhanced lighting remains unchanged.
+    const float native_ambient = .105f +
+                                 day * ( .38f - clouds * .06f ) +
+                                 moon * .055f + lightning * .4f;
+    const float native_direct = .065f + day * .72f * ( 1.0f - clouds * .55f ) +
+                                moon * .065f + lightning * .6f;
+    // The Off entry restores the exact previous 3D light strengths/direction.
+    const float old_ambient = .35f * ( 1 - clouds * day * .4f ) + lightning * .5f;
+    // On complex MC pack bridges favor sun-facing detail over flat ambient.
+    // The controls are inert for 2D, Off and direct original final.fsh programs.
+    const float mc_visual = fp3d_shaderpacks::mc_visual_strength();
+    const float daylight_mix = std::clamp( day * ( 1.0f - clouds * .40f ), 0.0f, 1.0f );
+    const float ambient_level = enhanced ?
+                                native_ambient * ( 1.0f - 0.11f * mc_visual * daylight_mix ) :
+                                old_ambient;
+    const float direct_level = enhanced ?
+                               native_direct * ( 1.0f + 0.33f * mc_visual * daylight_mix ) :
+                               .75f;
+    const GLfloat ambient[] = { ambient_level, enhanced ? ambient_level * .98f : ambient_level,
+                                enhanced ? ambient_level * .96f : ambient_level, 1 };
+    const GLfloat diffuse[] = { direct_level, enhanced ? direct_level * .98f : direct_level,
+                                enhanced ? direct_level * .93f : direct_level, 1 };
+    const bool sun_up = scene.sky.sun_y >= 0.0f;
+    const GLfloat direction[] = {
+        enhanced ? ( sun_up ? 1.0f : -1.0f ) * scene.sky.sun_x : -.4f,
+        enhanced ? std::max( .08f, std::abs( scene.sky.sun_y ) ) : .8f,
+        enhanced ? ( sun_up ? 1.0f : -1.0f ) * scene.sky.sun_z : .5f, 0
+    };
     glEnable( GL_LIGHTING );
     glEnable( GL_LIGHT0 );
     glEnable( GL_COLOR_MATERIAL );
@@ -640,6 +1025,9 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     const bool new_scene = scene.render_generation == 0 ||
                            indexed_generation != scene.render_generation;
     last_statistics.indexed_cells = 0;
+    last_statistics.native_loaded_vehicles = scene.enumerated_vehicles;
+    last_statistics.visible_vehicles = scene.vehicles.size();
+    last_statistics.visible_vehicle_parts = scene.visible_vehicle_parts;
     if( new_scene ) {
         cells.clear();
         storage_cells.clear();
@@ -779,13 +1167,131 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                          tile->kind == fp3d_snapshot::terrain_kind::glass ||
                          tile->kind == fp3d_snapshot::terrain_kind::window );
     };
+    // Floor z+1 is 2.2 m, only 0.27 m above a V7 car's 1.93 m roof.
+    // An isolated native floor/ceiling at that elevation appears as a
+    // dark wooden floating polygon. Only a real, intact vehicle roof on
+    // an outdoor road may suppress the extra sheet; actual building
+    // upper floors, staircases and wide bridges remain visible.
+    if( new_scene ) {
+        vehicle_roof_ghosts.clear();
+        std::unordered_set<tripoint_abs_ms> candidate_upper;
+        const auto road_base = []( const fp3d_snapshot::cell *tile ) {
+            if( !tile || !tile->floor_present || tile->open_air ) {
+                return false;
+            }
+            const std::string &id = tile->terrain;
+            return id.find( "t_pavement" ) == 0 ||
+                   id.find( "t_road" ) == 0 ||
+                   id.find( "t_sidewalk" ) == 0 ||
+                   id.find( "t_asphalt" ) == 0;
+        };
+        for( const fp3d_vehicle::vehicle_view &car : scene.vehicles ) {
+            int frames = 0;
+            int roofs = 0;
+            for( const fp3d_vehicle::part_view &part : car.parts ) {
+                frames += part.kind == fp3d_vehicle::role::frame;
+                roofs += part.kind == fp3d_vehicle::role::roof && !part.broken;
+            }
+            if( frames < 4 || roofs < 1 ) {
+                continue; // no suppression above bicycles or bare frames
+            }
+            const float angle = car.angle_degrees * 3.14159265358979323846f / 180.f;
+            const float cs = std::cos( angle ), sn = std::sin( angle );
+            for( const fp3d_vehicle::part_view &part : car.parts ) {
+                if( part.kind != fp3d_vehicle::role::roof || part.broken ) {
+                    continue;
+                }
+                const float lx = float( part.mount_x - car.pivot_x );
+                const float lz = float( part.mount_y - car.pivot_y );
+                const tripoint_abs_ms ground(
+                    car.origin.x() + int( std::round( cs * lx - sn * lz ) ),
+                    car.origin.y() + int( std::round( sn * lx + cs * lz ) ),
+                    car.origin.z() );
+                const auto *base = known_cell( ground );
+                if( !road_base( base ) ) {
+                    continue;
+                }
+                const auto *above = known_cell( ground + tripoint_rel_ms::above );
+                if( base->ceiling_present && ( !above || !above->floor_present ) ) {
+                    vehicle_roof_ghosts.insert( ground );
+                }
+                if( above && above->floor_present &&
+                    above->kind == fp3d_snapshot::terrain_kind::floor &&
+                    !above->goes_up && !above->goes_down && !above->is_ramp ) {
+                    // Only the suspect floating wooden roof, not a normal
+                    // paved upper road or concrete bridge above a car.
+                    const std::string &id = above->terrain;
+                    const bool suspect_wood_sheet = id == "t_floor" ||
+                        id.find( "wood" ) != std::string::npos ||
+                        id.find( "board" ) != std::string::npos ||
+                        id.find( "roof" ) != std::string::npos;
+                    if( suspect_wood_sheet ) {
+                        candidate_upper.insert( ground + tripoint_rel_ms::above );
+                    }
+                }
+            }
+        }
+        constexpr size_t max_isolated_tiles = 16;
+        std::unordered_set<tripoint_abs_ms> visited;
+        for( const auto &seed : candidate_upper ) {
+            if( !visited.insert( seed ).second ) {
+                continue;
+            }
+            std::vector<tripoint_abs_ms> pending{seed};
+            bool structural = false;
+            // Scan the entire connected component even when a structural
+            // neighbor or large area is detected. Otherwise another roof
+            // seed from the same component could be misclassified as a
+            // new, small isolated patch after the first early exit.
+            for( size_t i = 0; i < pending.size(); ++i ) {
+                const auto *tile = known_cell( pending[i] );
+                if( !tile || !tile->floor_present ||
+                    tile->kind != fp3d_snapshot::terrain_kind::floor ||
+                    tile->goes_up || tile->goes_down || tile->is_ramp ) {
+                    structural = true;
+                    continue;
+                }
+                for( const auto &step : { tripoint_rel_ms::north, tripoint_rel_ms::south,
+                                         tripoint_rel_ms::east, tripoint_rel_ms::west } ) {
+                    const auto neighbor = pending[i] + step;
+                    const auto *next = known_cell( neighbor );
+                    if( !next ) {
+                        continue;
+                    }
+                    if( next->kind == fp3d_snapshot::terrain_kind::wall ||
+                        next->kind == fp3d_snapshot::terrain_kind::window ||
+                        next->kind == fp3d_snapshot::terrain_kind::closed_door ||
+                        next->kind == fp3d_snapshot::terrain_kind::damaged_door ) {
+                        structural = true;
+                        continue;
+                    }
+                    if( next->floor_present &&
+                        next->kind == fp3d_snapshot::terrain_kind::floor &&
+                        visited.insert( neighbor ).second ) {
+                        pending.push_back( neighbor );
+                    }
+                }
+                if( pending.size() > max_isolated_tiles ) {
+                    structural = true;
+                }
+            }
+            if( !structural && pending.size() <= max_isolated_tiles ) {
+                for( const auto &tile : pending ) {
+                    if( candidate_upper.count( tile ) ) {
+                        vehicle_roof_ghosts.insert( tile );
+                    }
+                }
+            }
+        }
+    }
     const auto fence_links = [&]( const fp3d_snapshot::cell &tile ) {
         std::array<bool, 4> linked{};
         const std::array<tripoint_rel_ms, 4> directions{ tripoint_rel_ms::north, tripoint_rel_ms::east,
                                                        tripoint_rel_ms::south, tripoint_rel_ms::west };
         for( size_t i = 0; i < directions.size(); ++i ) {
             const auto *other = known_cell( tile.position + directions[i] );
-            linked[i] = other && other->kind == fp3d_snapshot::terrain_kind::fence;
+            linked[i] = other && other->kind == fp3d_snapshot::terrain_kind::fence &&
+                        fp3d_snapshot::fence_connects( tile.terrain, other->terrain );
         }
         return linked;
     };
@@ -867,6 +1373,11 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             auto &chunk = chunks[key];
             chunk.tiles.push_back( &tile );
             chunk.height = std::max( chunk.height, tile.vegetation_height );
+            if( tile.furniture ) {
+                for( const auto &p : fp3d_furniture::parts( tile.furniture->shape ) ) {
+                    chunk.height = std::max( chunk.height, p.top );
+                }
+            }
             if( tile.ramp_delta < 0 ) {
                 chunk.bottom = -fp3d_camera::floor_height;
             }
@@ -935,6 +1446,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                 hash_value( signature, static_cast<unsigned>( tile->known ) );
                 hash_value( signature, tile->floor_present | tile->ceiling_present << 1 |
                             tile->goes_up << 2 | tile->goes_down << 3 | tile->is_ramp << 4 );
+                hash_value( signature, vehicle_roof_ghosts.count( tile->position ) );
                 const auto *above = known_cell( tile->position + tripoint_rel_ms( 0, 0, 1 ) );
                 const auto *below = known_cell( tile->position + tripoint_rel_ms( 0, 0, -1 ) );
                 hash_value( signature, above ? 1 | above->floor_present << 1 | above->goes_down << 2 |
@@ -969,7 +1481,9 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, -1 ) ),
                                known_cell( tile->position + tripoint_rel_ms( 0, 0, 1 ) ), ew, ns,
                                tile->kind == fp3d_snapshot::terrain_kind::window ? window_wall( *tile ) : "",
-                               nullptr, true, furniture_facing( *tile ), fence_links( *tile ), climb_facing( *tile ) );
+                               nullptr, true, furniture_facing( *tile ), fence_links( *tile ),
+                               climb_facing( *tile ),
+                               vehicle_roof_ghosts.count( tile->position ) != 0 );
                 }
                 if( mesh.list ) {
                     glEndList();
@@ -988,6 +1502,10 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         }
         glPopMatrix();
     }
+    // P1-V: every native-visible car, parked wreck, custom frame and NPC
+    // vehicle takes the same rigid renderer. Opaque terrain has written
+    // depth, vehicles are before actor sprites and transparent glass.
+    fp3d_vehicle::draw( scene, view, camera_offset );
     // Each cabinet exposes only its own contents. Draw back to front, writing
     // the cabinet depth before continuing to the next cabinet or the actors.
     std::vector<const fp3d_snapshot::cell *> visible_storage;
@@ -1082,6 +1600,31 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
             glVertex3f( cx - dx, image.height + up, cz - dz );
             glEnd();
         };
+        // Dropped sleeping bags and bedding on a mattress must lie FLAT on
+        // it. In the old scene every item was a vertical 0.7m billboard,
+        // making red/pink bedding appear to float above beds.
+        const auto *support = known_cell( image.position );
+        if( image.kind == fp3d_snapshot::sprite_kind::item && support &&
+            support->furniture &&
+            ( support->furniture->shape == fp3d_furniture::kind::bed ||
+              support->furniture->shape == fp3d_furniture::kind::bed_frame ) ) {
+            constexpr float half_w = .34f;
+            constexpr float half_d = .35f;
+            const float height = .045f;
+            glBegin( GL_QUADS );
+            glNormal3f( 0, 1, 0 );
+            glTexCoord2f( uv.left, uv.top );
+            glVertex3f( x - half_w, height, z - half_d );
+            glTexCoord2f( uv.left, uv.bottom );
+            glVertex3f( x - half_w, height, z + half_d );
+            glTexCoord2f( uv.right, uv.bottom );
+            glVertex3f( x + half_w, height, z + half_d );
+            glTexCoord2f( uv.right, uv.top );
+            glVertex3f( x + half_w, height, z - half_d );
+            glEnd();
+            glPopMatrix();
+            return;
+        }
         using kind = fp3d_targeting::kind;
         const auto target_kind = image.kind == fp3d_snapshot::sprite_kind::item ? kind::item : kind::creature;
         if( aim && image.kind != fp3d_snapshot::sprite_kind::held_item &&
@@ -1207,6 +1750,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
     }
     glEnable( GL_ALPHA_TEST );
     fp3d_weather::draw( scene.weather, scene.origin, yaw, scene.sky.daylight, weather_ms );
+    fp3d_vehicle::draw_glass( scene, view, camera_offset );
     // Glass is drawn after all opaque geometry and actors, back to front.
     // Depth testing keeps nearer walls/actors opaque; glass never writes depth.
     std::vector<const fp3d_snapshot::cell *> glass;
@@ -1340,7 +1884,7 @@ void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
         const auto &outline = *aim->outline;
         const auto vertex = [&]( const std::array<float, 3> &corner, float height ) {
             const float x = corner[0] - camera_offset.x;
-            const float y = corner[1] + height - fp3d_camera::eye_height;
+            const float y = corner[1] + height - camera_offset.height;
             const float z = corner[2] - camera_offset.y;
             // Move a few millimetres along the view ray to clear coplanar depth
             // without expanding the outline or drawing through other surfaces.

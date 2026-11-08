@@ -16,6 +16,7 @@
 #include "fp3d_weather.h"
 #include "fp3d_hud.h"
 #include "fp3d_furniture.h"
+#include "fp3d_vehicle_renderer.h"
 
 class avatar;
 class item;
@@ -44,6 +45,12 @@ terrain_kind terrain_shape( const std::string &id );
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind );
 std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighbours,
         bool posts_only = false );
+// True when adjacent segments belong to one continuous real-world railing.
+bool fence_connects( const std::string &left, const std::string &right );
+// Custom solid models shared by scene drawing and pointer targeting. Empty
+// for terrain that retains the existing world geometry path.
+std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
+        const std::array<bool, 4> &neighbours = {} );
 
 struct stair_section {
     int rows = 1;
@@ -112,6 +119,13 @@ struct scene_snapshot {
     std::vector<cell> cells;
     std::vector<landscape_patch> landscape;
     std::vector<sprite> sprites;
+    // P0-V: one owned, native-perception-filtered copy per loaded vehicle.
+    std::vector<fp3d_vehicle::vehicle_view> vehicles;
+    // Native BOARDABLE mount position of the current avatar, if actually
+    // onboard. The compositor must never derive this from rounded precalc.
+    std::optional<fp3d_camera::rider_pose> rider;
+    unsigned enumerated_vehicles = 0;
+    unsigned visible_vehicle_parts = 0;
     std::optional<sprite> held_item;
     int min_z = 0;
     int max_z = 0;

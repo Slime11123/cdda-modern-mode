@@ -19,8 +19,15 @@ struct request {
     bool targeted_melee = false;
 };
 bool valid( const fp3d_targeting::target &target, const avatar &you, const map &here );
+// 3D directional actions are armed first, then resolved by E on the reticle.
+bool begin_direction_selection( action_id action );
+void cancel_direction_selection();
+std::string direction_selection_hint();
+
 // Runs at the native action boundary, never from the renderer or input resolver.
 bool melee( avatar &you, map &here, const tripoint_bub_ms &position );
+// Resolve and fire on the native game thread, preserving native ballistics.
+bool fire( avatar &you, map &here );
 std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::target &target,
         const avatar &you, const map &here );
 std::optional<request> resolve( const std::string &command,

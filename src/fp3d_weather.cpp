@@ -74,12 +74,15 @@ float flash( const state &weather, std::uint64_t milliseconds )
 void begin_atmosphere( const state &weather, float daylight, float lightning )
 {
     glDisable( GL_FOG );
-    if( !weather.outdoors || weather.fog_end <= 0 ) { return; }
+    // Do not globally toggle GL_FOG based on where the player stands:
+    // through a doorway the outside would suddenly gain/lose all fog.
+    // Long-distance fog is stable with a world-wide weather state.
+    if( weather.fog_end <= 0 ) { return; }
     const float light = .055f + daylight * .48f + lightning * .3f;
     const GLfloat color[] = { light * .91f, light * .97f, light, 1 };
     glFogfv( GL_FOG_COLOR, color );
     glFogi( GL_FOG_MODE, GL_LINEAR );
-    glFogf( GL_FOG_START, 4 );
+    glFogf( GL_FOG_START, 8 );
     glFogf( GL_FOG_END, weather.fog_end );
     glEnable( GL_FOG );
 }

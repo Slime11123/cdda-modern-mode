@@ -85,3 +85,9 @@
 - **推荐立即执行的下一任务**：只对 `fp3d_compositor.cpp` 增加独立 shader/program 生命周期和场景后处理管线，先实现可禁用的 Bloom + 色调映射；不同时推入阴影、体积云、SSR 和完整 PBR，保持现有项目的迭代和回归可控。
 
 来源：用户上传 Photon ZIP 内 README/LICENSE/GLSL/配置；本地 `src/fp3d_*.{cpp,h}` 当前源码；Photon 官方项目 https://github.com/sixthsurge/photon；SDL2 文档 https://wiki.libsdl.org/SDL2/SDL_RenderFlush 。
+
+## 2026-11-08 实施追踪（本段晚于原始可行性审查）
+
+已在当前开发源码中实现第一批可编程后处理、HDR+可采样深度目标、原生 GLSL 后处理包扫描及 ZIP 加载、Minecraft 风格 F5/F6 列表、质量档位、关闭/编译失败回退，以及使用原版太阳/月光快照驱动的场景光源方向和强度。实际变更和 OpenGL 测试记录见 [FP3D_SHADERPACKS_IMPLEMENTATION.md](FP3D_SHADERPACKS_IMPLEMENTATION.md)。
+
+仍未实现 Photon/Iris 的完整 ZIP 直接兼容，也尚未完成原计划 P3 的正统阴影贴图/PCF、P4 的体积光/SSR、P5 的完整 PBR/TAA 与 P6 的性能及多设备验收。不要把当前“光影包选择器 + CDDA 后处理包”描述成“完整 Photon 光影已移植”。开发源码仍保持与现有 2D/3D 切换、游戏规则和现有图块包兼容；所有实机与 GPU 断言以对应 QA 日志为准。

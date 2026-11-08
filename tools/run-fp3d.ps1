@@ -2,15 +2,16 @@ param(
     [ValidateSet('Original', 'Probe', 'SelfTest')][string]$Mode = 'Original',
     [string]$UserDir = (Join-Path $PSScriptRoot '../../runtime/0i1/user'),
     [switch]$StartIn2D,
-    [string]$RuntimeDir = ''
+    [string]$RuntimeDir = '',
+    [ValidatePattern('^cataclysm-tiles(?:-[a-z0-9-]+)?\.exe$')][string]$ExecutableName = 'cataclysm-tiles.exe'
 )
 $ErrorActionPreference = 'Stop'
 $sourceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $projectRoot = Split-Path $sourceRoot -Parent
 $runtime = if ($Mode -eq 'Original') { 'runtime/p0-0i1' } else { 'runtime/0i1' }
 $runtimeRoot = if ($RuntimeDir) { $RuntimeDir } else { Join-Path $projectRoot $runtime }
-$exe = Join-Path $runtimeRoot 'cataclysm-tiles.exe'
-if (-not (Test-Path -LiteralPath $exe)) {
+$exe = Join-Path $runtimeRoot $ExecutableName
+if ($ExecutableName -eq 'cataclysm-tiles.exe' -and -not (Test-Path -LiteralPath $exe)) {
     $exe = Join-Path $runtimeRoot 'cataclysm-tiles-worldgen.exe'
 }
 if (-not (Test-Path -LiteralPath $exe)) { throw "Build first: $exe" }

@@ -14,7 +14,8 @@ enum class kind {
     counter, desk, sofa, sink, oven, fridge, mini_fridge, dresser, bathtub, toilet,
     bench, park_bench, armchair, fireplace, washer, dishwasher, wood_stove, stool, chest_freezer, coffee_table,
     display_case, file_cabinet, vending_machine, workbench, piano,
-    pool_table, anvil, kiln, table_saw, planter, metal_kiln
+    pool_table, anvil, kiln, table_saw, planter, metal_kiln,
+    street_light, traffic_light, utility_pole, mailbox, floor_lamp
 };
 struct model {
     std::string id;

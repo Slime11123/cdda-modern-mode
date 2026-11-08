@@ -29,6 +29,16 @@ Windows 玩家可前往 [Releases 页面](https://github.com/Slime11123/cdda-mod
 
 若 ZIP 内缺少 `cataclysm-tiles.exe`、`data/`、`gfx/` 或 DLL，它不是完整玩家包。发行包仅包含源码自带且允许再分发的资源，不捆绑另行下载的第三方素材。Windows 版仍为实验性预览，问题反馈请提交至 [Issues](https://github.com/Slime11123/cdda-modern-mode/issues)。
 
+## 开发预览：3D 光影包（尚未包含在已发布的 Alpha 0.2.0 中）
+
+最新**本地开发源码**加入了类似 Minecraft 的光影包选择页：**F5/F6 → 光影包**（也可以在 F5/F6 主设置页点击「打开光影包文件夹」，直接启动 Windows 资源管理器）。游戏自动读取 EXE 同目录的 `shaderpacks/`，可选「关闭光影」「内置柔光」「内置暖色电影」，并可加载带 `post.frag` 的 CDDA 专用文件夹/ZIP 光影包，调节低、中、高、极高四档质量。场景采用 HDR 颜色缓冲、可采样深度以及随游戏内日月变化的照明。这些代码已进入本地开发版，**不代表已发布的 Alpha 0.2.0 ZIP 包已包含**；测试需要重新编译或使用单独开发测试包。
+
+**本地开发版补充：**光影包界面新增“实验性近场太阳阴影”复选框，仅内置光影+极高质量有效；如投影异常可单独关闭。重新扫描/重载可以编译新的 CDDA post.frag。以上功能仍未包含在已发布的 Alpha 0.2.0。
+
+**Minecraft 光影支持（仅本地开发版）：** 简单 GLSL 1.20 final.fsh 可以在有限的最终 Pass 直接运行；Photon 等复杂 Iris/OptiFine ZIP 已能选中并通过 CDDA 自有 HDR、天空层云、Bloom、太阳照明及近场阴影产生可见效果。但这不是原版 Photon 多阶段渲染，也不能保证所有 Minecraft 光影包原样兼容。详细说明见 docs/MC_SHADERPACK_COMPATIBILITY.md。
+
+Photon 增强设置（本地测试版）：F5/F6 → 光影包 → MC 视觉增强 (%)，可调 50–200%，默认 145%。增强太阳光照、阴影对比、Bloom 与天空色彩；建议 145–170%，效果过强可调低。并不代表 Photon/Iris 完整多 Pass 兼容。
+
 ## 推荐图块包：UndeadPeople（不死人）
 
 为了获得**更好的视觉体验**，推荐搭配 **UndeadPeople（不死人 / MSX++UnDeadPeopleEdition）图块包**使用，特别适合 3D 建筑、家具和物品的呈现。
@@ -96,3 +106,9 @@ Windows 玩家可前往 [Releases 页面](https://github.com/Slime11123/cdda-mod
 - 分发包仅应包含明确允许再分发的内容，并保留相应声明；不包含用户个人存档、开发测试记录或未经确认授权的外部图块素材。
 
 欢迎提交 [Issue](https://github.com/Slime11123/cdda-modern-mode/issues) 帮助完善项目。
+
+本地开发版近场阴影已修复相机错位、破损门实心阴影和光照边界误判，使用 3×3 PCF；仍为实验功能，具体参考 docs/FP3D_SHADERPACKS_IMPLEMENTATION.md。
+
+Raymarch v3 本地开发版：Photon 视觉桥新增独立材质遮罩的雨天湿路/水面 SSR 和阴影贴图遮挡体积光，F5/F6 光影菜单分别开关。详见 docs/FP3D_DEPTH_RAYMARCH_RENDER_PIPELINE.md。非完整原版 Iris/Photon 多 Pass。
+
+Photon 室内外光照修复（本地 v4）：进入建筑不会整屏关闭太阳阴影、体积光和 SSR，也不会让窗外环境光突然变色。详见 docs/FP3D_INDOOR_OUTDOOR_DAYLIGHT_FIX.md。

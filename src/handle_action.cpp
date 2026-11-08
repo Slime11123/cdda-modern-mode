@@ -723,7 +723,7 @@ static void auto_features_warn()
 }
 
 // Establish or release a grab on a vehicle
-static void grab()
+static void grab( const std::optional<tripoint_bub_ms> &target = std::nullopt )
 {
     avatar &you = get_avatar();
     map &here = get_map();
@@ -739,7 +739,7 @@ static void grab()
         return;
     }
 
-    const std::optional<tripoint_bub_ms> grabp_ = choose_adjacent( _( "Grab where?" ) );
+    const std::optional<tripoint_bub_ms> grabp_ = target ? target : choose_adjacent( _( "Grab where?" ) );
     if( !grabp_ ) {
         add_msg( _( "Never mind." ) );
         return;
@@ -2332,6 +2332,17 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
     }
 
 #if defined(ENABLE_FP3D)
+    // Native direction prompts are hard to operate with a locked 3D mouse.
+    // Arm the action and let the next E select the reticle's adjacent tile.
+    // Releasing an already grabbed object needs no second selection.
+    if( !mouse_target && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d &&
+        ( act == ACTION_GRAB || act == ACTION_OPEN || act == ACTION_CLOSE ||
+          act == ACTION_SMASH || act == ACTION_DIR_DROP || act == ACTION_EXAMINE ||
+          act == ACTION_EXAMINE_AND_PICKUP || act == ACTION_PICKUP || act == ACTION_CHAT ) &&
+        !( act == ACTION_GRAB && player_character.get_grab_type() != object_type::NONE ) &&
+        !( act == ACTION_SMASH && has_vehicle_control( player_character ) ) ) {
+        return fp3d_interaction::begin_direction_selection( act );
+    }
     if( targeted_melee && mouse_target ) {
         fp3d_interaction::melee( player_character, here, *mouse_target );
         return true;
@@ -2584,7 +2595,7 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
             break;
 
         case ACTION_GRAB:
-            grab();
+            grab( mouse_target );
             break;
 
         case ACTION_HAUL:
@@ -2724,6 +2735,10 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
 
         case ACTION_FIRE:
 #if defined(ENABLE_FP3D)
+            if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+                fp3d_interaction::fire( player_character, here );
+                break;
+            }
             if( mouse_target && fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
                 fire( here.get_abs( *mouse_target ) );
                 break;
@@ -2794,7 +2809,8 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
             drop_in_direction( player_character.pos_bub() );
             break;
         case ACTION_DIR_DROP:
-            if( const std::optional<tripoint_bub_ms> pnt = choose_adjacent( _( "Drop where?" ) ) ) {
+            if( const std::optional<tripoint_bub_ms> pnt = mouse_target ? mouse_target :
+                choose_adjacent( _( "Drop where?" ) ) ) {
                 if( *pnt != player_character.pos_bub() && in_shell ) {
                     add_msg( m_info, _( "You can't drop things to another tile while you're in your shell." ) );
                 } else {
@@ -3213,6 +3229,15 @@ bool game::handle_action()
 #if defined(ENABLE_FP3D)
     dispatch_probe.stage( "dispatch_resolve" );
 #endif
+#if defined(ENABLE_FP3D)
+    if( action == "QUIT" && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d &&
+        !fp3d_interaction::direction_selection_hint().empty() ) {
+        fp3d_interaction::cancel_direction_selection();
+        add_msg( m_info, "已取消准星目标选择。" );
+        return false;
+    }
+#endif
+
     // Remove asynchronous animations if any action taken before the input timeout
     // Otherwise repeated input can cause animations to accumulate as the timeout is never reached
     g->void_async_anim_curses();

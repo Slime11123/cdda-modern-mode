@@ -31,8 +31,22 @@ struct draw_statistics {
     unsigned indexed_cells = 0;
     unsigned landscape_chunks = 0;
     unsigned landscape_rebuilt = 0;
+    // P0-V coverage counters based on the current native-visible snapshot.
+    unsigned native_loaded_vehicles = 0;
+    unsigned visible_vehicles = 0;
+    unsigned visible_vehicle_parts = 0;
 };
 draw_statistics statistics();
+// Draw the native visible, material-classified road/water reflectivity mask
+// into a separate color FBO sharing the world depth attachment. World depth
+// must be read-only; do not infer or reveal unseen map geometry.
+void draw_reflectivity_mask( const fp3d_snapshot::scene_snapshot &scene,
+                             float yaw, float pitch, float aspect,
+                             fp3d_camera::offset camera, float rain );
+// Reuse the *actual visible scene* ghost-roof mask for depth-only sunlight
+// shadow rendering. False for a stale/different snapshot generation.
+bool vehicle_roof_sheet_suppressed( const tripoint_abs_ms &position,
+                                    unsigned render_generation );
 // Call before destroying the current OpenGL context.
 void release();
 // Draws only owned snapshot data within the compositor's saved GL state/FBO.

@@ -591,7 +591,24 @@ void veh_interact::draw_simple_vehicle( map &here, cataimgui::window &panel )
                 ImGui::PushID( row );
                 const std::string name = install_info ? install_info->tab_vparts[row]->name() :
                                          veh->part( parts_here[remove_info ? row : need_repair[row]] ).name();
-                if( ImGui::Selectable( name.c_str(), selected == row ) ) {
+                // Native vehicle_part::name() embeds CDDA <color_...>
+                // markup for damage and condition icons. A raw ImGui
+                // Selectable renders these tags literally. Keep selection
+                // behavior unchanged, but draw the label without markup
+                // and tint it using the first native status color.
+                const std::string label = remove_color_tags( name );
+                const color_tag_parse_result first_color = get_color_from_tag(
+                            name, report_color_error::no );
+                const bool tinted = first_color.type == color_tag_parse_result::open_color_tag;
+                if( tinted ) {
+                    ImGui::PushStyleColor( ImGuiCol_Text,
+                                          fp3d_simple_ui::text_color( first_color.color ) );
+                }
+                const bool clicked = ImGui::Selectable( label.c_str(), selected == row );
+                if( tinted ) {
+                    ImGui::PopStyleColor();
+                }
+                if( clicked ) {
                     simple_requested_row = row;
                 }
                 if( selected == row && simple_reveal_selection ) {
@@ -657,17 +674,23 @@ void veh_interact::draw_simple_vehicle( map &here, cataimgui::window &panel )
         }
         for( const int index : parts_here ) {
             const vehicle_part &part = veh->part( index );
-            ImGui::TextWrapped( "%s  %d/%d", part.name().c_str(), part.hp(), part.info().durability );
+            // Keep colored damage/degradation symbols and strip their
+            // formatting tags in the rendered vehicle-workbench details.
+            cataimgui::draw_colored_text(
+                string_format( "%s  %d/%d", part.name().c_str(), part.hp(),
+                               part.info().durability ), c_white, width );
         }
         ImGui::Separator();
         fp3d_simple_ui::accent_text( "车辆主要设备" );
         for( const part_option &option : overview_opts ) {
             const vehicle_part &part = *option.part;
             if( part.ammo_current().is_null() ) {
-                ImGui::TextWrapped( "%s", part.name().c_str() );
+                cataimgui::draw_colored_text( part.name(), c_white, width );
             } else {
-                ImGui::TextWrapped( "%s · %s × %d", part.name().c_str(),
-                                    item::nname( part.ammo_current() ).c_str(), part.ammo_remaining() );
+                cataimgui::draw_colored_text(
+                    string_format( "%s · %s × %d", part.name().c_str(),
+                                   item::nname( part.ammo_current() ).c_str(),
+                                   part.ammo_remaining() ), c_white, width );
             }
         }
     }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "fp3d_camera.h"
 #include "fp3d_compositor.h"
+#include "fp3d_shaderpacks.h"
 #include "cata_scope_helpers.h"
 #include "avatar.h"
 #include "game.h"
@@ -71,7 +72,7 @@ input_context context()
              std::pair{ "FP3D_INTERACT", "3D 交互 / 长按情境操作" },
              std::pair{ "FP3D_PICKUP", "3D 拾取 / 长按附近物品" },
              std::pair{ "FP3D_ATTACK", "3D 准星近战 / 砸击（可按住）" },
-             std::pair{ "FP3D_AIM", "3D 原版瞄准 / 射击" },
+             std::pair{ "FP3D_AIM", "3D 右键准星即时射击" },
              std::pair{ "FP3D_PANEL", "3D 综合生存面板" },
              std::pair{ "FP3D_RELOAD", "3D 装填手持武器" },
              std::pair{ "FP3D_RUN", "3D 切换奔跑" },
@@ -325,13 +326,121 @@ class mode_settings : public cataimgui::window
         int &style;
         int column = 0;
         int result = -1;
+        bool shader_page = false;
+        std::vector<fp3d_shaderpacks::entry> shader_entries;
         cataimgui::bounds get_bounds() override {
             const auto size = ImGui::GetIO().DisplaySize;
             const float width = std::min( size.x * .9f, 820.0f );
             const float height = std::min( size.y * .85f, 480.0f );
             return { ( size.x - width ) / 2, ( size.y - height ) / 2, width, height };
         }
+        void draw_shader_page() {
+            ImGui::TextUnformatted( "光影包" );
+            ImGui::SameLine();
+            ImGui::TextDisabled( "Minecraft 风格列表 / 只作用于 3D 世界" );
+            ImGui::Separator();
+
+            const float total_width = ImGui::GetContentRegionAvail().x;
+            const float content_height = std::max( 185.0f, ImGui::GetContentRegionAvail().y - 82.0f );
+            ImGui::BeginChild( "fp3d_shaderpack_list", ImVec2( total_width * .54f, content_height ), true );
+            ImGui::TextDisabled( "选择光影包" );
+            ImGui::Separator();
+            for( const auto &pack : shader_entries ) {
+                ImGui::PushID( pack.id.c_str() );
+                const bool chosen = pack.id == fp3d_shaderpacks::selected();
+                if( ImGui::Selectable( pack.title.c_str(), chosen ) ) {
+                    fp3d_shaderpacks::choose( pack.id );
+                }
+                if( !pack.compatible ) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled( "不兼容" );
+                } else if( chosen ) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled( "已选择" );
+                }
+                ImGui::TextDisabled( "%s", pack.note.c_str() );
+                ImGui::Separator();
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+            ImGui::BeginChild( "fp3d_shaderpack_details", ImVec2( 0, content_height ), true );
+            ImGui::TextUnformatted( "光影包信息" );
+            ImGui::Separator();
+            const auto &active_id = fp3d_shaderpacks::selected();
+            const auto it = std::find_if( shader_entries.begin(), shader_entries.end(),
+            [&]( const fp3d_shaderpacks::entry & pack ) {
+                return pack.id == active_id;
+            } );
+            if( it != shader_entries.end() ) {
+                ImGui::TextWrapped( "%s", it->title.c_str() );
+                ImGui::TextDisabled( "%s", it->note.c_str() );
+            } else {
+                ImGui::TextWrapped( "上次选择：%s", active_id.c_str() );
+                ImGui::TextDisabled( "文件已移动？请刷新列表并重新选择。" );
+            }
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextUnformatted( "光影质量" );
+            const char *qualities[] = { "低", "中", "高", "极高" };
+            for( int level = 0; level < 4; ++level ) {
+                if( level > 0 ) { ImGui::SameLine(); }
+                if( ImGui::RadioButton( qualities[level], fp3d_shaderpacks::quality() == level ) ) {
+                    fp3d_shaderpacks::set_quality( level );
+                }
+            }
+            ImGui::Spacing();
+            int mc_strength = fp3d_shaderpacks::mc_intensity_percent();
+            if( ImGui::SliderInt( "MC 视觉增强 (%)", &mc_strength, 50, 200 ) ) {
+                fp3d_shaderpacks::set_mc_intensity_percent( mc_strength );
+            }
+            ImGui::TextWrapped( "仅影响 Photon 等 MC 视觉适配包，不影响原版 2D 或直接执行的 final.fsh。" );
+            ImGui::Spacing();
+            bool experimental_shadows = fp3d_shaderpacks::shadows_enabled();
+            if( ImGui::Checkbox( "实验性近场太阳阴影", &experimental_shadows ) ) {
+                fp3d_shaderpacks::set_shadows_enabled( experimental_shadows );
+            }
+            ImGui::TextWrapped( "内置光影及 MC 适配包在极高画质时可启用近场阴影；如投影异常可单独关闭。" );
+            bool ssr = fp3d_shaderpacks::wet_ssr_enabled();
+            if( ImGui::Checkbox( "水面与雨天湿地 SSR 反射", &ssr ) ) {
+                fp3d_shaderpacks::set_wet_ssr_enabled( ssr );
+            }
+            bool volume = fp3d_shaderpacks::shadow_volume_enabled();
+            if( ImGui::Checkbox( "阴影遮挡体积太阳光", &volume ) ) {
+                fp3d_shaderpacks::set_shadow_volume_enabled( volume );
+            }
+            ImGui::TextWrapped( "上述两项为 MC 视觉桥的极高档实验特性。SSR 仅渲染原版已可见的水面与下雨的道路，具有屏幕外反射缺失的限制。不影响 2D、原生光影和直接 final.fsh。" );
+            ImGui::TextWrapped( "Minecraft 光影：简单 GLSL 1.20 final.fsh 可直接运行；Photon 等复杂光影使用 CDDA 视觉适配，暂不支持完整 Iris 多阶段效果。" );
+            ImGui::EndChild();
+
+            ImGui::Separator();
+            if( ImGui::Button( "打开光影文件夹" ) ) {
+                fp3d_shaderpacks::open_folder();
+            }
+            ImGui::SameLine();
+            if( ImGui::Button( "复制路径" ) ) {
+                ImGui::SetClipboardText( fp3d_shaderpacks::directory().c_str() );
+            }
+            ImGui::SameLine();
+            if( ImGui::Button( "重新扫描/重载" ) ) {
+                shader_entries = fp3d_shaderpacks::scan();
+                fp3d_shaderpacks::request_reload();
+            }
+            ImGui::SameLine();
+            if( ImGui::Button( "完成" ) ) {
+                shader_page = false;
+            }
+            const auto &status = fp3d_shaderpacks::status();
+            ImGui::TextDisabled( "%s", status.empty() ?
+                                 "光影包请放在 EXE 同目录的 shaderpacks 文件夹中。" :
+                                 status.c_str() );
+        }
         void draw_controls() override {
+            if( shader_page ) {
+                draw_shader_page();
+                return;
+            }
             const float width = ImGui::GetContentRegionAvail().x;
             const float height = ImGui::GetContentRegionAvail().y;
             const float font = ImGui::GetFontSize();
@@ -353,6 +462,16 @@ class mode_settings : public cataimgui::window
                 ImGui::PopID();
             }
             ImGui::SetCursorPos( ImVec2( font, top + height - font * 4.5f ) );
+            if( ImGui::Button( "光影包..." ) ) {
+                shader_entries = fp3d_shaderpacks::scan();
+                shader_page = true;
+            }
+            ImGui::SameLine();
+            // Also accessible without navigating into the shaderpack submenu.
+            if( ImGui::Button( "打开光影包文件夹" ) ) {
+                fp3d_shaderpacks::open_folder();
+            }
+            ImGui::SameLine();
             if( ImGui::Button( "编辑按键…" ) ) {
                 result = 2;
                 is_open = false;
@@ -382,7 +501,10 @@ class mode_settings : public cataimgui::window
                 }
                 const auto action = input.handle_input( 16 );
                 if( action == "QUIT" ) {
-                    is_open = false;
+                    if( shader_page ) { shader_page = false; }
+                    else { is_open = false; }
+                } else if( shader_page ) {
+                    if( action == "CONFIRM" ) { shader_page = false; }
                 } else if( action == "CONFIRM" ) {
                     result = 1;
                     is_open = false;

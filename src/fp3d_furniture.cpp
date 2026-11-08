@@ -30,7 +30,7 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_glass_fridge" ) {
             return model{ id, kind::chest_freezer };
         }
-        if( appearance == "f_bed" ) {
+        if( appearance == "f_bed" || appearance == "f_bed_down" ) {
             return model{ id, kind::bed };
         }
         if( appearance == "f_bed_frame" ) {
@@ -143,6 +143,24 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_tablesaw" ) {
             return model{ id, kind::table_saw };
         }
+        // Outdoor/indoor fixtures are real, tall 3D objects.  The Undead
+        // People images for street lights, power poles and mailboxes have
+        // built-in 2D cast shadows; never use the complete sprite as geometry.
+        if( appearance == "f_street_light" ) {
+            return model{ id, kind::street_light };
+        }
+        if( appearance == "f_traffic_light" ) {
+            return model{ id, kind::traffic_light };
+        }
+        if( appearance == "f_utility_pole" ) {
+            return model{ id, kind::utility_pole };
+        }
+        if( appearance == "f_mailbox" || appearance == "f_vitrified_mailbox" ) {
+            return model{ id, kind::mailbox };
+        }
+        if( appearance == "f_floor_lamp" ) {
+            return model{ id, kind::floor_lamp };
+        }
         if( appearance == "f_planter" || appearance == "f_planter_harvest" ||
             appearance == "f_planter_mature" || appearance == "f_planter_seed" ||
             appearance == "f_planter_seedling" ) {
@@ -188,12 +206,22 @@ const std::vector<part> &parts( kind shape )
         { 0, 0, .94f, .84f, 0, .90f },
         { 0, 0, .94f, .84f, .90f, 1.00f }
     };
+    // Bed: wooden bedframe, mattress and linen are DIFFERENT surfaces.
+    // The Undead People 'f_bed' sprite is a flat woven mattress texture,
+    // not a valid wood material for a headboard or upright side rails.
     static const std::vector<part> bed{
-        { 0, 0, .86f, .98f, .20f, .42f },
-        { 0, -.46f, .90f, .08f, 0, .68f },
-        { 0, .46f, .90f, .08f, 0, .32f },
-        { -.40f, 0, .06f, .90f, .12f, .28f },
-        { .40f, 0, .06f, .90f, .12f, .28f }
+        { 0, 0, .82f, .89f, .22f, .29f },         // 0 wooden slat foundation
+        { 0, 0, .76f, .85f, .29f, .43f },         // 1 spring mattress / ticking
+        { 0, .205f, .75f, .42f, .43f, .451f },  // 2 folded cover (lying flat)
+        { 0, -.31f, .43f, .18f, .43f, .474f },  // 3 thin pillow on mattress
+        { 0, -.447f, .87f, .065f, .06f, .75f }, // 4 headboard
+        { 0, .447f, .87f, .065f, .06f, .38f },  // 5 footboard
+        { -.422f, 0, .065f, .94f, .18f, .32f }, // 6 side frame
+        { .422f, 0, .065f, .94f, .18f, .32f },  // 7 side frame
+        { -.41f, -.43f, .085f, .085f, 0, .75f },// 8 legs
+        { .41f, -.43f, .085f, .085f, 0, .75f },
+        { -.41f, .43f, .085f, .085f, 0, .38f },
+        { .41f, .43f, .085f, .085f, 0, .38f }
     };
     static const std::vector<part> bed_frame{
         { 0, -.46f, .90f, .08f, 0, .68f },
@@ -489,6 +517,39 @@ const std::vector<part> &parts( kind shape )
         // A thin blade rising out of the top; not the 2D blade/shadow image.
         { 0, -.10f, .045f, .45f, .83f, 1.03f }
     };
+    static const std::vector<part> street_light{
+        { 0, 0, .26f, .26f, 0, .16f, true },   // cast base
+        { 0, 0, .115f, .115f, .16f, 3.23f, true },
+        { 0, .22f, .09f, .55f, 3.15f, 3.26f }, // horizontal outreach
+        { 0, .47f, .54f, .31f, 3.10f, 3.26f }, // metal lamp shell
+        { 0, .47f, .46f, .26f, 3.065f, 3.105f } // diffuser below shade
+    };
+    static const std::vector<part> traffic_light{
+        { 0, 0, .25f, .25f, 0, .14f, true },
+        { 0, 0, .095f, .095f, .14f, 2.95f, true },
+        { 0, .135f, .18f, .28f, 2.09f, 3.09f }, // traffic light box
+        { 0, .288f, .125f, .025f, 2.20f, 2.94f } // signal glass
+    };
+    static const std::vector<part> utility_pole{
+        { 0, 0, .24f, .24f, 0, 4.05f, true },  // timber utility pole
+        { 0, 0, .93f, .12f, 3.55f, 3.68f },
+        { 0, 0, .82f, .10f, 3.09f, 3.19f },
+        { -.38f, 0, .075f, .075f, 3.19f, 3.82f, true },
+        { .38f, 0, .075f, .075f, 3.19f, 3.82f, true }
+    };
+    static const std::vector<part> mailbox{
+        { 0, 0, .13f, .13f, 0, 1.08f },        // wooden support
+        { 0, .06f, .35f, .32f, 1.01f, 1.065f },// shelf
+        { 0, .08f, .60f, .41f, 1.065f, 1.37f },// red mail box
+        { 0, .295f, .51f, .025f, 1.13f, 1.33f }, // door lip
+        { .33f, .10f, .055f, .08f, 1.27f, 1.55f } // raised flag
+    };
+    static const std::vector<part> floor_lamp{
+        { 0, 0, .28f, .28f, 0, .10f, true },
+        { 0, 0, .055f, .055f, .10f, 1.37f, true },
+        { 0, 0, .48f, .48f, 1.33f, 1.69f, true },// shade
+        { 0, 0, .28f, .28f, 1.69f, 1.72f, true }
+    };
     static const std::vector<part> planter{
         { 0, 0, .94f, .94f, 0, .36f },
         { 0, 0, .80f, .80f, .36f, .39f },
@@ -580,6 +641,16 @@ const std::vector<part> &parts( kind shape )
             return table_saw;
         case kind::planter:
             return planter;
+        case kind::street_light:
+            return street_light;
+        case kind::traffic_light:
+            return traffic_light;
+        case kind::utility_pole:
+            return utility_pole;
+        case kind::mailbox:
+            return mailbox;
+        case kind::floor_lamp:
+            return floor_lamp;
     }
     return table;
 }
@@ -598,7 +669,7 @@ float item_surface( kind shape )
         case kind::chest_freezer:
             return .40f;
         case kind::bed:
-            return .42f;
+            return .451f;
         case kind::bed_frame:
             return .25f;
         case kind::crate:
@@ -665,6 +736,13 @@ float item_surface( kind shape )
             return .83f;
         case kind::planter:
             return .39f;
+        case kind::street_light:
+        case kind::traffic_light:
+        case kind::utility_pole:
+        case kind::floor_lamp:
+            return 0;
+        case kind::mailbox:
+            return 1.37f;
     }
     return 0;
 }
@@ -701,7 +779,9 @@ unsigned facing( kind shape, const std::array<bool, 4> &walls,
         shape != kind::display_case && shape != kind::file_cabinet &&
         shape != kind::vending_machine && shape != kind::workbench &&
         shape != kind::piano && shape != kind::table_saw &&
-        shape != kind::kiln && shape != kind::metal_kiln ) {
+        shape != kind::kiln && shape != kind::metal_kiln &&
+        shape != kind::street_light && shape != kind::mailbox &&
+        shape != kind::traffic_light ) {
         return 0;
     }
     // Preserve the established orientation in free space. Prefer a wall behind

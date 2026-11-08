@@ -45,6 +45,39 @@ tripoint_rel_ms movement( float yaw, int forward, int right );
 struct offset {
     float x = 0;
     float y = 0;
+    float height = eye_height; // camera and reticle must have the same eye
+};
+
+// Game-thread-owned native vehicle pose; never retains vehicle/part pointers.
+struct rider_pose {
+    double world_x = 0;
+    double world_y = 0;
+    float eye = 1.42f;
+    float vehicle_angle = 0; // authoritative confirmed native facing
+    int mount_x = 0;
+    int mount_y = 0;
+    int storey = 0;
+    bool driver = false;
+};
+
+// Only interpolates already-confirmed native position. Does not accelerate,
+// steer, change collision, perform a turn or update the avatar grid location.
+class rider_follower
+{
+    public:
+        // Returns native vehicle heading delta, for a free-look camera
+        // which follows car steering without replacing mouse look input.
+        float confirm( const rider_pose &seat, unsigned now );
+        offset relative_to( const tripoint_abs_ms &origin, unsigned now ) const;
+        void reset();
+        bool active() const { return initialized; }
+    private:
+        bool initialized = false;
+        rider_pose target;
+        double begin_x = 0, begin_y = 0;
+        float begin_eye = eye_height;
+        unsigned started = 0;
+        unsigned duration = 90;
 };
 
 // Presentation time only; attacks and damage are settled by native gameplay.

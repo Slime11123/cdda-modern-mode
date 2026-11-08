@@ -2,6 +2,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -17,12 +18,16 @@
 #include "itype.h"
 #include "mtype.h"
 #include "type_id.h"
+#include "veh_type.h"
 
 namespace fp3d_materials
 {
 namespace
 {
-constexpr int atlas_size = 1024;
+// Terrain, sprites and all native-visible vehicle part variants share one atlas.
+// 2048^2 supplies 1024 independent 64px slots (16 MiB RGBA8888), rather
+// than silently dropping traffic and parked wreck vehicle art at 256 slots.
+constexpr int atlas_size = 2048;
 constexpr int slot_size = 64;
 constexpr int slots_per_row = atlas_size / slot_size;
 constexpr int max_slots = slots_per_row * slots_per_row;
@@ -31,6 +36,7 @@ const SDL_Renderer_Ptr *renderer_owner = nullptr;
 SDL_Texture_Ptr atlas;
 unsigned material_revision = 0;
 std::unordered_map<std::string, unsigned> slots;
+std::unordered_map<std::string, std::array<float, 3>> vehicle_colors;
 season_type season = SPRING;
 float texture_width = 1;
 float texture_height = 1;
@@ -336,6 +342,7 @@ void set_tileset( std::shared_ptr<const tileset> set, const SDL_Renderer_Ptr &re
     // Called only after the native loader finishes, including forced reloads.
     atlas.reset();
     slots.clear();
+    vehicle_colors.clear();
     selected = std::move( set );
     renderer_owner = &renderer;
     failed = false;
@@ -371,6 +378,12 @@ SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image )
     return icon;
 }
 
+std::string vehicle_key( const fp3d_vehicle::part_view &part )
+{
+    return "$vehicle:" + part.id +
+           ( part.variant.empty() ? "" : "#" + part.variant );
+}
+
 void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview )
 {
     if( !selected || !renderer_owner || !*renderer_owner || failed ) {
@@ -381,6 +394,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         season = scene.season;
         atlas.reset();
         slots.clear();
+        vehicle_colors.clear();
     }
     struct request {
         std::string key;
@@ -390,6 +404,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool furniture = false;
         bool blood = false;
         bool fence = false;
+        bool vehicle = false;
+        std::string vehicle_looks_like = {};
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
@@ -408,6 +424,20 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         }
         if( tile.furniture && pending.size() < max_slots ) {
+            // The UndeadPeople bed picture is cloth only. Fetch a second
+            // opaque, real wood tile for frame rails instead of stretching
+            // beige upholstery on all upright surfaces.
+            if( ( tile.furniture->shape == fp3d_furniture::kind::bed ||
+                  tile.furniture->shape == fp3d_furniture::kind::bed_frame ) &&
+                model_keys.insert( "$furniture:f_table" ).second ) {
+                pending.push_back( { "$furniture:f_table", nullptr, false, false, true } );
+            }
+            if( ( tile.furniture->shape == fp3d_furniture::kind::street_light ||
+                  tile.furniture->shape == fp3d_furniture::kind::traffic_light ||
+                  tile.furniture->shape == fp3d_furniture::kind::floor_lamp ) &&
+                model_keys.insert( "t_metal_floor" ).second ) {
+                pending.push_back( { "t_metal_floor", nullptr } );
+            }
             std::string key = "$furniture:" + tile.furniture->id;
             if( model_keys.insert( key ).second ) {
                 pending.push_back( { std::move( key ), nullptr, false, false, true } );
@@ -429,6 +459,28 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     for( const auto &tile : scene.cells ) {
         prioritize_cell( tile );
     }
+    // Every native-visible vehicle shares this atlas with the terrain and
+    // its selected tileset. One slot per vpart_id, never one per vehicle.
+    // If the atlas is full, the vehicle mesh still renders neutral geometry.
+    unsigned excluded_vehicle_art = 0;
+    for( const fp3d_vehicle::vehicle_view &vehicle : scene.vehicles ) {
+        for( const fp3d_vehicle::part_view &part : vehicle.parts ) {
+            const std::string key = vehicle_key( part );
+            if( model_keys.insert( key ).second ) {
+                if( pending.size() < max_slots ) {
+                    pending.push_back( { key, nullptr, false, false, false, false, false,
+                                         true, part.looks_like } );
+                } else {
+                    ++excluded_vehicle_art;
+                }
+            }
+        }
+    }
+    if( excluded_vehicle_art ) {
+        DebugLog( D_WARNING, D_MAIN ) << "fp3d: " << excluded_vehicle_art
+                                      << " visible vehicle material keys exceed atlas "
+                                      << max_slots << " slots; neutral 3D geometry remains visible";
+    }
     const auto resident = [&]( const request &entry ) {
         return slots.count( entry.key ) != 0;
     };
@@ -439,6 +491,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     if( slots.size() + missing_priority > max_slots ) {
         ++material_revision;
         slots.clear();
+        vehicle_colors.clear();
     }
     pending.erase( std::remove_if( pending.begin(), pending.end(), resident ), pending.end() );
     const auto add = [&]( const std::string & key, const fp3d_snapshot::sprite * image ) {
@@ -450,6 +503,12 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
     };
     const auto add_cell = [&]( const fp3d_snapshot::cell &tile ) {
+        if( tile.terrain == "t_column" || tile.terrain == "t_pillar" ||
+            tile.terrain == "t_little_column" || tile.terrain == "t_column_halfway" ||
+            tile.terrain == "t_concrete_railing" ||
+            tile.terrain.compare( 0, 11, "t_guardrail" ) == 0 ) {
+            add( "t_concrete", nullptr );
+        }
         if( tile.kind == fp3d_snapshot::terrain_kind::ladder ) {
             add( "t_concrete", nullptr );
         } else if( tile.kind == fp3d_snapshot::terrain_kind::downspout || tile.kind == fp3d_snapshot::terrain_kind::fence ) {
@@ -539,12 +598,68 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         const unsigned index = slots.size();
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
-        const bool transparent = entry.image || entry.plant || entry.window || entry.blood || entry.fence;
+        const bool transparent = entry.image || entry.plant || entry.window || entry.blood ||
+                                 entry.fence || entry.vehicle;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         SDL_RenderFillRect( renderer, &slot );
         const tile_type *tile = nullptr;
-        if( entry.blood ) {
+        if( entry.vehicle ) {
+            // Match CDDA's own vehicle sprite convention: vp_<vpart_id>.
+            // Follow only the CURRENT selected tileset and native vpart
+            // looks_like links. Never read fixed UndeadPeople disk files.
+            std::string name = id.substr( 9 );
+            std::string variant;
+            const size_t separator = name.find( '#' );
+            if( separator != std::string::npos ) {
+                variant = name.substr( separator + 1 );
+                name.resize( separator );
+            }
+            std::unordered_set<std::string> visited;
+            for( int jumps = 0; jumps < 10 && !name.empty() &&
+                 visited.insert( name ).second; ++jumps ) {
+                if( name.compare( 0, 3, "vp_" ) == 0 ) {
+                    name.erase( 0, 3 );
+                }
+                // Mirror native cata_tiles.cpp VEHICLE_PART variant fallback:
+                // vp_<id>_<full_variant>, then progressively shorter
+                // underscore-delimited variants, then vp_<id>.
+                std::string variant_chunk = variant;
+                while( !variant_chunk.empty() && !tile ) {
+                    if( auto found = selected->find_tile_type_by_season(
+                                       "vp_" + name + "_" + variant_chunk, season ) ) {
+                        tile = &found->tile();
+                        break;
+                    }
+                    const size_t trim = variant_chunk.rfind( '_' );
+                    if( trim == std::string::npos ) {
+                        break;
+                    }
+                    variant_chunk.resize( trim );
+                }
+                if( !tile ) {
+                    if( auto found = selected->find_tile_type_by_season( "vp_" + name, season ) ) {
+                        tile = &found->tile();
+                    } else if( jumps > 0 ) {
+                        // Native vehicle looks_like also accepts an unprefixed
+                        // same-pack tile, e.g. a furniture-style fallback.
+                        if( auto plain = selected->find_tile_type_by_season( name, season ) ) {
+                            tile = &plain->tile();
+                        }
+                    }
+                }
+                if( tile ) {
+                    break;
+                }
+                const vpart_id definition( name );
+                const std::string next = definition.is_valid() ? definition->looks_like :
+                                         jumps == 0 ? entry.vehicle_looks_like : "";
+                if( next == name ) {
+                    break;
+                }
+                name = next;
+            }
+        } else if( entry.blood ) {
             std::string name = id.substr( 7 );
             for( int tries = 0; tries < 10 && !name.empty(); ++tries ) {
                 if( auto found = selected->find_tile_type_by_season( name, season ) ) {
@@ -580,7 +695,14 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         if( entry.image ) {
             painted = paint_sprite( *entry.image, slot );
         }
-        if( !painted ) {
+        if( !painted && entry.vehicle ) {
+            // VT fallback is a readable neutral solid, not a magenta tile.
+            // It must never remove a visible vehicle from the scene.
+            ++missing;
+            DebugLog( D_INFO, D_MAIN ) << "fp3d: vehicle part missing in selected tileset: " << id;
+            SDL_SetRenderDrawColor( renderer, 115, 122, 127, 255 );
+            SDL_RenderFillRect( renderer, &slot );
+        } else if( !painted ) {
             ++missing;
             SDL_SetRenderDrawColor( renderer, 80, 40, 95, 255 );
             for( int y = 0; y < 4; ++y ) {
@@ -592,6 +714,47 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 }
             }
         }
+        // The native red/blue/white paint color is encoded in the 2D
+        // tileset, not the vehicle JSON definition.  Read only body/roof
+        // swatches as the atlas is being populated; never read pixels in
+        // the per-frame GL renderer and never copy a different tileset.
+        if( entry.vehicle && painted &&
+            ( id.find( "roof" ) != std::string::npos ||
+              id.find( "board" ) != std::string::npos ||
+              id.find( "door" ) != std::string::npos ||
+              id.find( "hood" ) != std::string::npos ||
+              id.find( "hatch" ) != std::string::npos ||
+              id.find( "fender" ) != std::string::npos ) ) {
+            constexpr int sample_size = 48;
+            std::array<Uint8, sample_size * sample_size * 4> rgba{};
+            const SDL_Rect sample{ slot.x + 8, slot.y + 8, sample_size, sample_size };
+            if( SDL_RenderReadPixels( renderer, &sample, SDL_PIXELFORMAT_RGBA32,
+                                      rgba.data(), sample_size * 4 ) == 0 ) {
+                std::array<float, 3> sums{};
+                unsigned colored = 0;
+                for( int i = 0; i < sample_size * sample_size; ++i ) {
+                    const unsigned char red = rgba[i * 4];
+                    const unsigned char green = rgba[i * 4 + 1];
+                    const unsigned char blue = rgba[i * 4 + 2];
+                    const unsigned char alpha = rgba[i * 4 + 3];
+                    const auto hi = std::max( { red, green, blue } );
+                    const auto lo = std::min( { red, green, blue } );
+                    if( alpha < 140 || hi < 61 || hi - lo < 26 || hi > 245 ) {
+                        continue; // dark fake shadows, neutral metal and glare
+                    }
+                    sums[0] += red;
+                    sums[1] += green;
+                    sums[2] += blue;
+                    ++colored;
+                }
+                if( colored >= 15 ) {
+                    const float intensity = 1.08f / ( 255.f * colored );
+                    vehicle_colors[id] = { std::clamp( sums[0] * intensity, .0f, 1.0f ),
+                                           std::clamp( sums[1] * intensity, .0f, 1.0f ),
+                                           std::clamp( sums[2] * intensity, .0f, 1.0f ) };
+                }
+            }
+        }
         slots.emplace( id, index );
     }
     // Appending slots preserves every existing UV. Only atlas resets above
@@ -599,6 +762,15 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     SDL_RenderFlush( renderer );
     DebugLog( D_INFO, D_MAIN ) << "fp3d: material atlas slots=" << slots.size()
                                << ", added=" << pending.size() << ", missing=" << missing;
+}
+
+std::optional<std::array<float, 3>> vehicle_body_color( const std::string &key )
+{
+    const auto it = vehicle_colors.find( key );
+    if( it == vehicle_colors.end() ) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 bool bind()
@@ -819,10 +991,67 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
     } else if( uses( "f_counter" ) ) {
         result.top = crop( 2, 2, 29, 29 );
         result.front = result.side = crop( 11, 10, 16, 15 );
-    } else if( uses( "f_bed" ) ) {
-        // The entire quilt is a bird's-eye view, not a front-facing wall.
-        result.top = crop( 1, 1, 30, 30 );
-        result.front = result.side = crop( 12, 12, 17, 17 );
+    } else if( uses( "f_bed" ) || uses( "f_bed_down" ) ) {
+        // UndeadPeople bed sprite = top-down mattress weave only; use wood
+        // from another real furniture texture for bed frame and four legs.
+        const auto table = lookup( "$furniture:f_table" );
+        const auto separate = []( const uv_rect &rect, float x0, float y0, float x1, float y1 ) {
+            const float du = rect.right - rect.left;
+            const float dv = rect.bottom - rect.top;
+            return uv_rect{ rect.left + du * x0 / 31, rect.top + dv * y0 / 31,
+                            rect.left + du * x1 / 31, rect.top + dv * y1 / 31 };
+        };
+        const auto wood = table ? std::optional<uv_rect>(
+                              separate( *table, 12, 12, 17, 20 ) ) : surface;
+        result.top = result.front = result.side = wood;
+        if( part_index == 1 ) { // mattress, no fabric on wooden frame
+            result.top = crop( 3, 3, 28, 28 );
+            result.front = result.side = crop( 13, 11, 19, 17 );
+        } else if( part_index == 2 ) { // blanket top
+            result.top = crop( 3, 16, 28, 28 );
+            result.front = result.side = crop( 13, 12, 19, 17 );
+        } else if( part_index == 3 ) { // pillow top
+            result.top = crop( 4, 3, 27, 11 );
+            result.front = result.side = crop( 12, 10, 17, 13 );
+        }
+    } else if( id == "f_mailbox" || id == "f_vitrified_mailbox" ) {
+        // Small mailbox sprite: red painted box plus a *separate* wooden
+        // pedestal. The fake 2D cast shadow is not a 3D material.
+        const auto post = crop( 13, 20, 16, 28 );
+        result.top = result.front = result.side = post;
+        if( part_index == 2 || part_index == 3 ) {
+            result.top = crop( 10, 7, 25, 10 );
+            result.front = crop( 10, 11, 25, 21 );
+            result.side = crop( 10, 12, 15, 18 );
+        } else if( part_index == 4 ) {
+            result.top = result.front = result.side = crop( 25, 10, 27, 16 );
+        }
+    } else if( id == "f_utility_pole" ) {
+        // The large 2D pole has its own shadow and the ground baked in.
+        // Only the vertical trunk is used on the solid wooden column.
+        const auto timber = crop( 16, 10, 19, 24 );
+        result.top = result.front = result.side = timber;
+        if( part_index >= 1 ) {
+            result.top = result.front = result.side = crop( 11, 11, 14, 14 );
+        }
+    } else if( id == "f_street_light" || id == "f_traffic_light" ||
+               id == "f_floor_lamp" ) {
+        // Keep the real metal pole neutral; the complete large 2D sprite
+        // contains a substantial cast shadow and must not be extruded.
+        if( const auto metal = lookup( "t_metal_floor" ) ) {
+            result.top = result.front = result.side = metal;
+        }
+        if( id == "f_street_light" && part_index >= 3 ) {
+            result.top = crop( 10, 7, 24, 12 );
+            result.front = result.side = crop( 10, 8, 23, 12 );
+        } else if( id == "f_traffic_light" && part_index >= 2 ) {
+            result.top = crop( 13, 7, 20, 10 );
+            result.front = crop( 12, 8, 22, 27 );
+            result.side = crop( 12, 11, 14, 23 );
+        } else if( id == "f_floor_lamp" && part_index >= 2 ) {
+            result.top = crop( 8, 5, 24, 12 );
+            result.front = result.side = crop( 8, 10, 24, 18 );
+        }
     } else if( uses( "f_workbench" ) ) {
         // Workbench sprite: top-down patterned surface plus a fake shadow.
         const auto wood = crop( 5, 8, 9, 12 );
@@ -1002,6 +1231,7 @@ void release()
     unbind();
     atlas.reset();
     slots.clear();
+    vehicle_colors.clear();
     selected.reset();
     renderer_owner = nullptr;
     failed = false;

@@ -110,4 +110,60 @@ void follower::reset()
 {
     initialized = false;
 }
+
+float rider_follower::confirm( const rider_pose &seat, unsigned now )
+{
+    if( initialized && target.world_x == seat.world_x &&
+        target.world_y == seat.world_y && target.eye == seat.eye &&
+        target.vehicle_angle == seat.vehicle_angle &&
+        target.mount_x == seat.mount_x && target.mount_y == seat.mount_y &&
+        target.storey == seat.storey ) {
+        target.driver = seat.driver;
+        return 0.0f;
+    }
+    const bool same_seat = initialized && target.mount_x == seat.mount_x &&
+                           target.mount_y == seat.mount_y && target.storey == seat.storey &&
+                           std::abs( target.world_x - seat.world_x ) <= 2.0 &&
+                           std::abs( target.world_y - seat.world_y ) <= 2.0;
+    const float heading_delta = same_seat ?
+                                std::remainder( seat.vehicle_angle - target.vehicle_angle, 360.0f ) :
+                                0.0f;
+    if( same_seat ) {
+        const float t = std::clamp( ( now - started ) / static_cast<float>( duration ),
+                                    0.0f, 1.0f );
+        const double smooth = t * t * ( 3.0 - 2.0 * t );
+        begin_x += ( target.world_x - begin_x ) * smooth;
+        begin_y += ( target.world_y - begin_y ) * smooth;
+        begin_eye += ( target.eye - begin_eye ) * static_cast<float>( smooth );
+    } else {
+        begin_x = seat.world_x;
+        begin_y = seat.world_y;
+        begin_eye = seat.eye;
+    }
+    target = seat;
+    started = now;
+    duration = 90;
+    initialized = true;
+    return heading_delta;
+}
+
+offset rider_follower::relative_to( const tripoint_abs_ms &origin, unsigned now ) const
+{
+    if( !initialized ) {
+        return {};
+    }
+    const float t = std::clamp( ( now - started ) / static_cast<float>( duration ),
+                                0.0f, 1.0f );
+    const float smooth = t * t * ( 3.0f - 2.0f * t );
+    return {
+        static_cast<float>( begin_x + ( target.world_x - begin_x ) * smooth - origin.x() ),
+        static_cast<float>( begin_y + ( target.world_y - begin_y ) * smooth - origin.y() ),
+        begin_eye + ( target.eye - begin_eye ) * smooth
+    };
+}
+
+void rider_follower::reset()
+{
+    initialized = false;
+}
 } // namespace fp3d_camera

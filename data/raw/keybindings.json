@@ -5010,7 +5010,7 @@
   { "type": "keybinding", "id": "FP3D_INTERACT", "category": "FP3D", "name": "3D interact", "bindings": [ { "input_method": "keyboard_code", "key": "e" } ] },
   { "type": "keybinding", "id": "FP3D_PICKUP", "category": "FP3D", "name": "3D pickup", "bindings": [ { "input_method": "keyboard_code", "key": "f" } ] },
   { "type": "keybinding", "id": "FP3D_ATTACK", "category": "FP3D", "name": "3D attack", "bindings": [ { "input_method": "mouse", "key": "MOUSE_LEFT_PRESSED" } ] },
-  { "type": "keybinding", "id": "FP3D_AIM", "category": "FP3D", "name": "3D aim", "bindings": [ { "input_method": "mouse", "key": "MOUSE_RIGHT_PRESSED" } ] },
+  { "type": "keybinding", "id": "FP3D_AIM", "category": "FP3D", "name": "3D crosshair fire", "bindings": [ { "input_method": "mouse", "key": "MOUSE_RIGHT_PRESSED" } ] },
   { "type": "keybinding", "id": "FP3D_PANEL", "category": "MODERN_2D", "name": "2D modern survival panel", "bindings": [ { "input_method": "keyboard_code", "key": "TAB" } ] },
   { "type": "keybinding", "id": "FP3D_ACTIONS", "category": "MODERN_2D", "name": "2D modern quick actions", "bindings": [ { "input_method": "keyboard_code", "key": "q" } ] },
   { "type": "keybinding", "id": "FP3D_PANEL", "category": "FP3D", "name": "3D panel", "bindings": [ { "input_method": "keyboard_code", "key": "TAB" } ] },

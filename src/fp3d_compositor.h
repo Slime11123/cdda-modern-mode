@@ -56,6 +56,8 @@ bool draw_menu_background( int x, int y, int width, int height );
 std::array<int, 4> viewport_pixels();
 SDL_Texture_Ptr copy_view();
 std::optional<fp3d_targeting::target> interaction_target();
+// The center-reticle world target for immediate 3D gunfire (not an interaction target).
+std::optional<tripoint_abs_ms> firing_target( int range );
 void set_viewport( int x, int y, int width, int height, int display_width, int display_height );
 void set_input_context( const std::string &category );
 void publish( fp3d_snapshot::scene_snapshot scene );

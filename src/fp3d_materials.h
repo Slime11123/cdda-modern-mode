@@ -3,6 +3,7 @@
 #define CATA_SRC_FP3D_MATERIALS_H
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,6 +18,10 @@ namespace fp3d_snapshot
 struct cell;
 struct scene_snapshot;
 struct sprite;
+}
+namespace fp3d_vehicle
+{
+struct part_view;
 }
 namespace fp3d_materials
 {
@@ -35,6 +40,11 @@ const tile_type *resolve_sprite( const tileset &set, const fp3d_snapshot::sprite
 const tile_type *resolve_overlay( const tileset &set, bool male, const std::string &overlay,
                                   const std::string &variant );
 std::string sprite_key( const fp3d_snapshot::sprite &image );
+// Native vpart_id plus cosmetic variant; independent of world orientation.
+std::string vehicle_key( const fp3d_vehicle::part_view &part );
+// Dominant paint tint sampled from the currently selected tileset's
+// real bodywork image, never a hard-coded UndeadPeople-only color.
+std::optional<std::array<float, 3>> vehicle_body_color( const std::string &key );
 struct sprite_choice {
     int background = -1;
     int foreground = -1;

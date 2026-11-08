@@ -6,7 +6,9 @@
 #include <utility>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <tuple>
 
 #include "game.h"
@@ -37,6 +39,7 @@
 #include "submap.h"
 #include "type_id.h"
 #include "veh_type.h"
+#include "vehicle.h"
 #include "vpart_position.h"
 #include "weather.h"
 
@@ -293,7 +296,11 @@ terrain_kind classify( const std::string &id )
     if( id == "t_gutter_downspout" || id == "t_vitrified_downspout" ) {
         return terrain_kind::downspout;
     }
-    if( id.compare( 0, 12, "t_chainfence" ) == 0 ) {
+    if( id.compare( 0, 12, "t_chainfence" ) == 0 ||
+        id == "t_fence" || id == "t_privacy_fence" ||
+        id == "t_concrete_railing" || id == "t_railing" ||
+        id == "t_metal_railing" || id == "t_guardrail" ||
+        id == "t_guardrail_bg_dp" || id == "t_guardrail_hw_air" ) {
         return terrain_kind::fence;
     }
     const bool door_id = id.find( "door" ) != std::string::npos;
@@ -468,6 +475,149 @@ std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighb
     return result;
 }
 
+bool fence_connects( const std::string &a, const std::string &b )
+{
+    if( a == b ) {
+        return true;
+    }
+    const auto starts = []( const std::string & id, const std::string & prefix ) {
+        return id.compare( 0, prefix.size(), prefix ) == 0;
+    };
+    return ( starts( a, "t_chainfence" ) && starts( b, "t_chainfence" ) ) ||
+           ( starts( a, "t_guardrail" ) && starts( b, "t_guardrail" ) );
+}
+
+std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
+        const std::array<bool, 4> &neighbours )
+{
+    using part = fp3d_furniture::part;
+    if( id == "t_radio_tower" ) {
+        // Thin targeting proxies follow the open 3D steel frame. Never make
+        // the entire transparent tile an invisible solid ray-hit box.
+        constexpr float half = .34f;
+        const float height = fp3d_camera::floor_height;
+        std::vector<part> result;
+        result.reserve( 64 );
+        for( const float x : { -half, half } ) {
+            for( const float z : { -half, half } ) {
+                result.push_back( { x, z, .095f, .095f, 0, height } );
+            }
+        }
+        for( int level = 0; level <= 2; ++level ) {
+            const float y = height * level / 2.f;
+            for( const float side : { -half, half } ) {
+                result.push_back( { 0, side, .74f, .075f,
+                                    std::max( 0.f, y - .04f ), std::min( height, y + .04f ) } );
+                result.push_back( { side, 0, .075f, .74f,
+                                    std::max( 0.f, y - .04f ), std::min( height, y + .04f ) } );
+            }
+        }
+        // Three short proxies per diagonal face brace, including the central
+        // X intersections, approximate the actual tilted beams for picking.
+        for( int level = 0; level < 2; ++level ) {
+            for( int sample = 0; sample < 3; ++sample ) {
+                const float t = ( sample + .5f ) / 3.f;
+                const float y = height * ( level + t ) / 2.f;
+                const float across = half * ( 2.f * t - 1.f );
+                for( const float side : { -half, half } ) {
+                    for( const float sign : { -1.f, 1.f } ) {
+                        result.push_back( { across * sign, side, .27f, .09f,
+                                            std::max( 0.f, y - .20f ), std::min( height, y + .20f ) } );
+                        result.push_back( { side, across * sign, .09f, .27f,
+                                            std::max( 0.f, y - .20f ), std::min( height, y + .20f ) } );
+                    }
+                }
+            }
+        }
+        return result;
+    }
+    if( id == "t_column" || id == "t_pillar" ||
+        id == "t_little_column" || id == "t_column_halfway" ) {
+        const bool little = id == "t_little_column";
+        const float shaft = little ? .36f : id == "t_pillar" ? .61f : .52f;
+        const float height = id == "t_column_halfway" ? 1.49f : 3.0f;
+        const float cap = shaft + .12f;
+        return {
+            { 0, 0, cap, cap, 0, .17f },            // stone plinth
+            { 0, 0, shaft, shaft, .17f, height - .17f },
+            { 0, 0, cap, cap, height - .17f, height },
+            { 0, .5f * shaft + .012f, .18f, .025f, .32f, height - .32f }
+        };
+    }
+    const bool picket = id == "t_fence";
+    const bool privacy = id == "t_privacy_fence";
+    const bool concrete = id == "t_concrete_railing";
+    const bool wood = id == "t_railing";
+    const bool steel = id == "t_metal_railing";
+    const bool road = id.compare( 0, 11, "t_guardrail" ) == 0;
+    if( !picket && !privacy && !concrete && !wood && !steel && !road ) {
+        return {};
+    }
+    // The UndeadPeople t_fence is a simple low white picket fence, not a
+    // wrought-iron railing.  Leave space between the individual uprights.
+    const float height = privacy ? 2.16f : picket ? 1.16f :
+                         concrete ? 1.06f : road ? .92f : 1.11f;
+    const float thickness = concrete ? .14f : road ? .11f : picket ? .073f : .095f;
+    std::vector<part> out;
+    out.reserve( privacy || picket ? 36 : 14 );
+    // Each tile contributes one central post and half-rails connecting to
+    // neighbours. A standalone segment is a full E-W tile, not one point.
+    out.push_back( { 0, 0, thickness + .09f, thickness + .09f, 0, height } );
+    out.push_back( { 0, 0, thickness + .15f, thickness + .15f, height - .08f, height } );
+    auto links = neighbours;
+    if( std::none_of( links.begin(), links.end(), []( bool linked ) { return linked; } ) ) {
+        links[1] = links[3] = true;
+    }
+    for( unsigned direction = 0; direction < links.size(); ++direction ) {
+        if( !links[direction] ) {
+            continue;
+        }
+        const bool east_west = direction % 2 == 1;
+        const float sign = direction == 1 || direction == 2 ? 1.f : -1.f;
+        const float x = east_west ? sign * .25f : 0.f;
+        const float z = east_west ? 0.f : sign * .25f;
+        const float along_x = east_west ? .50f : thickness;
+        const float along_z = east_west ? thickness : .50f;
+        if( privacy ) {
+            // Full-height planks and their horizontal backing strips.
+            for( int n = 0; n < 4; ++n ) {
+                const float at = sign * ( .075f + n * .115f );
+                out.push_back( { east_west ? at : 0.f, east_west ? 0.f : at,
+                                 east_west ? .110f : .085f,
+                                 east_west ? .085f : .110f,
+                                 .04f, height - .03f } );
+            }
+            out.push_back( { x, z, along_x, along_z, .46f, .56f } );
+            out.push_back( { x, z, along_x, along_z, 1.55f, 1.65f } );
+        } else if( picket ) {
+            // Two slender uprights per half-tile, painted cream-white as in
+            // the UndeadPeople artwork.  No painted-on black shadow stripes.
+            for( int n = 0; n < 2; ++n ) {
+                const float at = sign * ( .17f + n * .20f );
+                const float px = east_west ? at : 0.f;
+                const float pz = east_west ? 0.f : at;
+                out.push_back( { px, pz, .062f, .062f, .065f, height - .07f } );
+                out.push_back( { px, pz, .048f, .048f, height - .07f, height } );
+            }
+            out.push_back( { x, z, along_x, along_z, .35f, .42f } );
+            out.push_back( { x, z, along_x, along_z, .80f, .88f } );
+        } else if( concrete ) {
+            // Raised cement rail and a second lower brace; never a flat road
+            // marking. Central posts occupy each original game tile.
+            out.push_back( { x, z, along_x, along_z, .40f, .56f } );
+            out.push_back( { x, z, along_x, along_z, .79f, .97f } );
+        } else if( road ) {
+            out.push_back( { x, z, along_x, along_z, .56f, .76f } );
+        } else {
+            // Wooden or wrought-metal railings are spaced open with upper
+            // and lower bars instead of a solid billboard.
+            out.push_back( { x, z, along_x, along_z, .31f, .40f } );
+            out.push_back( { x, z, along_x, along_z, .81f, .91f } );
+        }
+    }
+    return out;
+}
+
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind )
 {
     constexpr float top = fp3d_camera::floor_height;
@@ -526,6 +676,34 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
     const bool blind = you.is_blind();
     scene_snapshot result;
     result.origin = you.pos_abs();
+    // The player's discrete map cell is for CDDA collision/interactions,
+    // not necessarily the centre of a rotating 3D passenger seat. Publish
+    // the exact native mount transformed by the same rigid vehicle root
+    // used for drawing; only an actually boarded player receives this pose.
+    if( you.in_vehicle ) {
+        const optional_vpart_position vp = here.veh_at( you.pos_bub( here ) );
+        if( vp && vp->part_with_feature( VPFLAG_BOARDABLE, true ) ) {
+            const vehicle &car = vp->vehicle();
+            const point_rel_ms mount = vp->mount_pos();
+            const float degrees = units::to_degrees( car.pivot_rotation[0] );
+            const double radians = degrees * 3.14159265358979323846 / 180.0;
+            const double cx = mount.x() - car.pivot_anchor[0].x();
+            const double cy = mount.y() - car.pivot_anchor[0].y();
+            const bool seated = bool( vp->part_with_feature( "SEAT", true ) );
+            fp3d_camera::rider_pose rider;
+            rider.world_x = car.pos_abs().x() + std::cos( radians ) * cx -
+                            std::sin( radians ) * cy;
+            rider.world_y = car.pos_abs().y() + std::sin( radians ) * cx +
+                            std::cos( radians ) * cy;
+            rider.eye = seated ? 1.42f : 1.55f;
+            rider.vehicle_angle = degrees;
+            rider.mount_x = mount.x();
+            rider.mount_y = mount.y();
+            rider.storey = car.pos_abs().z();
+            rider.driver = car.player_in_control( here, you );
+            result.rider = rider;
+        }
+    }
     result.hud = fp3d_hud::capture( you );
     result.season = season_of_year( calendar::turn );
     if( !blind ) {
@@ -597,6 +775,113 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below )
         }
     }
     const auto perception_finished = std::chrono::steady_clock::now();
+    // P0-V / P1-V: cover every map-loaded vehicle, not only the car being
+    // driven.  VehicleList may include duplicates across submaps/z-levels;
+    // de-duplicate by pointer ONLY within this capture, never store that
+    // pointer or a vehicle_part reference in the published snapshot.
+    // The get_vehicles() API is non-const in CDDA 0.I because it lazily
+    // walks map caches. This call does not modify vehicle simulation state.
+    if( fresh && !blind ) {
+        std::unordered_set<const vehicle *> visited;
+        for( const wrapped_vehicle &entry : const_cast<map &>( here ).get_vehicles() ) {
+            const vehicle *veh = entry.v;
+            if( !veh || !visited.insert( veh ).second ) {
+                continue;
+            }
+            ++result.enumerated_vehicles;
+            fp3d_vehicle::vehicle_view view;
+            view.origin = veh->pos_abs();
+            view.name = veh->name;
+            view.angle_degrees = units::to_degrees( veh->pivot_rotation[0] );
+            view.pivot_x = veh->pivot_anchor[0].x();
+            view.pivot_y = veh->pivot_anchor[0].y();
+            // A complete car must be assembled from a complete local
+            // geometry snapshot. Visibility can reject the far-side
+            // fender *because the car itself blocks the 2D LOS*, leaving
+            // a scattered chair/glass scaffold on the 3D side. Gate at
+            // the entity level instead: render this car iff at least one
+            // nonremoved mount is natively visible, then let terrain GL
+            // depth testing hide all parts behind buildings/obstacles.
+            bool any_part_visible = false;
+            for( int index_part = 0; index_part < veh->part_count(); ++index_part ) {
+                const vehicle_part &part = veh->part( index_part );
+                if( part.removed || part.is_fake || part.hidden ) {
+                    continue;
+                }
+                ++view.real_parts;
+                // Native rounded occupancy is used for the vehicle's
+                // visibility gate only. Mesh geometry stays local to the
+                // unrounded mount, and includes *all* present components
+                // once any native vehicle mount is visible. The GL depth
+                // buffer occludes far-side panels behind real walls.
+                const tripoint_bub_ms p = here.get_bub( veh->mount_to_tripoint_abs( part.mount ) );
+                if( p.z() >= result.min_z && p.z() <= result.max_z &&
+                    p.x() >= first_x && p.x() < first_x + side &&
+                    p.y() >= first_y && p.y() < first_y + side &&
+                    here.inbounds( p ) && ( perception[index( p )] & visible_bit ) ) {
+                    any_part_visible = true;
+                }
+                const vpart_info &info = part.info();
+                fp3d_vehicle::part_view item;
+                item.index = index_part;
+                item.mount_x = part.mount.x();
+                item.mount_y = part.mount.y();
+                item.native_position = veh->mount_to_tripoint_abs( part.mount );
+                item.id = info.id.str();
+                item.variant = part.variant;
+                item.looks_like = info.looks_like;
+                item.broken = part.is_broken();
+                item.open = part.open;
+                item.glazed_door = info.has_flag( VPFLAG_WINDOW );
+                item.health = static_cast<float>( part.health_percent() );
+                using role = fp3d_vehicle::role;
+                const auto name_has = [&]( const char *needle ) {
+                    return item.id.find( needle ) != std::string::npos;
+                };
+                // A CDDA car DOOR also has WINDOW and BOARDABLE. The old
+                // priority built giant glass boxes instead of red car doors.
+                // Likewise, a CARGO/BOARDABLE trunk is *not* a seat!
+                if( info.has_flag( VPFLAG_WHEEL ) ) {
+                    item.kind = role::wheel;
+                } else if( info.has_flag( VPFLAG_ROOF ) ) {
+                    item.kind = role::roof;
+                } else if( info.has_flag( "DOOR" ) || info.has_flag( VPFLAG_OPENABLE ) ) {
+                    // Opening tailgates and hatches are still movable doors.
+                    item.kind = role::door;
+                } else if( name_has( "trunk" ) || name_has( "halfboard" ) ||
+                           ( name_has( "board" ) && !name_has( "dashboard" ) ) || name_has( "hatch" ) ||
+                           name_has( "hood" ) || name_has( "fender" ) ||
+                           name_has( "quarterpanel" ) || name_has( "bumper" ) ||
+                           name_has( "ram_" ) ) {
+                    item.kind = role::body;
+                } else if( info.has_flag( VPFLAG_WINDOW ) ) {
+                    item.kind = role::window;
+                } else if( info.has_flag( VPFLAG_ARMOR ) ) {
+                    item.kind = role::armor;
+                } else if( info.has_flag( "SEAT" ) ) {
+                    item.kind = role::seat;
+                } else if( info.has_flag( VPFLAG_ENGINE ) ) {
+                    item.kind = role::engine;
+                } else if( info.has_flag( "CONE_LIGHT" ) ||
+                           name_has( "headlight" ) || name_has( "taillight" ) ||
+                           name_has( "brakelight" ) || name_has( "turn_signal" ) ) {
+                    item.kind = role::light;
+                } else if( info.has_flag( VPFLAG_CARGO ) ) {
+                    item.kind = role::cargo;
+                } else if( info.has_flag( "STRUCTURE" ) ||
+                           info.location == "structure" ) {
+                    item.kind = role::frame;
+                } else {
+                    item.kind = role::other;
+                }
+                view.parts.push_back( std::move( item ) );
+            }
+            if( any_part_visible && !view.parts.empty() ) {
+                result.visible_vehicle_parts += view.parts.size();
+                result.vehicles.push_back( std::move( view ) );
+            }
+        }
+    }
     std::unordered_map<tripoint_bub_ms, const Creature *> creatures;
     if( fresh && g ) {
         // Native lookup scans NPCs. Do it at occupied positions, not 100k cells.

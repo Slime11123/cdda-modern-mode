@@ -25,7 +25,7 @@ namespace
 constexpr float pi = 3.14159265358979323846f;
 const std::array<entry, 8> default_options = {{
         { "投掷", "选择物品与目标，按原版规则投掷。", ACTION_THROW, nullptr },
-        { "拖拽", "选择相邻家具或车辆，按原版规则拖拽。", ACTION_GRAB, nullptr },
+        { "拖拽", "选择后将准星对准相邻家具或车辆，按 E 确认。", ACTION_GRAB, nullptr },
         { "变异能力", "打开原版变异能力与特殊行动。", ACTION_MUTATIONS, nullptr },
         { "仿生装置", "打开原版仿生装置控制。", ACTION_BIONICS, nullptr },
         { "装填", "装填手持武器，沿用原版弹药与耗时。", ACTION_RELOAD_WIELDED, nullptr },

@@ -26,6 +26,7 @@
 #include "mtype.h"
 #include "npc.h"
 #include "popup.h"
+#include "ranged.h"
 #include "translations.h"
 #include "vehicle.h"
 #include "veh_type.h"
@@ -34,6 +35,7 @@ namespace fp3d_interaction
 namespace
 {
 std::optional<request> arrived_2d_action;
+std::optional<action_id> pending_direction_action;
 
 class approach_activity : public activity_actor
 {
@@ -216,6 +218,46 @@ bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
     return true;
 }
 
+bool begin_direction_selection( action_id action )
+{
+    switch( action ) {
+        case ACTION_GRAB:
+        case ACTION_OPEN:
+        case ACTION_CLOSE:
+        case ACTION_SMASH:
+        case ACTION_DIR_DROP:
+        case ACTION_EXAMINE:
+        case ACTION_EXAMINE_AND_PICKUP:
+        case ACTION_PICKUP:
+        case ACTION_CHAT:
+            pending_direction_action = action;
+            add_msg( m_info, "将准星对准相邻目标并按 E 确认方向（切换模式可取消）。" );
+            return true;
+        default:
+            return false;
+    }
+}
+
+void cancel_direction_selection()
+{
+    pending_direction_action.reset();
+}
+
+std::string direction_selection_hint()
+{
+    if( !pending_direction_action ) {
+        return {};
+    }
+    const char *name = *pending_direction_action == ACTION_GRAB ? "拖拽" :
+                       *pending_direction_action == ACTION_OPEN ? "打开" :
+                       *pending_direction_action == ACTION_CLOSE ? "关闭" :
+                       *pending_direction_action == ACTION_SMASH ? "砸击" :
+                       *pending_direction_action == ACTION_DIR_DROP ? "定向放下" :
+                       *pending_direction_action == ACTION_PICKUP ? "拾取" :
+                       *pending_direction_action == ACTION_CHAT ? "交谈" : "查看";
+    return std::string( "等待目标：" ) + name + " — 准星对准相邻物体，按 E 确认";
+}
+
 bool valid( const fp3d_targeting::target &target, const avatar &you, const map &here )
 {
     const auto p = here.get_bub( target.position );
@@ -223,6 +265,28 @@ bool valid( const fp3d_targeting::target &target, const avatar &you, const map &
         p.z() != you.posz() || !here.inbounds( p ) || square_dist( you.pos_bub( here ), p ) > 1 ||
         !you.sees( here, p ) ) {
         return false;
+    }
+    if( target.type == fp3d_targeting::kind::vehicle ) {
+        // Pure snapshot selection is NOT authority to mutate a vehicle.
+        // Resolve it to the SAME live vehicle and SAME mounted component
+        // before returning any native action to handle_action.cpp.
+        if( !target.vehicle_origin || target.vehicle_part < 0 ) {
+            return false;
+        }
+        const auto vp = here.veh_at( p );
+        if( !vp || vp->vehicle().pos_abs() != *target.vehicle_origin ) {
+            return false;
+        }
+        const vehicle &car = vp->vehicle();
+        if( target.vehicle_part >= car.part_count() ) {
+            return false;
+        }
+        const vehicle_part &part = car.part( target.vehicle_part );
+        return !part.removed && !part.is_fake && !part.hidden &&
+               part.mount.x() == target.vehicle_mount_x &&
+               part.mount.y() == target.vehicle_mount_y &&
+               car.mount_to_tripoint_abs( part.mount ) == target.position &&
+               part.info().id.str() == target.id;
     }
     if( target.type == fp3d_targeting::kind::creature ) {
         const auto *critter = get_creature_tracker().creature_at( p );
@@ -256,6 +320,30 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
                           you.sees( here, *critter );
     const auto *person = creature ? get_creature_tracker().creature_at<npc>( p ) : nullptr;
     const bool object = reachable && !creature;
+    if( object && target.type == fp3d_targeting::kind::vehicle ) {
+        const auto vp = here.veh_at( p );
+        const vehicle_part &part = vp->vehicle().part( target.vehicle_part );
+        const bool door = part.info().has_flag( VPFLAG_OPENABLE ) && !part.is_broken();
+        const bool cargo = part.info().has_flag( VPFLAG_CARGO );
+        const bool draggable = !fp3d_input::vehicle_controls() && p != you.pos_bub( here );
+        return {{
+                { "查看车辆 / 改装", "由原版 CDDA 检查车辆及改装权限",
+                  ACTION_EXAMINE, nullptr, true, true },
+                { "打开车门", "由原版 CDDA 检查车门状态、上锁及行动消耗",
+                  ACTION_OPEN, nullptr, door && !part.open, door && !part.open },
+                { "关闭车门", "由原版 CDDA 检查车门状态与行动消耗",
+                  ACTION_CLOSE, nullptr, door && part.open, door && part.open },
+                { "查看货舱", "由原版 CDDA 查看此格车辆货舱与物品",
+                  ACTION_EXAMINE_AND_PICKUP, nullptr, cargo, cargo },
+                { "拖拽 / 松开", "执行原版拖拽操作；驾驶时不可用",
+                  ACTION_GRAB, nullptr, draggable, draggable },
+                { "检查零件", "打开原版车辆检查，不绕过修理需求",
+                  ACTION_EXAMINE, nullptr, true, true },
+                { "查看当前位置", "沿用原版地图物品、车内物品检查",
+                  ACTION_EXAMINE_AND_PICKUP, nullptr, true, true },
+                { "取消", "返回3D视角", ACTION_NULL, nullptr, true, true }
+            }};
+    }
     const bool stairs_target = object && target.type == fp3d_targeting::kind::terrain;
     const bool up = stairs_target && here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p );
     const bool down = stairs_target && here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p );
@@ -291,6 +379,9 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
     const bool guard = person && npc_orders::can_issue( you, *person, npc_orders::kind::guard );
     const bool follow = person && npc_orders::can_issue( you, *person, npc_orders::kind::follow );
     const bool attack = creature && !person && !fp3d_input::vehicle_controls();
+    const bool draggable = object && !fp3d_input::vehicle_controls() &&
+                           ( ( here.has_furn( p ) && here.furn( p ).obj().is_movable() ) ||
+                             static_cast<bool>( here.veh_at( p ) ) );
     return {{
             { "打开", "打开目标门窗或容器，沿用原版规则。", ACTION_OPEN, nullptr, opens, opens },
             { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes, closes },
@@ -303,7 +394,10 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
                 guard, guard
             },
             attack ? fp3d_quick_menu::entry{ "近战攻击", "攻击准星对准的生物，非敌对目标仍需确认。",
-                                            ACTION_NULL, "FP3D_ATTACK" } : fp3d_quick_menu::entry{
+                                            ACTION_NULL, "FP3D_ATTACK" } :
+            draggable ? fp3d_quick_menu::entry{ "拖拽 / 放开", "用准星选中家具或车辆，无需再选方向。",
+                                                ACTION_GRAB, nullptr, true, true } :
+            fp3d_quick_menu::entry{
                 "继续跟随", "让可听见的守卫队友继续跟随，保留原版营地限制。", ACTION_NULL, "FP3D_FOLLOW",
                 follow, follow
             },
@@ -438,10 +532,94 @@ std::optional<request> resolve_2d_choice( const fp3d_quick_menu::entry &choice,
     return request{ choice.action, p, choice.action == ACTION_PICKUP, choice.action == ACTION_PICKUP };
 }
 
+bool fire( avatar &you, map &here )
+{
+    const item_location weapon = you.get_wielded_item();
+    if( !weapon || !weapon->is_gun() || weapon->is_gunmod() ) {
+        add_msg( m_info, "需要手持枪械才能使用 3D 准星射击。" );
+        return false;
+    }
+
+    gun_mode mode = weapon->gun_current_mode();
+    if( !mode || mode.melee() ) {
+        add_msg( m_info, "当前武器模式无法射击，请切换射击模式。" );
+        return false;
+    }
+
+    if( mode->has_ammo_data() &&
+        !mode->ammo_types().count( mode->loaded_ammo().ammo_type() ) ) {
+        add_msg( m_info, "当前弹药与枪械不兼容。" );
+        return false;
+    }
+
+    std::vector<std::string> warnings;
+    const bool common_ok = gunmode_checks_common( you, here, warnings, mode );
+    const bool weapon_ok = gunmode_checks_weapon( you, here, warnings, mode );
+    if( !common_ok || !weapon_ok ) {
+        for( const auto &warning : warnings ) {
+            add_msg( m_info, warning );
+        }
+        return false;
+    }
+    // Native RELOAD_AND_SHOOT uses a separate ammunition-selection activity;
+    // an instant shot never creates that activity or fires unloaded ammunition.
+    if( !mode->ammo_sufficient( &you ) ) {
+        add_msg( m_info, "弹药不足；请先装填武器。" );
+        return false;
+    }
+    if( !you.try_break_relax_gas( _( "Your eyes steel, and you raise your weapon!" ),
+                                  _( "You can't fire your weapon, it's too heavy…" ) ) ) {
+        return false;
+    }
+
+    const auto target = fp3d_compositor::firing_target( mode->gun_range() );
+    if( !target ) {
+        add_msg( m_info, "准星方向没有可用的射击轨迹。" );
+        return false;
+    }
+    const tripoint_bub_ms destination = here.get_bub( *target );
+    if( !here.inbounds( destination ) || destination == you.pos_bub( here ) ) {
+        return false;
+    }
+
+    // Reuse CDDA's physical firing path (gun/marksman skill dispersion, recoil,
+    // projectiles, cover, burst mode, ammo/energy, sound, time and practice).
+    // Only target acquisition and the aiming UI are replaced in first-person.
+    return you.fire_gun( here, destination, mode.qty, *mode ) > 0;
+}
+
 std::optional<request> resolve( const std::string &command,
                                 const std::optional<fp3d_targeting::target> &selected_target, avatar &you, map &here )
 {
     auto candidate = selected_target;
+    if( ( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) &&
+        pending_direction_action ) {
+        if( !candidate || !valid( *candidate, you, here ) ) {
+            add_msg( m_info, "准星未对准可触及的相邻目标，请调整视角再按 E。" );
+            return std::nullopt;
+        }
+        const tripoint_bub_ms selected = here.get_bub( candidate->position );
+        const action_id requested_action = *pending_direction_action;
+        if( requested_action == ACTION_GRAB &&
+            ( selected == you.pos_bub( here ) ||
+              candidate->type == fp3d_targeting::kind::creature ||
+              ( !here.has_furn( selected ) && !here.veh_at( selected ) ) ) ) {
+            add_msg( m_info, "拖拽需要对准相邻家具或车辆，请重新对准后按 E。" );
+            return std::nullopt;
+        }
+        if( requested_action == ACTION_PICKUP &&
+            ( !here.could_see_items( selected, you ) || here.i_at( selected ).empty() ) ) {
+            add_msg( m_info, "这个位置没有可拾取的物品，请对准物品后按 E。" );
+            return std::nullopt;
+        }
+        if( requested_action == ACTION_CHAT &&
+            !get_creature_tracker().creature_at<npc>( selected ) ) {
+            add_msg( m_info, "请用准星对准相邻人物，再按 E 交谈。" );
+            return std::nullopt;
+        }
+        pending_direction_action.reset();
+        return request{ requested_action, selected };
+    }
     if( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) {
         const auto standing = you.pos_bub( here );
         if( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, standing ) ||
@@ -520,11 +698,9 @@ std::optional<request> resolve( const std::string &command,
         return request{ ACTION_ITEMACTION, std::nullopt, false };
     }
     if( command == "FP3D_AIM" ) {
-        const auto weapon = you.get_wielded_item();
-        if( weapon && weapon->is_gun() && !weapon->gun_current_mode().melee() ) {
-            return request{ ACTION_FIRE, std::nullopt, false };
-        }
-        return std::nullopt;
+        // Keep the saved right-mouse binding, but route to the native action
+        // dispatcher's immediate first-person shot, never the 2D aim UI.
+        return request{ ACTION_FIRE, std::nullopt, false };
     }
     if( !candidate || !valid( *candidate, you, here ) ) {
         fp3d_input::world_gestures().cancel();
@@ -576,6 +752,17 @@ std::optional<request> resolve( const std::string &command,
         const int npc_id = can_chat ? npc->getID().get_value() : -1;
         action_id action = can_chat ? ACTION_CHAT :
                            opens ? ACTION_OPEN : items ? ACTION_PICKUP : closes ? ACTION_CLOSE : ACTION_EXAMINE_AND_PICKUP;
+        if( candidate->type == fp3d_targeting::kind::vehicle ) {
+            const auto vp = here.veh_at( p );
+            const vehicle_part &part = vp->vehicle().part( candidate->vehicle_part );
+            // One E press on the *selected* door opens/closes it using
+            // native door rules. Other components open native examine UI.
+            if( part.info().has_flag( VPFLAG_OPENABLE ) && !part.is_broken() ) {
+                action = part.open ? ACTION_CLOSE : ACTION_OPEN;
+            } else {
+                action = ACTION_EXAMINE;
+            }
+        }
         const bool stairs = candidate->type == fp3d_targeting::kind::terrain && !can_chat &&
                             ( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, p ) ||
                                            here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, p ) );

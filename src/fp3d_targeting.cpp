@@ -12,14 +12,13 @@ namespace fp3d_targeting
 namespace
 {
 using vector3 = std::array<float, 3>;
-constexpr float reach = 6;
 
 // A slab test also handles horizontal floors and vertical sprite planes.
 std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
-                                const vector3 &low, const vector3 &high, bool round = false )
+                                const vector3 &low, const vector3 &high, float max_reach, bool round = false )
 {
     float enter = 0;
-    float leave = reach;
+    float leave = max_reach;
     for( int axis = 0; axis < 3; ++axis ) {
         if( std::abs( direction[axis] ) < .000001f ) {
             if( eye[axis] < low[axis] || eye[axis] > high[axis] ) {
@@ -69,18 +68,20 @@ std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
 }
 
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
-                           fp3d_camera::offset offset )
+                           fp3d_camera::offset offset, float max_reach )
 {
     if( !std::isfinite( yaw ) || !std::isfinite( pitch ) ||
-        !std::isfinite( offset.x ) || !std::isfinite( offset.y ) ) {
+        !std::isfinite( offset.x ) || !std::isfinite( offset.y ) ||
+        !std::isfinite( offset.height ) ) {
         return std::nullopt;
     }
+    const float reach = std::clamp( max_reach, 1.0f, 64.0f );
     constexpr float radians = 3.14159265358979323846f / 180;
     const float sy = std::sin( yaw * radians );
     const float cy = std::cos( yaw * radians );
     const float cp = std::cos( pitch * radians );
     // x/y are native horizontal coordinates; z is height in render units.
-    const vector3 eye{ offset.x, offset.y, fp3d_camera::eye_height };
+    const vector3 eye{ offset.x, offset.y, offset.height };
     const vector3 direction{ sy * cp, -cy * cp, -std::sin( pitch * radians ) };
     float nearest = reach + .001f;
     float nearest_opaque = nearest;
@@ -148,7 +149,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             const float north = y + dy - depth / 2;
             const float south = y + dy + depth / 2;
             const float base = z + ( flat ? top : bottom );
-            accept( intersect( eye, direction, { left, north, z + bottom }, { right, south, z + top }, round ),
+            accept( intersect( eye, direction, { left, north, z + bottom }, { right, south, z + top }, reach, round ),
             { {{ { left, base, north }, { right, base, north }, { right, base, south },
                     { left, base, south } }}, flat ? 0 : top - bottom }, type );
         };
@@ -224,15 +225,19 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         }
         if( tile->floor_present && !tile->is_ramp ) {
-            const auto *below = tile->goes_down ? cell_at( tile->position + tripoint_rel_ms::below ) : nullptr;
+            const auto *below = tile->goes_down || tile->terrain == "t_radio_tower" ?
+                                cell_at( tile->position + tripoint_rel_ms::below ) : nullptr;
             const bool opening = tile->goes_down && ( tile->kind == fp3d_snapshot::terrain_kind::ladder ||
                                  ( below && below->goes_up ) );
-            if( !opening ) {
+            const bool tower_gap = tile->terrain == "t_radio_tower" &&
+                                   below && below->terrain == "t_radio_tower";
+            if( !opening && !tower_gap ) {
                 box( 0, 0, 1, 1, -.08f, 0, kind::terrain, true );
             }
         }
         const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
-        if( tile->ceiling_present && !upper_floor_surface ) {
+        if( tile->ceiling_present && !upper_floor_surface &&
+            !( tile->terrain == "t_radio_tower" && above && above->terrain == "t_radio_tower" ) ) {
             box( 0, 0, 1, 1, fp3d_camera::floor_height - .08f, fp3d_camera::floor_height - .08f );
         }
         if( tile->kind != fp3d_snapshot::terrain_kind::ladder && tile->goes_up && ( ( above && ( above->goes_down || !above->floor_present ) ) ||
@@ -243,10 +248,36 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         }
         using terrain = fp3d_snapshot::terrain_kind;
-        if( tile->kind == terrain::fence ) {
+        const auto model_parts = [&] {
+            // Avoid four neighbour lookups for every ordinary floor tile.
+            const bool special = tile->kind == terrain::fence ||
+                                 tile->terrain == "t_radio_tower" ||
+                                 tile->terrain == "t_column" ||
+                                 tile->terrain == "t_pillar" ||
+                                 tile->terrain == "t_little_column" ||
+                                 tile->terrain == "t_column_halfway";
+            if( !special ) {
+                return std::vector<fp3d_furniture::part>{};
+            }
+            const auto adjacent = [&]( const tripoint_rel_ms &direction ) {
+                const auto *other = cell_at( tile->position + direction );
+                return other && other->kind == terrain::fence &&
+                       fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
+            };
+            return fp3d_snapshot::terrain_model_parts( tile->terrain, {
+                adjacent( tripoint_rel_ms::north ), adjacent( tripoint_rel_ms::east ),
+                adjacent( tripoint_rel_ms::south ), adjacent( tripoint_rel_ms::west )
+            } );
+        }();
+        if( !model_parts.empty() ) {
+            for( const auto &part : model_parts ) {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+            }
+        } else if( tile->kind == terrain::fence ) {
             const auto linked = [&]( const tripoint_rel_ms &direction ) {
                 const auto *other = cell_at( tile->position + direction );
-                return other && other->kind == terrain::fence;
+                return other && other->kind == terrain::fence &&
+                       fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
             };
             for( const auto &part : fp3d_snapshot::fence_parts(
                 { linked( tripoint_rel_ms::north ), linked( tripoint_rel_ms::east ),
@@ -286,12 +317,161 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         }
     }
+    // P3-B: pick the actual native-mounted 3D car parts rather than the
+    // terrain tile below the vehicle. Geometry stays in continuous mount
+    // space, transformed by the SAME rotation as fp3d_vehicle::root().
+    // The target carries the exact native occupancy tile plus part index:
+    // the game thread MUST revalidate that identity before any action.
+    for( const fp3d_vehicle::vehicle_view &car : scene.vehicles ) {
+        const tripoint_rel_ms rel = car.origin - scene.origin;
+        const float cx = static_cast<float>( rel.x() );
+        const float cz = static_cast<float>( rel.y() );
+        const float base = rel.z() * fp3d_camera::floor_height;
+        const float angle = car.angle_degrees * radians;
+        const float cosine = std::cos( angle );
+        const float sine = std::sin( angle );
+        const auto local_point = [&]( const vector3 &point ) {
+            const float wx = point[0] - cx;
+            const float wz = point[1] - cz;
+            return vector3{ cosine * wx + sine * wz, -sine * wx + cosine * wz, point[2] - base };
+        };
+        const vector3 eye_local = local_point( eye );
+        const vector3 ray_local{ cosine * direction[0] + sine * direction[1],
+                                 -sine * direction[0] + cosine * direction[1], direction[2] };
+        // Matching the enclosed-cabin geometry scale used for the opaque
+        // vehicle pass. A detached or open frame remains natural height.
+        const int frame_count = std::count_if( car.parts.begin(), car.parts.end(),
+        []( const auto &p ) { return p.kind == fp3d_vehicle::role::frame; } );
+        const int roof_count = std::count_if( car.parts.begin(), car.parts.end(),
+        []( const auto &p ) { return p.kind == fp3d_vehicle::role::roof && !p.broken; } );
+        const int door_count = std::count_if( car.parts.begin(), car.parts.end(),
+        []( const auto &p ) { return p.kind == fp3d_vehicle::role::door; } );
+        const int window_count = std::count_if( car.parts.begin(), car.parts.end(),
+        []( const auto &p ) { return p.kind == fp3d_vehicle::role::window; } );
+        const float vertical_scale = frame_count >= 5 &&
+                                     ( roof_count >= 1 || ( door_count >= 2 && window_count >= 1 ) ) ?
+                                     1.36f : 1.0f;
+        for( const fp3d_vehicle::part_view &part : car.parts ) {
+            const auto *tile = cell_at( part.native_position );
+            if( part.index < 0 || part.hidden || !tile ||
+                tile->known != fp3d_snapshot::knowledge::visible || tile->exterior_only ) {
+                continue; // never reveal a vehicle component behind LOS
+            }
+            using role = fp3d_vehicle::role;
+            float width = .82f, depth = .78f, bottom = .20f, top = 1.3f;
+            switch( part.kind ) {
+                case role::wheel:
+                    width = .82f; depth = .82f;
+                    bottom = .015f; top = .93f;
+                    break;
+                case role::door:
+                    width = .90f; depth = .90f;
+                    // V9 closed native door stops below the upper window
+                    // aperture. A selected closed door must not block a
+                    // ray aimed at the sky through its missing glazing.
+                    bottom = .31f;
+                    top = part.open ? 1.29f :
+                          part.broken ? .65f : .84f;
+                    break;
+                case role::roof:
+                    width = .93f; depth = .93f;
+                    bottom = 1.30f; top = 1.43f;
+                    break;
+                case role::seat:
+                    width = .61f; depth = .63f;
+                    bottom = .31f; top = part.broken ? .75f : 1.09f;
+                    break;
+                case role::cargo:
+                    width = .75f; depth = .75f;
+                    bottom = .34f; top = .61f;
+                    break;
+                case role::window:
+                    bottom = .80f; top = 1.43f;
+                    break;
+                case role::frame:
+                    width = .78f; depth = .78f;
+                    bottom = .10f; top = .27f;
+                    break;
+                case role::engine:
+                    bottom = .30f; top = .72f;
+                    break;
+                default:
+                    break;
+            }
+            bottom *= vertical_scale;
+            top *= vertical_scale;
+            const float center_x = part.mount_x - car.pivot_x;
+            const float center_z = part.mount_y - car.pivot_y;
+            const float left = center_x - width * .5f;
+            const float right = center_x + width * .5f;
+            const float north = center_z - depth * .5f;
+            const float south = center_z + depth * .5f;
+            const auto hit = intersect( eye_local, ray_local,
+                                       { left, north, bottom }, { right, south, top }, reach );
+            if( !hit || *hit >= nearest || *hit >= nearest_opaque - .015f ) {
+                continue;
+            }
+            // Rendered outline shares the same rigid local mount root:
+            // XZ corners rotate with the car; heights follow its cabin scale.
+            edge_outline outline;
+            outline.height = top - bottom;
+            for( int corner = 0; corner != 4; ++corner ) {
+                const float lx = ( corner == 0 || corner == 3 ) ? left : right;
+                const float lz = corner <= 1 ? north : south;
+                outline.corners[corner] = {
+                    cx + cosine * lx - sine * lz,
+                    base + bottom,
+                    cz + sine * lx + cosine * lz
+                };
+            }
+            nearest = *hit;
+            // The same selected car panel also occludes item/sprite picking;
+            // otherwise items behind a solid door could replace this hit.
+            nearest_opaque = std::min( nearest_opaque, *hit );
+            result = target{ scene.origin, part.native_position, kind::vehicle, part.id,
+                             outline, part.index, car.origin, part.mount_x, part.mount_y };
+        }
+    }
     float nearest_sprite = reach + .001f;
     for( const auto &image : scene.sprites ) {
         if( image.kind == fp3d_snapshot::sprite_kind::held_item ) {
             continue;
         }
         const auto p = image.position - scene.origin;
+        const auto *on = cell_at( image.position );
+        const bool lying_bedding = image.kind == fp3d_snapshot::sprite_kind::item && on &&
+                                  on->furniture &&
+                                  ( on->furniture->shape == fp3d_furniture::kind::bed ||
+                                    on->furniture->shape == fp3d_furniture::kind::bed_frame );
+        if( lying_bedding ) {
+            // Bed items are rendered as a flat surface, not a camera-facing
+            // upright sprite; use the matching horizontal picking plane.
+            if( std::abs( direction[2] ) < .000001f ) {
+                continue;
+            }
+            const float plane = p.z() * fp3d_camera::floor_height +
+                                image.elevation + .045f;
+            const float distance = ( plane - eye[2] ) / direction[2];
+            if( distance < fp3d_camera::near_clip || distance > reach ||
+                distance >= nearest_sprite ||
+                std::abs( eye[0] + distance * direction[0] - p.x() ) > .34f ||
+                std::abs( eye[1] + distance * direction[1] - p.y() ) > .35f ) {
+                continue;
+            }
+            if( distance >= nearest ) {
+                const bool blocked = distance >= nearest_opaque ||
+                                     std::any_of( storage_hits.begin(), storage_hits.end(),
+                                     [&]( const auto &hit ) {
+                    return hit.first != image.position && hit.second <= distance;
+                } );
+                if( blocked ) {
+                    continue;
+                }
+            }
+            nearest_sprite = distance;
+            result = target{ scene.origin, image.position, kind::item, image.id };
+            continue;
+        }
         // The sprite quad is upright and camera-facing, as in fp3d_scene.
         const float forward = sy * ( p.x() - eye[0] ) - cy * ( p.y() - eye[1] );
         if( cp <= .000001f ) {

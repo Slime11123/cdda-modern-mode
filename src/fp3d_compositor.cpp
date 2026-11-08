@@ -6,7 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <vector>
 #include <optional>
 #include <string>
 #include <utility>
@@ -22,10 +25,13 @@
 #include "game.h"
 #include "fp3d_camera.h"
 #include "fp3d_input.h"
+#include "fp3d_interaction.h"
 #include "fp3d_entry.h"
 #include "imgui/imgui.h"
 #include "fp3d_inventory.h"
 #include "fp3d_materials.h"
+#include "fp3d_shaderpacks.h"
+#include "fp3d_shadow.h"
 #include "fp3d_scene.h"
 #include "fp3d_snapshot.h"
 #include "map.h"
@@ -47,6 +53,9 @@ SDL_GLContext context = nullptr; // Borrowed; never create or swap a context.
 GLuint framebuffer = 0;
 GLuint color_texture = 0;
 GLuint depth_buffer = 0;
+GLuint depth_texture = 0;
+GLuint reflectivity_texture = 0;
+GLuint reflectivity_fbo = 0;
 SDL_Texture_Ptr menu_background;
 bool enabled = false;
 bool modern_2d = false;
@@ -57,6 +66,8 @@ bool panel_input = false;
 bool available = false;
 bool draw_permitted = true;
 bool selftest = false;
+bool selftest_initial_3d = false;
+bool selftest_initial_modern = false;
 unsigned toggles = 0;
 unsigned allocations = 0;
 unsigned frames = 0;
@@ -74,6 +85,7 @@ unsigned published_generation = 0;
 unsigned prepared_generation = 0;
 unsigned prepared_material_revision = 0;
 fp3d_camera::follower camera;
+fp3d_camera::rider_follower boarded_camera;
 fp3d_camera::swing held_swing;
 bool swing_pending = false;
 std::optional<tripoint_abs_ms> accepted_walk;
@@ -81,6 +93,18 @@ float viewport_x = 0;
 float viewport_y = 0;
 float viewport_width = 0;
 float viewport_height = 0;
+
+// One camera pose for the world FBO, reticle ray and target details.
+fp3d_camera::offset visual_camera( unsigned now )
+{
+    if( !latest_scene ) {
+        return {};
+    }
+    if( latest_scene->rider && boarded_camera.active() ) {
+        return boarded_camera.relative_to( latest_scene->origin, now );
+    }
+    return camera.relative_to( latest_scene->origin, now );
+}
 
 void sync_mouse()
 {
@@ -186,23 +210,81 @@ bool create_targets()
     bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
     glGenTextures( 1, &color_texture );
     glBindTexture( GL_TEXTURE_2D, color_texture );
-    glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8, texture_width, texture_height, 0,
-                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr );
+    glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA16F, texture_width, texture_height, 0,
+                  GL_RGBA, GL_FLOAT, nullptr );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
     framebuffer_texture( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture, 0 );
-    gen_renderbuffers( 1, &depth_buffer );
-    bind_renderbuffer( GL_RENDERBUFFER, depth_buffer );
-    renderbuffer_storage( GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, texture_width, texture_height );
-    framebuffer_renderbuffer( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_buffer );
-    if( check_framebuffer( GL_FRAMEBUFFER ) != GL_FRAMEBUFFER_COMPLETE ) {
-        disable( "incomplete color/depth framebuffer" );
-        return false;
+    glGenTextures( 1, &depth_texture );
+    glBindTexture( GL_TEXTURE_2D, depth_texture );
+    glTexImage2D( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, texture_width, texture_height, 0,
+                  GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+    framebuffer_texture( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth_texture, 0 );
+    bool hdr = glGetError() == GL_NO_ERROR &&
+               check_framebuffer( GL_FRAMEBUFFER ) == GL_FRAMEBUFFER_COMPLETE;
+    if( !hdr ) {
+        // Older compatibility drivers may not permit floating-point color attachments.
+        glBindTexture( GL_TEXTURE_2D, color_texture );
+        glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8, texture_width, texture_height, 0,
+                      GL_RGBA, GL_UNSIGNED_BYTE, nullptr );
+        DebugLog( D_WARNING, D_MAIN ) << "fp3d: HDR unavailable; using RGBA8 fallback";
+    }
+    if( glGetError() != GL_NO_ERROR || check_framebuffer( GL_FRAMEBUFFER ) != GL_FRAMEBUFFER_COMPLETE ) {
+        // Preserve the original depth-renderbuffer fallback when sampling depth
+        // is not available; fog and depth-aware shaders can disable those inputs.
+        framebuffer_texture( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0 );
+        glDeleteTextures( 1, &depth_texture );
+        depth_texture = 0;
+        gen_renderbuffers( 1, &depth_buffer );
+        bind_renderbuffer( GL_RENDERBUFFER, depth_buffer );
+        renderbuffer_storage( GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, texture_width, texture_height );
+        framebuffer_renderbuffer( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth_buffer );
+        if( glGetError() != GL_NO_ERROR || check_framebuffer( GL_FRAMEBUFFER ) != GL_FRAMEBUFFER_COMPLETE ) {
+            disable( "no compatible color/depth framebuffer" );
+            return false;
+        }
+        DebugLog( D_WARNING, D_MAIN ) << "fp3d: depth sampling unavailable; original depth buffer fallback";
+    }
+    // A separate colour target shares the scene depth texture. It draws
+    // material classes through existing geometric occlusion and never touches
+    // the HDR scene colour. Optional: old drivers retain normal 3D rendering.
+    if( depth_texture ) {
+        gen_framebuffers( 1, &reflectivity_fbo );
+        bind_framebuffer( GL_FRAMEBUFFER, reflectivity_fbo );
+        glGenTextures( 1, &reflectivity_texture );
+        glBindTexture( GL_TEXTURE_2D, reflectivity_texture );
+        glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8, texture_width, texture_height,
+                      0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr );
+        // Smooth only the material transition within a few screen pixels.
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+        framebuffer_texture( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                             GL_TEXTURE_2D, reflectivity_texture, 0 );
+        framebuffer_texture( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                             GL_TEXTURE_2D, depth_texture, 0 );
+        const bool valid=glGetError()==GL_NO_ERROR &&
+                         check_framebuffer( GL_FRAMEBUFFER )==GL_FRAMEBUFFER_COMPLETE;
+        if( !valid ) {
+            if( reflectivity_fbo ) { delete_framebuffers( 1, &reflectivity_fbo ); }
+            if( reflectivity_texture ) { glDeleteTextures( 1, &reflectivity_texture ); }
+            reflectivity_fbo = reflectivity_texture = 0;
+            while( glGetError() != GL_NO_ERROR ) {}
+            DebugLog( D_WARNING, D_MAIN ) <<
+                "fp3d: optional reflective material FBO unavailable, SSR disabled";
+        }
+        bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
     }
     ++allocations;
-    DebugLog( D_INFO, D_MAIN ) << "fp3d: targets ready, RGBA8+depth24=" << texture_width << "x"
+    DebugLog( D_INFO, D_MAIN ) << "fp3d: targets ready, HDR=" << hdr << ", sampled_depth=" <<
+                               ( depth_texture != 0 ) << ", size=" << texture_width << "x"
                                << texture_height << ", allocations="
                                << allocations;
     return true;
@@ -296,6 +378,8 @@ void attach( SDL_Renderer *new_renderer, SDL_Window *new_window )
     const auto keys = get_option<std::string>( "FP3D_CONTROLS" );
     modern_2d = keys == "modern" || ( keys == "auto" && enabled );
     selftest = env_enabled( "CDDA_FP3D_SELFTEST" );
+    selftest_initial_3d = enabled;
+    selftest_initial_modern = modern_2d;
     started = last_report = SDL_GetTicks();
     next_toggle = started + 100;
     DebugLog( D_INFO, D_MAIN ) << "fp3d: probe_revision=2, attached SDL " << static_cast<int>
@@ -391,15 +475,21 @@ void apply_modes( bool three_d, bool modern )
     enabled = three_d && available;
     modern_2d = modern;
     fp3d_input::world_gestures().cancel();
+    fp3d_interaction::cancel_direction_selection();
     ui_manager::invalidate_all_ui_adaptors();
     if( g ) {
         g->mark_main_ui_adaptor_resize();
     }
     camera.reset();
+    boarded_camera.reset();
     held_swing.reset();
     swing_pending = false;
     if( latest_scene ) {
-        camera.confirm( latest_scene->origin, SDL_GetTicks() );
+        const unsigned now = SDL_GetTicks();
+        camera.confirm( latest_scene->origin, now );
+        if( latest_scene->rider ) {
+            boarded_camera.confirm( *latest_scene->rider, now );
+        }
     }
     sync_mouse();
 }
@@ -500,6 +590,11 @@ std::vector<std::string> hud_lines()
     }
     const auto &hud = enabled ? latest_scene->hud : *latest_2d_hud;
     std::vector<std::string> lines{ hud.status };
+    if( enabled && latest_scene->rider ) {
+        lines.push_back( latest_scene->rider->driver ?
+                         "车内：驾驶视角（CDDA 原版车辆控制）" :
+                         "车内：乘坐视角（操作遵循 CDDA 原版）" );
+    }
     if( fp3d_hud::navigation_enabled() && hud.navigation_heading ) {
         const float delta = std::remainder( *hud.navigation_heading - heading(), 360.0f );
         lines.push_back( "目的地 " + std::string( std::abs( delta ) < 15 ? "前方" : delta > 0 ?
@@ -512,6 +607,9 @@ std::vector<std::string> hud_lines()
     if( fp3d_input::world_gestures().expanded_hud() ) {
         const auto &expanded = hud.expanded;
         lines.insert( lines.end(), expanded.begin(), expanded.end() );
+    }
+    if( const std::string selection = fp3d_interaction::direction_selection_hint(); !selection.empty() ) {
+        lines.push_back( selection );
     }
     if( !enabled || !modern_2d ) {
         return lines;
@@ -535,6 +633,20 @@ static bool interaction_available( const std::optional<fp3d_targeting::target> &
     if( !turn_based() || !draw_permitted || construction_preview ) { return false; }
     if( !target || target->position.z() != latest_scene->origin.z() ||
         square_dist( target->position, latest_scene->origin ) > 1 ) { return false; }
+    // Native vehicle components use a separate mounted-part snapshot, not
+    // terrain/context_entries' interactable cell list. This affects only
+    // the E prompt: the real action still calls game-thread valid() and
+    // rechecks native vehicle identity and interaction reach.
+    if( target->type == fp3d_targeting::kind::vehicle ) {
+        return std::any_of( latest_scene->vehicles.begin(), latest_scene->vehicles.end(),
+        [&]( const fp3d_vehicle::vehicle_view &car ) {
+            return target->vehicle_origin && car.origin == *target->vehicle_origin &&
+                   std::any_of( car.parts.begin(), car.parts.end(), [&]( const auto &part ) {
+                return part.index == target->vehicle_part &&
+                       part.native_position == target->position && part.id == target->id;
+            } );
+        } );
+    }
     return std::find( latest_scene->interactable.begin(), latest_scene->interactable.end(),
                       target->position ) != latest_scene->interactable.end();
 }
@@ -553,7 +665,8 @@ const std::vector<fp3d_hud::data::message_entry> &target_details()
     static std::vector<fp3d_hud::data::message_entry> lines;
     if( generation != latest_scene->render_generation || !previous ||
         target->position != previous->position || target->type != previous->type ||
-        target->id != previous->id ) {
+        target->id != previous->id || target->vehicle_part != previous->vehicle_part ||
+        target->vehicle_origin != previous->vehicle_origin ) {
         lines = fp3d_hud::inspect( get_avatar(), get_map(), *target );
         previous = target;
         generation = latest_scene->render_generation;
@@ -569,6 +682,10 @@ bool interaction_available()
 
 std::string interaction_prompt()
 {
+    if( turn_based() && draw_permitted ) {
+        const std::string selection = fp3d_interaction::direction_selection_hint();
+        if( !selection.empty() ) { return selection; }
+    }
     if( !interaction_available() ) { return {}; }
     const auto &bindings = inp_mngr.get_input_for_action( "FP3D_INTERACT", "FP3D" );
     // 3D gestures resolve raw SDL key codes even when the original menus use
@@ -628,7 +745,8 @@ SDL_Texture_Ptr copy_view()
     if( SDL_GL_BindTexture( image.get(), nullptr, nullptr ) != 0 ) {
         return {};
     }
-    bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
+    bind_framebuffer( GL_FRAMEBUFFER, fp3d_shaderpacks::processed_framebuffer() ?
+                      fp3d_shaderpacks::processed_framebuffer() : framebuffer );
     glCopyTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 0, 0, texture_width, texture_height );
     SDL_GL_UnbindTexture( image.get() );
     SDL_SetTextureBlendMode( image.get(), SDL_BLENDMODE_NONE );
@@ -645,7 +763,8 @@ static std::optional<fp3d_targeting::target> interaction_target( fp3d_camera::of
     static fp3d_camera::offset previous_offset;
     static std::optional<fp3d_targeting::target> cached;
     if( generation != latest_scene->render_generation || previous_yaw != yaw ||
-        previous_pitch != pitch || previous_offset.x != offset.x || previous_offset.y != offset.y ) {
+        previous_pitch != pitch || previous_offset.x != offset.x || previous_offset.y != offset.y ||
+        previous_offset.height != offset.height ) {
         cached = fp3d_targeting::ray( *latest_scene, yaw, pitch, offset );
         generation = latest_scene->render_generation;
         previous_yaw = yaw;
@@ -657,8 +776,45 @@ static std::optional<fp3d_targeting::target> interaction_target( fp3d_camera::of
 
 std::optional<fp3d_targeting::target> interaction_target()
 {
-    return latest_scene ? interaction_target( camera.relative_to( latest_scene->origin,
-                          SDL_GetTicks() ) ) : std::nullopt;
+    return latest_scene ? interaction_target( visual_camera( SDL_GetTicks() ) ) :
+           std::nullopt;
+}
+
+std::optional<tripoint_abs_ms> firing_target( int range )
+{
+    if( !enabled || !latest_scene || range <= 0 ) {
+        return std::nullopt;
+    }
+    const float distance_limit = std::clamp( static_cast<float>( range ), 1.0f, 64.0f );
+    const fp3d_camera::offset eye = visual_camera( SDL_GetTicks() );
+    // The weapon and the HUD share this exact camera ray. Geometry in front
+    // of the crosshair (including sprites and doors) wins over empty space.
+    if( const auto hit = fp3d_targeting::ray( *latest_scene, yaw, pitch, eye, distance_limit ) ) {
+        if( hit->position != latest_scene->origin ) {
+            return hit->position;
+        }
+    }
+
+    // Nothing visible at the reticle: shoot along the camera direction, not
+    // at the nearest NPC or the native 2D cursor. Bound the end inside the map.
+    constexpr float radians = 3.14159265358979323846f / 180.0f;
+    const float sine = std::sin( yaw * radians );
+    const float cosine = std::cos( yaw * radians );
+    const float cp = std::cos( pitch * radians );
+    const float dz = -std::sin( pitch * radians );
+    map &here = get_map();
+    for( float distance = distance_limit; distance >= 1.0f; distance -= 0.5f ) {
+        const tripoint_rel_ms delta(
+            static_cast<int>( std::lround( eye.x + distance * sine * cp ) ),
+            static_cast<int>( std::lround( eye.y - distance * cosine * cp ) ),
+            static_cast<int>( std::lround( ( eye.height + distance * dz ) /
+                                          fp3d_camera::floor_height ) ) );
+        const tripoint_abs_ms position = latest_scene->origin + delta;
+        if( position != latest_scene->origin && here.inbounds( here.get_bub( position ) ) ) {
+            return position;
+        }
+    }
+    return std::nullopt;
 }
 
 float heading()
@@ -704,11 +860,13 @@ void set_input_context( const std::string &category )
         g->invalidate_main_ui_adaptor();
     }
     if( category == "MAIN_MENU" ) {
+        fp3d_interaction::cancel_direction_selection();
         fp3d_entry::reset();
         fp3d_inventory::clear_slots();
         latest_scene.reset();
         latest_2d_hud.reset();
         camera.reset();
+        boarded_camera.reset();
         accepted_walk.reset();
     }
     sync_mouse();
@@ -736,7 +894,16 @@ void publish( fp3d_snapshot::scene_snapshot scene )
                                    << ", capture_ms=" << scene.capture_ms;
     }
     fp3d_snapshot::connect_stairs( scene );
-    camera.confirm( scene.origin, SDL_GetTicks(), accepted_walk && *accepted_walk == scene.origin );
+    const unsigned now = SDL_GetTicks();
+    camera.confirm( scene.origin, now, accepted_walk && *accepted_walk == scene.origin );
+    if( scene.rider ) {
+        // Native turn authority stays in CDDA. Rotate only the *display*
+        // heading by the confirmed difference so free mouse-look remains.
+        yaw += boarded_camera.confirm( *scene.rider, now );
+        yaw = std::remainder( yaw, 360.0f );
+    } else {
+        boarded_camera.reset();
+    }
     scene.render_generation = ++published_generation;
     latest_scene = std::move( scene );
 }
@@ -793,7 +960,12 @@ bool tick()
         } else if( test_step == 0 ) {
             DebugLog( D_INFO, D_MAIN ) << "fp3d: SELFTEST 50 three-mode preset round trips, frames=" << frames
                                        << ", target_allocations=" << allocations;
-            if( enabled || modern_2d || frames == 0 || allocations != 1 ) {
+            // Starting in 3D is the default in the current build; exactly 150
+            // transitions return to the initial mode, not necessarily to 2D.
+            // The startup probe uses 384x288; loading the world re-allocates
+            // the FBO once at actual map size, independently of toggles.
+            if( enabled != selftest_initial_3d || modern_2d != selftest_initial_modern ||
+                frames == 0 || allocations == 0 || allocations > 3 ) {
                 disable( "selftest toggle/resource invariant failed" );
                 return false;
             }
@@ -863,6 +1035,21 @@ void compose()
     }
     {
         saved_gl_state saved;
+        if( latest_scene ) {
+            // Optional viewpoint override for screenshots of isolated QA saves
+            // that spawn facing an opaque wall. Never active in normal games.
+            if( env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) ) {
+                if( const char *angle = std::getenv( "CDDA_FP3D_CAPTURE_YAW" ) ) {
+                    yaw = std::strtof( angle, nullptr );
+                }
+                if( const char *angle = std::getenv( "CDDA_FP3D_CAPTURE_PITCH" ) ) {
+                    pitch = std::clamp( std::strtof( angle, nullptr ), -80.0f, 80.0f );
+                }
+            }
+            // Ensure the world light pass and the first postprocessed frame
+            // agree on shader availability even in a turn-based idle scene.
+            fp3d_shaderpacks::prepare();
+        }
         const int desired_width = latest_scene ? std::max( 1,
                                   static_cast<int>( width * viewport_width ) ) : 384;
         const int desired_height = latest_scene ? std::max( 1,
@@ -872,7 +1059,11 @@ void compose()
                 delete_framebuffers( 1, &framebuffer );
                 delete_renderbuffers( 1, &depth_buffer );
                 glDeleteTextures( 1, &color_texture );
-                framebuffer = color_texture = depth_buffer = 0;
+                if( reflectivity_fbo ) { delete_framebuffers( 1, &reflectivity_fbo ); }
+                if( reflectivity_texture ) { glDeleteTextures( 1, &reflectivity_texture ); }
+                if( depth_texture ) { glDeleteTextures( 1, &depth_texture ); }
+                framebuffer = color_texture = depth_buffer = depth_texture = 0;
+                reflectivity_fbo = reflectivity_texture = 0;
             }
             texture_width = desired_width;
             texture_height = desired_height;
@@ -901,6 +1092,10 @@ void compose()
         glTranslatef( 0, 0, -4.5f );
         glRotatef( pitch, 1, 0, 0 );
         glRotatef( yaw + ( SDL_GetTicks() - started ) * .025f, 0, 1, 0 );
+        // World and postprocessing must share the exact same smoothed
+        // camera pose (including the rider follower while driving).
+        const fp3d_camera::offset frame_camera = latest_scene ?
+                visual_camera( SDL_GetTicks() ) : fp3d_camera::offset{};
         if( latest_scene ) {
             fp3d_materials::bind();
             glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
@@ -908,17 +1103,288 @@ void compose()
                 held_swing.start( SDL_GetTicks() );
                 swing_pending = false;
             }
-            const auto offset = camera.relative_to( latest_scene->origin, SDL_GetTicks() );
+            const auto &offset = frame_camera;
             const auto aim = draw_permitted ? interaction_target( offset ) : std::nullopt;
             fp3d_scene::draw( *latest_scene, yaw, pitch,
                               static_cast<float>( texture_width ) / texture_height,
                               offset, construction_preview, interaction_available( aim ),
                               held_swing.amount( SDL_GetTicks() ), aim );
             fp3d_materials::unbind();
+            // Material-aware SSR mask: render only visible native water/road
+            // tiles, with original world depth attached read-only. Neither
+            // colour nor the existing scene depth can be overwritten here.
+            if( reflectivity_fbo && fp3d_shaderpacks::wet_ssr_enabled() &&
+                fp3d_shaderpacks::mc_visual_strength() > 0.0f &&
+                fp3d_shaderpacks::quality() >= 3 ) {
+                bind_framebuffer( GL_FRAMEBUFFER, reflectivity_fbo );
+                glViewport( 0, 0, texture_width, texture_height );
+                glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+                glClearColor( 0, 0, 0, 0 );
+                glClear( GL_COLOR_BUFFER_BIT );
+                // Optional QA-only synthetic wetness, applied to the
+                // isolated test frame, never to the game simulation.
+                const float rain =
+                    ( env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+                      env_enabled( "CDDA_FP3D_QA_FORCE_WET" ) ) ? 1.0f :
+                    latest_scene->weather.particles == fp3d_weather::precipitation::rain ?
+                    std::clamp( latest_scene->weather.intensity, 0.0f, 1.0f ) : 0.0f;
+                fp3d_scene::draw_reflectivity_mask( *latest_scene, yaw, pitch,
+                    static_cast<float>( texture_width ) / texture_height,
+                    frame_camera, rain );
+                bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
+            }
         } else {
             draw_cube();
         }
 
+        fp3d_shaderpacks::environment post_env;
+        fp3d_shadow::data light_pass;
+        if( latest_scene ) {
+            post_env.depth = depth_texture;
+            post_env.reflection_mask =
+                reflectivity_fbo && fp3d_shaderpacks::wet_ssr_enabled() &&
+                fp3d_shaderpacks::mc_visual_strength() > 0.0f &&
+                fp3d_shaderpacks::quality() >= 3 ? reflectivity_texture : 0;
+            post_env.daylight = latest_scene->sky.daylight;
+            post_env.clouds = latest_scene->weather.clouds;
+            post_env.fog_end = latest_scene->weather.fog_end;
+            // Test-only forced indoor viewpoint. This alters neither the
+            // captured game world nor weather, and is intentionally active
+            // only in isolated capture QA (never in normal gameplay).
+            const bool qa_indoor = env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+                                   env_enabled( "CDDA_FP3D_QA_FORCE_INDOOR" );
+            post_env.outdoors = qa_indoor ? false : latest_scene->weather.outdoors;
+            // This is a world-sky BACKDROP availability flag, never the
+            // avatar's is_outside() boolean. Roof/walls/window depth still
+            // determines which actual pixels see the sky. This removes the
+            // full-screen brightness jump on moving/turning by a window.
+            post_env.sky_visible = latest_scene->origin.z() >= 0;
+            post_env.yaw = yaw * 0.01745329252f;
+            post_env.pitch = pitch * 0.01745329252f;
+            post_env.aspect = static_cast<float>( texture_width ) / texture_height;
+            post_env.camera_offset_x = frame_camera.x;
+            post_env.camera_offset_z = frame_camera.y;
+            post_env.camera_height = frame_camera.height;
+            // The source is native precipitation, not a guessed surface
+            // material flag. Reflection is permitted only while raining.
+            post_env.rain_strength =
+                ( env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+                  env_enabled( "CDDA_FP3D_QA_FORCE_WET" ) ) ? 1.0f :
+                latest_scene->weather.particles == fp3d_weather::precipitation::rain ?
+                std::clamp( latest_scene->weather.intensity, 0.0f, 1.0f ) : 0.0f;
+            // Experimental nearby shadow mapping is limited to the Ultra preset
+            // until broader scene/focus/device-loss validation is complete.
+            static const bool qa_disable_shadow =
+                env_enabled( "CDDA_FP3D_CAPTURE_FRAME" ) &&
+                env_enabled( "CDDA_FP3D_QA_DISABLE_SHADOW" );
+            if( fp3d_shaderpacks::quality() >= 3 && fp3d_shaderpacks::usable() &&
+                fp3d_shaderpacks::supports_native_lighting() &&
+                fp3d_shaderpacks::shadows_enabled() && !qa_disable_shadow ) {
+                // Force both former global veto flags false during isolated
+                // QA, while preserving all original 3D meshes and sun/weather.
+                // A real indoor player has these flags, too: the shadow pass
+                // must still produce a directional light map.
+                const auto shadow = [&]() {
+                    if( qa_indoor ) {
+                        auto sample = *latest_scene;
+                        sample.sky.visible = false;
+                        sample.weather.outdoors = false;
+                        return fp3d_shadow::render( sample, fp3d_shaderpacks::quality() );
+                    }
+                    return fp3d_shadow::render( *latest_scene, fp3d_shaderpacks::quality() );
+                }();
+                light_pass = shadow;
+                post_env.shadow = shadow.texture;
+                post_env.shadow_radius = shadow.radius;
+                post_env.shadow_distance = shadow.distance;
+                post_env.shadow_strength = shadow.strength;
+                post_env.shadow_resolution = shadow.resolution;
+                for( int axis = 0; axis < 3; ++axis ) {
+                    post_env.shadow_x[axis] = shadow.x[axis];
+                    post_env.shadow_y[axis] = shadow.y[axis];
+                    post_env.shadow_sun[axis] = shadow.sun[axis];
+                }
+            } else {
+                // Release the 2048² depth texture when the user lowers quality,
+                // disables shaders or selects a pack that failed compilation.
+                fp3d_shadow::release();
+            }
+            // The sky is drawn after Rx(pitch)*Ry(yaw) with the native 120 deg
+            // horizontal field of view. Project its sun into the world FBO.
+            const float yaw_rad = yaw * 0.01745329252f;
+            const float pitch_rad = pitch * 0.01745329252f;
+            const float c_yaw = std::cos( yaw_rad );
+            const float s_yaw = std::sin( yaw_rad );
+            const float c_pitch = std::cos( pitch_rad );
+            const float s_pitch = std::sin( pitch_rad );
+            const auto &sun = latest_scene->sky;
+            const float x = c_yaw * sun.sun_x + s_yaw * sun.sun_z;
+            const float z = -s_yaw * sun.sun_x + c_yaw * sun.sun_z;
+            const float sy = c_pitch * sun.sun_y - s_pitch * z;
+            const float sz = s_pitch * sun.sun_y + c_pitch * z;
+            // The sun may appear through an opening regardless of where
+            // the player stands. Each GLSL halo/shaft sample still requires
+            // an actual unobstructed sky pixel from the scene depth texture.
+            if( sz < -.01f && sun.sun_y > .08f && post_env.sky_visible ) {
+                const float tan_horizontal = fp3d_camera::horizontal_tangent();
+                const float aspect = static_cast<float>( texture_width ) / texture_height;
+                post_env.sun_u = .5f + .5f * x / ( -sz * tan_horizontal );
+                post_env.sun_v = .5f + .5f * sy * aspect / ( -sz * tan_horizontal );
+                if( post_env.sun_u > -.3f && post_env.sun_u < 1.3f &&
+                    post_env.sun_v > -.3f && post_env.sun_v < 1.3f ) {
+                    post_env.sun_strength = sun.daylight *
+                                            std::max( 0.0f, 1.0f - post_env.clouds ) *
+                                            std::min( 1.0f, sun.sun_y * 4.0f );
+                }
+            }
+        }
+        const GLuint displayed_color = latest_scene ? fp3d_shaderpacks::apply( color_texture,
+                                       texture_width, texture_height, post_env ) : color_texture;
+        // Optional internal QA capture of the *actual 3D FBO*, independent of
+        // Windows desktop focus and UI screenshots. Disabled for every normal
+        // run. Capture the first fully composed world frame: CDDA is turn
+        // based, so waiting for 15 more renders can block on player input.
+        static const bool qa_capture = env_enabled( "CDDA_FP3D_CAPTURE_FRAME" );
+        static bool qa_saved = false;
+        if( qa_capture && latest_scene && !qa_saved &&
+            texture_width <= 4096 && texture_height <= 4096 ) {
+            qa_saved = true;
+            bind_framebuffer( GL_FRAMEBUFFER, fp3d_shaderpacks::processed_framebuffer() ?
+                              fp3d_shaderpacks::processed_framebuffer() : framebuffer );
+            glReadBuffer( GL_COLOR_ATTACHMENT0 );
+            GLint qa_pack_row = 0, qa_pack_rows_skip = 0, qa_pack_pixels_skip = 0;
+            GLint qa_pack_alignment = 0, qa_gl_viewport[4] = {}, qa_read_buffer = 0;
+            GLint qa_scissor_box[4] = {};
+            glGetIntegerv( GL_PACK_ROW_LENGTH, &qa_pack_row );
+            glGetIntegerv( GL_PACK_SKIP_ROWS, &qa_pack_rows_skip );
+            glGetIntegerv( GL_PACK_SKIP_PIXELS, &qa_pack_pixels_skip );
+            glGetIntegerv( GL_PACK_ALIGNMENT, &qa_pack_alignment );
+            glGetIntegerv( GL_VIEWPORT, qa_gl_viewport );
+            glGetIntegerv( GL_SCISSOR_BOX, qa_scissor_box );
+            glGetIntegerv( GL_READ_BUFFER, &qa_read_buffer );
+            const GLboolean qa_scissor_enabled = glIsEnabled( GL_SCISSOR_TEST );
+            glPixelStorei( GL_PACK_ROW_LENGTH, 0 );
+            glPixelStorei( GL_PACK_SKIP_ROWS, 0 );
+            glPixelStorei( GL_PACK_SKIP_PIXELS, 0 );
+            glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+            const size_t row_bytes = static_cast<size_t>( texture_width ) * 4;
+            std::vector<std::uint8_t> pixels( row_bytes * texture_height );
+            glReadPixels( 0, 0, texture_width, texture_height,
+                          GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
+            const GLenum qa_read_error = glGetError();
+            glPixelStorei( GL_PACK_ROW_LENGTH, qa_pack_row );
+            glPixelStorei( GL_PACK_SKIP_ROWS, qa_pack_rows_skip );
+            glPixelStorei( GL_PACK_SKIP_PIXELS, qa_pack_pixels_skip );
+            glPixelStorei( GL_PACK_ALIGNMENT, qa_pack_alignment );
+            size_t qa_nonblack_pixels = 0;
+            size_t qa_transparent_pixels = 0;
+            for( size_t i = 0; i + 3 < pixels.size(); i += 4 ) {
+                qa_nonblack_pixels += pixels[i] || pixels[i + 1] || pixels[i + 2];
+                qa_transparent_pixels += pixels[i + 3] == 0;
+            }
+            // QA only: prove that the material attachment contains real
+            // marked surfaces, not merely a successfully allocated texture.
+            // Normal gameplay never reads back this auxiliary FBO.
+            size_t qa_reflective_pixels = 0;
+            GLenum qa_mask_error = GL_NO_ERROR;
+            if( post_env.reflection_mask && reflectivity_fbo ) {
+                glPixelStorei( GL_PACK_ROW_LENGTH, 0 );
+                glPixelStorei( GL_PACK_SKIP_ROWS, 0 );
+                glPixelStorei( GL_PACK_SKIP_PIXELS, 0 );
+                glPixelStorei( GL_PACK_ALIGNMENT, 1 );
+                bind_framebuffer( GL_FRAMEBUFFER, reflectivity_fbo );
+                glReadBuffer( GL_COLOR_ATTACHMENT0 );
+                std::vector<std::uint8_t> reflection_bytes( row_bytes * texture_height );
+                glReadPixels( 0, 0, texture_width, texture_height,
+                              GL_RGBA, GL_UNSIGNED_BYTE, reflection_bytes.data() );
+                qa_mask_error = glGetError();
+                if( qa_mask_error == GL_NO_ERROR ) {
+                    for( size_t i = 0; i + 3 < reflection_bytes.size(); i += 4 ) {
+                        qa_reflective_pixels += reflection_bytes[i] >= 5;
+                    }
+                }
+                glPixelStorei( GL_PACK_ROW_LENGTH, qa_pack_row );
+                glPixelStorei( GL_PACK_SKIP_ROWS, qa_pack_rows_skip );
+                glPixelStorei( GL_PACK_SKIP_PIXELS, qa_pack_pixels_skip );
+                glPixelStorei( GL_PACK_ALIGNMENT, qa_pack_alignment );
+                bind_framebuffer( GL_FRAMEBUFFER,
+                    fp3d_shaderpacks::processed_framebuffer() ?
+                    fp3d_shaderpacks::processed_framebuffer() : framebuffer );
+                glReadBuffer( GL_COLOR_ATTACHMENT0 );
+            }
+            // OpenGL origin is lower-left; SDL BMP surface origin is top-left.
+            for( int y = 0; y < texture_height / 2; ++y ) {
+                const size_t top = row_bytes * y;
+                const size_t bottom = row_bytes * ( texture_height - 1 - y );
+                std::swap_ranges( pixels.begin() + top, pixels.begin() + top + row_bytes,
+                                  pixels.begin() + bottom );
+            }
+            SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormatFrom(
+                                       pixels.data(), texture_width, texture_height, 32,
+                                       static_cast<int>( row_bytes ), SDL_PIXELFORMAT_RGBA32 );
+            char *base = SDL_GetBasePath();
+            const std::string screenshot = std::string( base ? base : "" ) + "fp3d-qa-frame.bmp";
+            if( base ) { SDL_free( base ); }
+            const int save_result = surface ? SDL_SaveBMP( surface, screenshot.c_str() ) : -1;
+            if( surface ) { SDL_FreeSurface( surface ); }
+            // Sidecar is QA-only and survives abrupt termination of the
+            // isolated test process; debug.log is not always flushed.
+            std::ofstream qa_info( screenshot + ".txt", std::ios::trunc );
+            qa_info << "saved=" << ( save_result == 0 )
+                    << " selected=" << fp3d_shaderpacks::selected()
+                    << " usable=" << fp3d_shaderpacks::usable()
+                    << " compile_status=" << fp3d_shaderpacks::status()
+                    << " post_fbo=" << fp3d_shaderpacks::processed_framebuffer()
+                    << " scene_fbo=" << framebuffer
+                    << " shadow_texture=" << post_env.shadow
+                    << " shadow_furniture_casters=" << light_pass.furniture_casters
+                    << " shadow_streetlights=" << light_pass.street_light_casters
+                    << " shadow_mailboxes=" << light_pass.mailbox_casters
+                    << " shadow_lamp_roofs=" << light_pass.streetlights_with_ceiling
+                    << " shadow_depth_occupied=" << light_pass.qa_depth_occupied_texels
+                    << " shadow_depth_hash=" << light_pass.qa_depth_hash
+                    << " reflective_mask=" << post_env.reflection_mask
+                    << " reflective_pixels=" << qa_reflective_pixels
+                    << " reflective_mask_error=" << qa_mask_error
+                    << " vehicles=" << latest_scene->vehicles.size()
+                    << " vehicle_parts=" << latest_scene->visible_vehicle_parts
+                    << " daylight=" << latest_scene->sky.daylight
+                    << " sun_y=" << latest_scene->sky.sun_y
+                    << " sky_visible=" << latest_scene->sky.visible
+                    << " outdoors=" << latest_scene->weather.outdoors
+                    << " sky_visible_for_light=" << post_env.sky_visible
+                    << " qa_indoor_shadow_test=" << static_cast<int>(
+                           env_enabled( "CDDA_FP3D_QA_FORCE_INDOOR" ) )
+                    << " yaw=" << yaw << " pitch=" << pitch
+                    << " camera_x=" << post_env.camera_offset_x
+                    << " camera_z=" << post_env.camera_offset_z
+                    << " camera_height=" << post_env.camera_height
+                    << " rain_strength=" << post_env.rain_strength
+                    << " raw_nonblack=" << qa_nonblack_pixels
+                    << " raw_alpha_zero=" << qa_transparent_pixels
+                    << " qa_read_error=" << qa_read_error
+                    << " gl_viewport=" << qa_gl_viewport[0] << ","
+                    << qa_gl_viewport[1] << ","
+                    << qa_gl_viewport[2] << "," << qa_gl_viewport[3]
+                    << " gl_scissor=" << static_cast<int>( qa_scissor_enabled )
+                    << " gl_scissor_box=" << qa_scissor_box[0] << ","
+                    << qa_scissor_box[1] << "," << qa_scissor_box[2]
+                    << "," << qa_scissor_box[3]
+                    << " read_buffer=" << qa_read_buffer
+                    << " pack_row=" << qa_pack_row
+                    << " pack_skip_rows=" << qa_pack_rows_skip
+                    << " pack_skip_pixels=" << qa_pack_pixels_skip
+                    << " pack_alignment=" << qa_pack_alignment
+                    << " size=" << texture_width << "x" << texture_height << "\n";
+            qa_info.close();
+            DebugLog( D_INFO, D_MAIN ) << "fp3d: QA framebuffer capture saved="
+                                       << ( save_result == 0 ) << ", path=" << screenshot
+                                       << ", size=" << texture_width << "x" << texture_height
+                                       << ", shader=" << fp3d_shaderpacks::selected()
+                                       << ", shadow_id=" << post_env.shadow
+                                       << ", sun_y=" << latest_scene->sky.sun_y
+                                       << ", outdoors=" << latest_scene->weather.outdoors;
+        }
         bind_framebuffer( GL_FRAMEBUFFER, saved.old_framebuffer );
         glViewport( 0, 0, width, height );
         glDisable( GL_DEPTH_TEST );
@@ -929,7 +1395,7 @@ void compose()
         glDisable( GL_LIGHTING );
         glDisable( GL_FOG );
         glEnable( GL_TEXTURE_2D );
-        glBindTexture( GL_TEXTURE_2D, color_texture );
+        glBindTexture( GL_TEXTURE_2D, displayed_color );
         glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
         if( latest_scene ) {
             // Cutout atlas pixels can retain partial alpha. A complete world
@@ -989,6 +1455,8 @@ void release()
         if( renderer ) {
             SDL_RenderFlush( renderer );
         }
+        fp3d_shaderpacks::release();
+        fp3d_shadow::release();
         fp3d_scene::release();
         if( framebuffer ) {
             delete_framebuffers( 1, &framebuffer );
@@ -999,8 +1467,14 @@ void release()
         if( color_texture ) {
             glDeleteTextures( 1, &color_texture );
         }
+        if( depth_texture ) {
+            glDeleteTextures( 1, &depth_texture );
+        }
+        if( reflectivity_fbo ) { delete_framebuffers( 1, &reflectivity_fbo ); }
+        if( reflectivity_texture ) { glDeleteTextures( 1, &reflectivity_texture ); }
     }
-    framebuffer = color_texture = depth_buffer = 0;
+    framebuffer = color_texture = depth_buffer = depth_texture = 0;
+    reflectivity_fbo = reflectivity_texture = 0;
     context = nullptr;
     renderer = nullptr;
     window = nullptr;
@@ -1012,6 +1486,7 @@ void release()
     construction_preview.reset();
     latest_2d_hud.reset();
     camera.reset();
+    boarded_camera.reset();
     held_swing.reset();
     swing_pending = false;
     accepted_walk.reset();
