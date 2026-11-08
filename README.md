@@ -46,6 +46,19 @@ For an **enhanced lighting and atmosphere experience**, we recommend trying **Ph
 
 Download the shaderpack ZIP and place it under the game's `shaderpacks/` directory. Open **F5/F6 → Shaderpacks**, rescan and choose the pack; try the **Ultra** profile only if your PC can handle it. The MC compatibility bridge may require experimenting with quality, shadow and visual-intensity settings.
 
+### Photon-style lighting showcase (in-game screenshots)
+
+These two screenshots, provided by the developer, demonstrate the experimental 3D lighting, skies, shadows and wet-road reflections in different weather conditions.
+
+**Rainy weather — overcast sky and wet-road reflections**
+
+![CDDA Modern Mode Photon-style lighting demonstration in rainy weather, showing clouds, road reflections and 3D vehicles](docs/images/photon-rainy-2026-11-08.png)
+
+**Clear weather — daylight, outdoor shadows and 3D vehicles**
+
+![CDDA Modern Mode Photon-style lighting demonstration in clear daytime weather, showing blue sky and outdoor shadows](docs/images/photon-clear-2026-11-08.png)
+
+*These are actual CDDA Modern Mode game screenshots, not the original Minecraft Photon multi-pass renderer. The external Photon shaderpack is not provided by this repository.*
 ## Recommended tileset: UndeadPeople
 
 For the **best visual experience**, we recommend pairing CDDA Modern Mode with **UndeadPeople (MSX++UnDeadPeopleEdition)**, especially for 3D buildings, furniture, and item sprites.

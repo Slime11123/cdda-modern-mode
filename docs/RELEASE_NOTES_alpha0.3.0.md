@@ -62,3 +62,17 @@
 **Alpha 0.3.0** (November 7–8, 2026) expands 3D vehicles, roofs, frame/cabin geometry, radio towers, thin fences, multistorey ceiling/floor rendering and climbing interaction. It improves HDR and lighting, experimental cascaded sunlight shadows, wall shadow artifacts, indoor/outdoor brightness and wet-road reflections; introduces Photon-inspired visual adaptation for selected third-party Minecraft shaderpacks, **not full Photon/Iris multipass execution**. Recent source changes add crouch eye-height smoothing, monster damage/HP feedback, effect icons near the health silhouette, and survival-menu map tileset icons, all still subject to fuller testing. The single Windows `cataclysm-tiles.exe` remains the direct game launch target.
 
 **Photon and UndeadPeople are recommended but neither is included or redistributed**. Obtain them separately from their respective maintainers. This is an experimental pre-release, not a fully gameplay-certified stable release.
+
+## Photon 光影实机展示 / In-game shader showcase
+
+以下截图为开发者提供的 2026 年 11 月 8 日游戏画面，展示 CDDA 自有渲染管线下的 Photon 风格视觉适配，而非运行完整原版 Photon/Iris 光影管线：
+
+**雨天 / Rainy weather**
+
+![Photon 风格光影 — 雨天、阴云与湿路反射](images/photon-rainy-2026-11-08.png)
+
+**晴天 / Clear daylight**
+
+![Photon 风格光影 — 晴天户外和 3D 车辆](images/photon-clear-2026-11-08.png)
+
+第三方 Photon 光影包需要玩家自行下载，本仓库和 Windows 发行 ZIP 均不提供。

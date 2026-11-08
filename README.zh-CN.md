@@ -46,6 +46,19 @@ Windows 玩家可前往 [Releases 页面](https://github.com/Slime11123/cdda-mod
 
 将下载的光影 ZIP 放在游戏根目录的 `shaderpacks/` 中，进入 **F5/F6 → 光影包**，重新扫描并选择 Photon。画质较高时可尝试 **Ultra**，出现性能或阴影问题可下调质量、光影强度或关闭实验性太阳阴影。
 
+### Photon 风格光影实机演示
+
+以下两张由开发者提供的实机截图，展示不同天气下的实验性 3D 光照、天空云层、阴影与湿路反射。
+
+**雨天 — 阴云、降雨与湿路反射**
+
+![CDDA Modern Mode 雨天 Photon 风格光影实机演示，显示阴云、地面反射及 3D 车辆](docs/images/photon-rainy-2026-11-08.png)
+
+**晴天 — 日间天空、户外阴影与 3D 车辆**
+
+![CDDA Modern Mode 晴天 Photon 风格光影实机演示，显示蓝天、建筑阴影和车辆](docs/images/photon-clear-2026-11-08.png)
+
+*以上为 CDDA Modern Mode 真实游戏截图，并不代表完整运行 Minecraft Photon 的原版多阶段渲染。本仓库不提供第三方 Photon 光影包。*
 ## 推荐图块包：UndeadPeople（不死人）
 
 为了获得**更好的视觉体验**，推荐搭配 **UndeadPeople（不死人 / MSX++UnDeadPeopleEdition）图块包**使用，特别适合 3D 建筑、家具和物品的呈现。
