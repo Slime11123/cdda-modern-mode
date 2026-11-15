@@ -38,6 +38,7 @@
 #include "input_context.h"
 #include "input_enums.h"
 #include "item.h"
+#include "itype.h"
 #include "json.h"
 #include "loading_ui.h"
 #include "localized_comparator.h"
@@ -66,6 +67,9 @@
 #include "ret_val.h"
 #include "rng.h"
 #include "scenario.h"
+#if defined(TILES)
+#include "sdltiles.h"
+#endif
 #include "skill.h"
 #include "skill_ui.h"
 #include "start_location.h"
@@ -4258,6 +4262,7 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
     catacurses::window w_profession;
     catacurses::window w_hobbies;
     catacurses::window w_skills;
+    catacurses::window w_preview;
     catacurses::window w_guide;
     catacurses::window w_height;
     catacurses::window w_age;
@@ -4294,7 +4299,13 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             w_addictions = catacurses::newwin( 2, column_width, point( middle, 21 ) );
             w_hobbies = catacurses::newwin( bottom - 25, column_width, point( middle, 25 ) );
             w_stats = catacurses::newwin( 6, column_width, point( right, 8 ) );
-            w_skills = catacurses::newwin( bottom - 15, column_width, point( right, 15 ) );
+            // Leave room for a real tileset character preview below the skill summary.
+            const bool show_preview = bottom >= 42;
+            w_skills = catacurses::newwin( show_preview ? 14 : bottom - 15,
+                                          column_width, point( right, 15 ) );
+            w_preview = show_preview ? catacurses::newwin(
+                            std::max( 8, std::min( bottom, TERMY - 8 ) - 29 ),
+                            column_width, point( right, 29 ) ) : catacurses::window();
             ui.position_from_window( w );
         } else {
             w_save_preset = catacurses::window();
@@ -4317,6 +4328,7 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             w_proficiencies = catacurses::window();
             w_hobbies = catacurses::window();
             w_skills = catacurses::window();
+            w_preview = catacurses::window();
             ui.position_from_window( w );
         }
         w_guide = catacurses::newwin( iHelpHeight, isWide ? TERMX - 34 : TERMX - 4,
@@ -4389,6 +4401,13 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
     char_creation::description_selector current_selector = char_creation::NAME;
 
     bool no_name_entered = false;
+#if defined(TILES)
+    bool preview_gear_cached = false;
+    const profession *preview_profession = nullptr;
+    bool preview_outfit = false;
+    std::vector<trait_id> preview_mutations;
+    std::vector<std::pair<std::string, std::string>> preview_gear;
+#endif
     ui.on_redraw( [&]( ui_adaptor & ui ) {
         const std::string help_text = isWide ?
                                      _( "点击基本信息或日期直接编辑；点击场景、职业、背景、属性、特性或技能可返回对应页面。\n完成调整后，点击右下角“完成”创建角色。" ) :
@@ -4599,6 +4618,39 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
                 wattroff( w_proficiencies, c_light_gray );
             }
             wnoutrefresh( w_proficiencies );
+        }
+
+        if( w_preview ) {
+            werase( w_preview );
+            draw_border( w_preview, c_dark_gray );
+            mvwprintz( w_preview, point( 2, 1 ), c_light_green, _( "人物贴图预览" ) );
+            mvwprintz( w_preview, point( 2, getmaxy( w_preview ) - 2 ), c_light_gray,
+                       _( "使用当前贴图包的角色外观" ) );
+#if defined(TILES)
+            const std::vector<trait_id> current_mutations = you.get_mutations();
+            if( !preview_gear_cached || preview_profession != you.prof || preview_outfit != outfit ||
+                preview_mutations != current_mutations ) {
+                preview_gear.clear();
+                if( you.prof ) {
+                    for( const item &gear : you.prof->items( outfit, current_mutations ) ) {
+                        if( gear.is_armor() && !gear.has_flag( json_flag_no_auto_equip ) ) {
+                            preview_gear.emplace_back( "worn_" + gear.typeId().str(),
+                                                       gear.has_itype_variant() ? gear.itype_variant().id : "" );
+                        }
+                    }
+                }
+                preview_profession = you.prof;
+                preview_outfit = outfit;
+                preview_mutations = current_mutations;
+                preview_gear_cached = true;
+            }
+            set_character_creation_preview( &you, w_preview, preview_gear );
+#endif
+            wnoutrefresh( w_preview );
+        } else {
+#if defined(TILES)
+            clear_character_creation_preview();
+#endif
         }
 
         // Helptext description window
@@ -5142,6 +5194,9 @@ void set_description( tab_manager &tabs, avatar &you, const bool allow_reroll,
             }
         }
     } while( true );
+#if defined(TILES)
+    clear_character_creation_preview();
+#endif
 }
 
 std::vector<trait_id> Character::get_base_traits() const

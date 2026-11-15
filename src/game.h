@@ -873,6 +873,11 @@ class game
 
         /** Attempt to load first valid save (if any) in world */
         bool load( const std::string &world );
+#if defined(ENABLE_FP3D)
+        // Start a new game only inside the private title-demo worker process.
+        // Keeps the normal start_game() access level unchanged.
+        bool start_isolated_menu_game();
+#endif
 
         /** Returns true if the menu handled stuff and player shouldn't do anything else */
         bool npc_menu( npc &who );

@@ -32,6 +32,7 @@ struct data {
     std::array<float, 3> sun = { 0, 1, 0 };
     int resolution = 0;
     unsigned furniture_casters = 0;
+    unsigned fence_casters = 0;
     unsigned street_light_casters = 0;
     unsigned mailbox_casters = 0;
     unsigned streetlights_with_ceiling = 0;

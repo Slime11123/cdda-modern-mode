@@ -405,6 +405,40 @@ void input_manager::pump_events()
     previously_pressed_key = 0;
 }
 
+input_event input_manager::pump_events_capture_key()
+{
+    if( test_mode ) {
+        return input_event();
+    }
+
+    // Drain everything like pump_events(), but keep the last real key press so the
+    // caller can react to it (for example Esc skipping a wait). The key is still
+    // consumed here, so it cannot reach a later UI.
+    int key = ERR;
+    int last_key = ERR;
+    bool resize = false;
+    const int prev_timeout = input_timeout;
+    set_timeout( 0 );
+    do {
+        key = getch();
+        if( key == KEY_RESIZE ) {
+            resize = true;
+        } else if( key != ERR ) {
+            last_key = key;
+        }
+    } while( key != ERR );
+    set_timeout( prev_timeout );
+    if( resize ) {
+        catacurses::resizeterm();
+    }
+
+    previously_pressed_key = 0;
+    if( last_key == ERR ) {
+        return input_event();
+    }
+    return input_event( last_key, input_event_t::keyboard_char );
+}
+
 // there isn't a portable way to get raw key code on curses,
 // ignoring preferred keyboard mode
 input_event input_manager::get_input_event( const keyboard_mode /*preferred_keyboard_mode*/ )

@@ -4,19 +4,25 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <unordered_map>
 
 #include "avatar.h"
 #include "avatar_action.h"
 #include "calendar.h"
+#include "cached_options.h"
 #include "cata_catch.h"
 #include "enums.h"
 #include "field.h"
 #include "game.h"
 #include "field_type.h"
+#include "fp3d_camera.h"
+#include "fp3d_materials.h"
 #include "item.h"
 #include "item_location.h"
 #include "level_cache.h"
@@ -65,6 +71,16 @@ const fp3d_snapshot::cell *find_cell( const fp3d_snapshot::scene_snapshot &scene
         return tile.position == p;
     } );
     return it == scene.cells.end() ? nullptr : &*it;
+}
+
+// The avatar's own tile sprite is always published for the overhead camera. It
+// is not world content, so "nothing leaked" assertions must not count it.
+size_t world_sprite_count( const fp3d_snapshot::scene_snapshot &scene )
+{
+    return static_cast<size_t>( std::count_if( scene.sprites.begin(), scene.sprites.end(),
+    []( const auto & sprite ) {
+        return !sprite.is_avatar;
+    } ) );
 }
 } // namespace
 
@@ -252,6 +268,39 @@ TEST_CASE( "fp3d_snapshot_preserves_state_and_absolute_coordinates", "[fp3d]" )
     CHECK( old_ground->position - moved.origin == tripoint_rel_ms::west );
 }
 
+TEST_CASE( "fp3d_overhead_gait_badges_do_not_resize_the_avatar_body", "[fp3d][overhead][avatar]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    restore_on_out_of_scope restore_icons( show_creature_overlay_icons );
+    show_creature_overlay_icons = true;
+    const auto player_image = [&]() {
+        fp3d_snapshot::prepare_view( you, here );
+        const auto scene = fp3d_snapshot::capture( you, here );
+        const auto player = std::find_if( scene.sprites.begin(), scene.sprites.end(),
+        []( const auto &image ) { return image.is_avatar; } );
+        REQUIRE( player != scene.sprites.end() );
+        return *player;
+    };
+    you.set_movement_mode( move_mode_id( "walk" ) );
+    const auto walking = player_image();
+    const auto body_key = fp3d_materials::sprite_key( walking );
+    for( const std::string gait : { "run", "crouch", "prone", "walk" } ) {
+        CAPTURE( gait );
+        you.set_movement_mode( move_mode_id( gait ) );
+        REQUIRE( you.current_movement_mode() == move_mode_id( gait ) );
+        const auto image = player_image();
+        CHECK( fp3d_materials::sprite_key( image ) == body_key );
+        CHECK( image.overlays == walking.overlays );
+        CHECK( std::count( image.status_icons.begin(), image.status_icons.end(),
+                          "overlay_" + gait ) == ( gait == "walk" ? 0 : 1 ) );
+        if( gait == "run" ) {
+            CHECK( image.height == walking.height );
+        }
+    }
+}
+
 TEST_CASE( "fp3d_snapshot_filters_creatures_separately_from_terrain", "[fp3d][vision]" )
 {
     prepare_scene();
@@ -310,16 +359,68 @@ TEST_CASE( "fp3d_snapshot_does_not_reveal_sealed_items_or_stale_sprites", "[fp3d
     const auto *ground = find_cell( closed, here.get_abs( target ) );
     REQUIRE( ground );
     CHECK( ground->known == fp3d_snapshot::knowledge::visible );
-    CHECK( closed.sprites.empty() );
+    CHECK( world_sprite_count( closed ) == 0 );
     here.furn_set( target, furn_str_id( "f_crate_o" ) );
     refresh_vision( here, target.z() );
     REQUIRE( here.sees_some_items( target, you ) );
     const auto opened = fp3d_snapshot::capture( you, here );
-    REQUIRE( opened.sprites.size() == 1 );
+    REQUIRE( world_sprite_count( opened ) == 1 );
     CHECK( opened.sprites.front().id == "rock" );
     here.invalidate_visibility_cache();
     const auto stale = fp3d_snapshot::capture( you, here );
-    CHECK( stale.sprites.empty() );
+    CHECK( world_sprite_count( stale ) == 0 );
+}
+
+TEST_CASE( "fp3d_zombie_effect_badges_preserve_body_and_native_detection", "[fp3d][vision]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 0, -2, 0 );
+    monster &zombie = spawn_test_monster( "mon_zombie", p, false );
+    refresh_vision( here, p.z() );
+    const auto capture = [&]() {
+        const auto rng_before = rng_get_engine();
+        const auto scene = fp3d_snapshot::capture( you, here );
+        CHECK( rng_get_engine() == rng_before );
+        const auto image = std::find_if( scene.sprites.begin(), scene.sprites.end(),
+        []( const auto &sprite ) { return sprite.id == "mon_zombie"; } );
+        REQUIRE( image != scene.sprites.end() );
+        return *image;
+    };
+    REQUIRE( zombie.sees( here, you ) );
+    REQUIRE( zombie.attitude_to( you ) == Creature::Attitude::HOSTILE );
+    const auto normal = capture();
+    CHECK( normal.alerted );
+    CHECK( normal.overlays.empty() );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    const auto player = std::find_if( scene.sprites.begin(), scene.sprites.end(),
+    []( const auto &image ) { return image.is_avatar; } );
+    REQUIRE( player != scene.sprites.end() );
+    CHECK( normal.height == Approx( player->height ) );
+    const auto before_time = calendar::turn;
+    const auto before_moves = you.get_moves();
+    for( const std::string effect : { "stunned", "downed", "webbed", "onfire" } ) {
+        CAPTURE( effect );
+        zombie.add_effect( efftype_id( effect ), 10_minutes );
+        const auto affected = capture();
+        CHECK( affected.height == normal.height );
+        CHECK( affected.overlays.empty() );
+        CHECK( affected.status_icons == std::vector<std::string>{ "overlay_effect_" + effect } );
+        zombie.remove_effect( efftype_id( effect ) );
+    }
+    zombie.add_effect( efftype_id( "bleed" ), 10_minutes );
+    CHECK( capture().bleeding );
+    zombie.remove_effect( efftype_id( "bleed" ) );
+    zombie.add_effect( efftype_id( "attention" ), 10_minutes );
+    const auto attention = capture();
+    CHECK( attention.status_icons == std::vector<std::string>{ "overlay_effect_attention" } );
+    CHECK( calendar::turn == before_time );
+    CHECK( you.get_moves() == before_moves );
+    // Native perception, rather than the attention effect, owns the alert.
+    zombie.add_effect( efftype_id( "blind" ), 10_minutes );
+    REQUIRE_FALSE( zombie.sees( here, you ) );
+    CHECK_FALSE( capture().alerted );
 }
 
 TEST_CASE( "fp3d_snapshot_copies_visible_npc_appearance_by_value", "[fp3d][vision]" )
@@ -343,7 +444,10 @@ TEST_CASE( "fp3d_snapshot_copies_visible_npc_appearance_by_value", "[fp3d][visio
     REQUIRE( appearance != first.sprites.end() );
     CHECK( appearance->overlays == person.get_overlay_ids() );
     CHECK( appearance->male == person.male );
-    CHECK( appearance->height == Approx( 2.16f ) );
+    const auto player = std::find_if( first.sprites.begin(), first.sprites.end(),
+    []( const auto &image ) { return image.is_avatar; } );
+    REQUIRE( player != first.sprites.end() );
+    CHECK( appearance->height == Approx( player->height ) );
     CHECK( rng_get_engine() == rng_before );
     const bool old_male = person.male;
     person.male = !old_male;
@@ -370,18 +474,18 @@ TEST_CASE( "fp3d_snapshot_respects_native_field_item_suppression", "[fp3d][visio
     const auto *ground = find_cell( fire, here.get_abs( target ) );
     REQUIRE( ground );
     CHECK( ground->known == fp3d_snapshot::knowledge::visible );
-    CHECK( fire.sprites.empty() );
+    CHECK( world_sprite_count( fire ) == 0 );
     here.remove_field( target, fd_fire );
     refresh_vision( here, target.z() );
     // Native removal first sets intensity zero; its displayed field remains
     // until normal field cleanup. The snapshot must not perform that cleanup.
     CHECK_FALSE( here.field_at( target ).displayed_field_type()->display_items );
-    CHECK( fp3d_snapshot::capture( you, here ).sprites.empty() );
+    CHECK( world_sprite_count( fp3d_snapshot::capture( you, here ) ) == 0 );
     here.delete_field( target, fd_fire );
     refresh_vision( here, target.z() );
     REQUIRE( here.field_at( target ).displayed_field_type()->display_items );
     const auto cleared = fp3d_snapshot::capture( you, here );
-    REQUIRE( cleared.sprites.size() == 1 );
+    REQUIRE( world_sprite_count( cleared ) == 1 );
     CHECK( cleared.sprites.front().id == "rock" );
 }
 
@@ -399,21 +503,78 @@ TEST_CASE( "fp3d_blood_capture_tracks_visible_native_fields_without_memory_leaks
     const auto bloody = fp3d_snapshot::capture( you, here );
     const auto *tile = find_cell( bloody, here.get_abs( p ) );
     REQUIRE( tile );
-    CHECK( tile->blood == "fd_blood" );
-    CHECK( tile->blood_intensity == 3 );
+    REQUIRE( tile->ground_fields.size() == 1 );
+    CHECK( tile->ground_fields.front().id == "fd_blood" );
+    CHECK( tile->ground_fields.front().intensity == 3 );
     CHECK( rng_get_engine() == before_rng );
     CHECK( calendar::turn == before_time );
     CHECK( you.get_moves() == before_moves );
     here.invalidate_visibility_cache();
     const auto hidden = fp3d_snapshot::capture( you, here );
     CHECK( std::none_of( hidden.cells.begin(), hidden.cells.end(), []( const auto &cell ) {
-        return !cell.blood.empty();
+        return !cell.ground_fields.empty();
     } ) );
     here.delete_field( p, fd_blood );
     refresh_vision( here, p.z() );
     const auto clean = fp3d_snapshot::capture( you, here );
     REQUIRE( find_cell( clean, here.get_abs( p ) ) );
-    CHECK( find_cell( clean, here.get_abs( p ) )->blood.empty() );
+    CHECK( find_cell( clean, here.get_abs( p ) )->ground_fields.empty() );
+}
+
+TEST_CASE( "fp3d_ground_fields_keep_mixed_coverings_and_native_intensity",
+           "[fp3d][vision][ground_fields]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 0, 2, 0 );
+    const std::vector<std::string> ids{
+        "fd_blood", "fd_blood_veggy", "fd_blood_insect", "fd_blood_invertebrate",
+        "fd_acid", "fd_bile", "fd_slime", "fd_sap", "fd_sludge",
+        "fd_gibs_flesh", "fd_gibs_veggy", "fd_gibs_insect", "fd_gibs_invertebrate",
+        "fd_web", "fd_web_nostick", "fd_void_web", "fd_churned_earth",
+        "fd_congealed_light", "fd_rubble", "fd_acid_vent"
+    };
+    for( const auto &id : ids ) {
+        const field_type_str_id field( id );
+        REQUIRE( field.is_valid() );
+        REQUIRE( here.add_field( p, field, field->get_max_intensity(), 10_minutes ) );
+    }
+    // Invisible markers and volumetric gases must not become floor decals.
+    here.add_field( p, field_type_str_id( "fd_clairvoyant" ), 1 );
+    here.add_field( p, field_type_str_id( "fd_smoke" ), 1 );
+    refresh_vision( here, p.z() );
+    const auto before_rng = rng_get_engine();
+    const auto before_time = calendar::turn;
+    const auto before_moves = you.get_moves();
+    const auto snapshot = fp3d_snapshot::capture( you, here );
+    const auto *tile = find_cell( snapshot, here.get_abs( p ) );
+    REQUIRE( tile );
+    REQUIRE( tile->ground_fields.size() == ids.size() );
+    for( const auto &id : ids ) {
+        CAPTURE( id );
+        const auto found = std::find_if( tile->ground_fields.begin(), tile->ground_fields.end(),
+        [&]( const auto &field ) { return field.id == id; } );
+        REQUIRE( found != tile->ground_fields.end() );
+        CHECK( found->intensity == field_type_str_id( id )->get_max_intensity() );
+    }
+    CHECK( rng_get_engine() == before_rng );
+    CHECK( calendar::turn == before_time );
+    CHECK( you.get_moves() == before_moves );
+    here.invalidate_visibility_cache();
+    const auto hidden = fp3d_snapshot::capture( you, here );
+    CHECK( std::none_of( hidden.cells.begin(), hidden.cells.end(), []( const auto &cell ) {
+        return !cell.ground_fields.empty();
+    } ) );
+    // Native removal marks the entry dead, retaining intensity 1 until cleanup.
+    here.remove_field( p, field_type_str_id( "fd_acid" ) );
+    refresh_vision( here, p.z() );
+    const auto changed = fp3d_snapshot::capture( you, here );
+    const auto *updated = find_cell( changed, here.get_abs( p ) );
+    REQUIRE( updated );
+    CHECK( updated->ground_fields.size() == ids.size() - 1 );
+    CHECK( std::none_of( updated->ground_fields.begin(), updated->ground_fields.end(),
+    []( const auto &field ) { return field.id == "fd_acid"; } ) );
 }
 
 TEST_CASE( "fp3d_adjacent_stair_tiles_share_one_continuous_flight", "[fp3d][stairs]" )
@@ -507,9 +668,37 @@ TEST_CASE( "fp3d_landscape_extends_beyond_reality_bubble_without_simulation", "[
     CHECK( std::any_of( distant_city.landscape.begin(),
     distant_city.landscape.end(), [&]( const auto & patch ) {
         return project_to<coords::omt>( patch.position ) == city && patch.building_height > 0 &&
-               !patch.ground_present;
+               !patch.ground_present && patch.wall_material == "t_brick_wall";
     } ) );
     CHECK( rng_get_engine() == city_rng );
+
+    // Multi-level silhouettes use existing overmap storeys; a roof marker at
+    // z=2 must not produce a third floor or change the wall family.
+    const tripoint_abs_omt second = city + tripoint_rel_omt( 0, 0, 1 );
+    const tripoint_abs_omt roof = city + tripoint_rel_omt( 0, 0, 2 );
+    const oter_id old_second = overmap_buffer.ter( second );
+    const oter_id old_roof = overmap_buffer.ter( roof );
+    on_out_of_scope restore_upper( [&]() {
+        overmap_buffer.ter_set( second, old_second );
+        overmap_buffer.ter_set( roof, old_roof );
+    } );
+    const oter_str_id house_base( "house_2story_base_north" );
+    const oter_str_id house_second( "house_2story_second_north" );
+    const oter_str_id house_roof( "house_2story_roof_north" );
+    REQUIRE( house_base.is_valid() );
+    REQUIRE( house_second.is_valid() );
+    REQUIRE( house_roof.is_valid() );
+    overmap_buffer.ter_set( city, house_base.id() );
+    overmap_buffer.ter_set( second, house_second.id() );
+    overmap_buffer.ter_set( roof, house_roof.id() );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto tall_city = fp3d_snapshot::capture( you, here );
+    CHECK( std::any_of( tall_city.landscape.begin(), tall_city.landscape.end(),
+    [&]( const auto & patch ) {
+        return project_to<coords::omt>( patch.position ) == city &&
+               patch.building_height == 2 * fp3d_camera::floor_height &&
+               patch.wall_material == "t_wall_wood";
+    } ) );
     calendar::turn = calendar::turn_zero;
     fp3d_snapshot::prepare_view( you, here );
     CHECK( fp3d_snapshot::capture( you, here ).landscape.empty() );
@@ -850,6 +1039,229 @@ TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilev
     }
 }
 
+TEST_CASE( "fp3d_balconies_do_not_drop_ray_visible_facade_surfaces", "[fp3d][multilevel]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto origin = you.pos_bub( here );
+    for( int z = 0; z <= 4; ++z ) {
+        for( int y = -4; y <= 4; ++y ) {
+            for( int x = 7; x <= 14; ++x ) {
+                const bool wall = x == 10 || x == 14 || std::abs( y ) == 4;
+                const char *id = z == 4 ? "t_flat_roof" : x == 7 ? "t_metal_railing" :
+                                 wall ? "t_concrete_wall_w" : x < 10 ? "t_thconc_floor" : "t_floor";
+                REQUIRE( here.ter_set( origin + tripoint_rel_ms( x, y, z ), ter_str_id( id ) ) );
+            }
+        }
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    int ray_visible = 0;
+    for( int z = 1; z < 4; ++z ) {
+        for( int y = -3; y <= 3; ++y ) {
+            const auto p = origin + tripoint_rel_ms( 10, y, z );
+            if( here.sees( origin, p, you.unimpaired_range() ) ) {
+                ++ray_visible;
+                CAPTURE( z, y );
+                const auto *wall = find_cell( scene, here.get_abs( p ) );
+                REQUIRE( wall );
+                CHECK( wall->kind == fp3d_snapshot::terrain_kind::wall );
+                CHECK_FALSE( wall->furniture );
+            }
+        }
+    }
+    CHECK( ray_visible > 0 );
+}
+
+TEST_CASE( "fp3d_unknown_mask_contains_no_terrain_and_preserves_known_openings", "[fp3d][snapshot]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto origin = you.pos_bub( here );
+    const auto hidden = origin + tripoint_rel_ms( 6, 0, 0 );
+    for( int y = -2; y <= 2; ++y ) {
+        for( int x = -2; x <= 2; ++x ) {
+            here.ter_set( hidden + tripoint_rel_ms( x, y, 0 ),
+                          ter_str_id( std::abs( x ) == 2 || std::abs( y ) == 2 ? "t_wall" : "t_floor" ) );
+        }
+    }
+    you.memorize_terrain( here.get_abs( hidden ), "", 0, 0 );
+    const auto opening = origin + tripoint_rel_ms( 0, -2, 0 );
+    REQUIRE( here.ter_set( opening, ter_str_id( "t_open_air" ) ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto before = fp3d_snapshot::capture( you, here );
+    const auto masked = [&]( const auto &scene, const tripoint_abs_ms &p ) {
+        return std::any_of( scene.unknown.begin(), scene.unknown.end(), [&]( const auto &span ) {
+            return p.z() == span.position.z() && p.y() == span.position.y() &&
+                   p.x() >= span.position.x() && p.x() < span.position.x() + span.width;
+        } );
+    };
+    REQUIRE_FALSE( you.sees( here, hidden ) );
+    CHECK( masked( before, here.get_abs( hidden ) ) );
+    CHECK_FALSE( masked( before, here.get_abs( origin ) ) );
+    CHECK_FALSE( masked( before, here.get_abs( opening ) ) );
+    here.ter_set( hidden, ter_str_id( "t_lava" ) );
+    here.furn_set( hidden, furn_str_id( "f_bookcase" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto after = fp3d_snapshot::capture( you, here );
+    CHECK( masked( after, here.get_abs( hidden ) ) );
+    CHECK_FALSE( find_cell( after, here.get_abs( hidden ) ) );
+    REQUIRE( before.unknown.size() == after.unknown.size() );
+    for( size_t i = 0; i < before.unknown.size(); ++i ) {
+        CHECK( before.unknown[i].position == after.unknown[i].position );
+        CHECK( before.unknown[i].width == after.unknown[i].width );
+    }
+}
+
+TEST_CASE( "fp3d_camera_geometry_reuse_tracks_live_map_changes", "[fp3d][camera_geometry]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 4, 0, 0 );
+    here.ter_set( p, ter_str_id( "t_wall" ) );
+    auto previous = fp3d_snapshot::capture_camera( you, here, 1, 0 );
+    previous.render_generation = 100;
+    fp3d_snapshot::reuse_geometry( previous, nullptr );
+    unsigned generation = 101;
+    const auto changed = [&]() {
+        auto scene = fp3d_snapshot::capture_camera_reusing( you, here, &previous, 1, 0, false );
+        scene.render_generation = generation++;
+        fp3d_snapshot::reuse_geometry( scene, &previous );
+        CHECK( scene.geometry_generation == scene.render_generation );
+        previous = std::move( scene );
+    };
+    here.ter_set( p, ter_str_id( "t_door_o" ) );
+    changed();
+    REQUIRE( find_cell( previous, here.get_abs( p ) ) );
+    CHECK( find_cell( previous, here.get_abs( p ) )->kind == fp3d_snapshot::terrain_kind::open_door );
+    here.furn_set( p, furn_str_id( "f_chair" ) );
+    changed();
+    REQUIRE( find_cell( previous, here.get_abs( p ) )->furniture );
+    CHECK( find_cell( previous, here.get_abs( p ) )->furniture->id == "f_chair" );
+    here.add_field( p, fd_blood, 3, 10_minutes );
+    changed();
+    REQUIRE_FALSE( find_cell( previous, here.get_abs( p ) )->ground_fields.empty() );
+    CHECK( find_cell( previous, here.get_abs( p ) )->ground_fields.front().id == "fd_blood" );
+    here.delete_field( p, fd_blood );
+    changed();
+    CHECK( find_cell( previous, here.get_abs( p ) )->ground_fields.empty() );
+    here.furn_set( p, furn_str_id( "f_null" ) );
+    here.ter_set( p, ter_str_id( "t_open_air" ) );
+    changed();
+    CHECK_FALSE( find_cell( previous, here.get_abs( p ) ) );
+    const auto *allocation = previous.cells.data();
+    auto same = fp3d_snapshot::capture_camera_reusing( you, here, &previous, 1, 0, false );
+    same.render_generation = generation;
+    CHECK( same.geometry_generation == generation - 1 );
+    CHECK( same.cells.data() == allocation );
+}
+
+TEST_CASE( "fp3d_camera_geometry_is_independent_of_native_visibility",
+           "[fp3d][camera_geometry]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int z = 0; z <= 3; ++z ) {
+        for( int y = -4; y <= 4; ++y ) {
+            for( int x = 4; x <= 12; ++x ) {
+                const bool wall = x == 4 || x == 12 || std::abs( y ) == 4;
+                here.ter_set( player + tripoint_rel_ms( x, y, z ),
+                              ter_str_id( z == 3 ? "t_flat_roof" : wall ? "t_wall" : "t_floor" ) );
+            }
+        }
+    }
+    const auto hidden = player + tripoint_rel_ms( 8, 0, 1 );
+    here.furn_set( hidden, furn_str_id( "f_bookcase" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE_FALSE( here.sees( player, hidden, MAX_VIEW_DISTANCE ) );
+    const auto absolute = here.get_abs( hidden );
+    const auto native = fp3d_snapshot::capture( you, here );
+    const auto *native_tile = find_cell( native, absolute );
+    REQUIRE( ( !native_tile || !native_tile->furniture ) );
+    const auto memory = you.get_memorized_tile( absolute ).get_ter_id();
+    const float seen = here.access_cache( hidden.z() ).seen_cache[hidden.x()][hidden.y()];
+    const auto random_before = rng_get_engine();
+    const auto camera = fp3d_snapshot::capture_camera( you, here );
+    const auto *tile = find_cell( camera, absolute );
+    REQUIRE( tile );
+    CHECK( tile->terrain == "t_floor" );
+    CHECK( tile->floor_present );
+    REQUIRE( tile->furniture );
+    CHECK_FALSE( tile->exterior_only );
+    CHECK( camera.unknown.empty() );
+    CHECK( you.get_memorized_tile( absolute ).get_ter_id() == memory );
+    CHECK( here.access_cache( hidden.z() ).seen_cache[hidden.x()][hidden.y()] == seen );
+    CHECK( rng_get_engine() == random_before );
+    const auto native_after = fp3d_snapshot::capture( you, here );
+    CHECK( native_after.cells.size() == native.cells.size() );
+    CHECK( native_after.visible == native.visible );
+    CHECK( native_after.remembered == native.remembered );
+    const auto *still_hidden = find_cell( native_after, absolute );
+    CHECK( ( !still_hidden || !still_hidden->furniture ) );
+    here.ter_set( hidden, ter_str_id( "t_wall" ) );
+    here.invalidate_visibility_cache();
+    const auto changed = fp3d_snapshot::capture_camera( you, here );
+    REQUIRE( find_cell( changed, absolute ) );
+    CHECK( find_cell( changed, absolute )->terrain == "t_wall" );
+    CHECK( you.get_memorized_tile( absolute ).get_ter_id() == memory );
+}
+
+TEST_CASE( "fp3d_camera_geometry_preserves_real_open_air_and_upper_facades",
+           "[fp3d][camera_geometry]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    const auto air = player + tripoint_rel_ms( 3, 0, 1 );
+    const auto wall = player + tripoint_rel_ms( 12, 0, 4 );
+    here.ter_set( air, ter_str_id( "t_open_air" ) );
+    here.ter_set( wall, ter_str_id( "t_wall" ) );
+    here.invalidate_visibility_cache();
+    const auto camera = fp3d_snapshot::capture_camera( you, here );
+    const auto *opening = find_cell( camera, here.get_abs( air ) );
+    CHECK( ( !opening || ( opening->open_air && !opening->floor_present ) ) );
+    const auto *facade = find_cell( camera, here.get_abs( wall ) );
+    REQUIRE( facade );
+    CHECK( facade->kind == fp3d_snapshot::terrain_kind::wall );
+    CHECK_FALSE( facade->exterior_only );
+}
+
+TEST_CASE( "fp3d_camera_geometry_cuts_only_the_current_room_roof",
+           "[fp3d][camera_geometry][overhead]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int y = -3; y <= 3; ++y ) {
+        for( int x = -3; x <= 7; ++x ) {
+            const auto p = player + tripoint_rel_ms( x, y, 0 );
+            const bool wall = x == -3 || x == 3 || x == 7 || std::abs( y ) == 3;
+            here.ter_set( p, ter_str_id( wall ? "t_wall" : "t_floor" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    const auto eye = fp3d_snapshot::capture_camera( you, here );
+    const auto cut = fp3d_snapshot::capture_camera( you, here,
+                     fp3d_snapshot::render_above, fp3d_snapshot::render_below, true );
+    REQUIRE( find_cell( eye, here.get_abs( player + tripoint_rel_ms::above ) ) );
+    CHECK_FALSE( find_cell( cut, here.get_abs( player + tripoint_rel_ms::above ) ) );
+    const auto *floor = find_cell( cut, here.get_abs( player ) );
+    REQUIRE( floor );
+    CHECK( floor->floor_present );
+    const auto *wall = find_cell( cut, here.get_abs( player + tripoint_rel_ms( 3, 0, 0 ) ) );
+    REQUIRE( wall );
+    CHECK( wall->kind == fp3d_snapshot::terrain_kind::wall );
+    CHECK( find_cell( cut, here.get_abs( player + tripoint_rel_ms( 5, 0, 1 ) ) ) );
+}
+
 TEST_CASE( "fp3d_multistorey_visibility_reaches_upper_floors_and_ground",
            "[fp3d][multilevel]" )
 {
@@ -1059,6 +1471,49 @@ TEST_CASE( "fp3d_visible_ceiling_boundary_keeps_upstairs_private", "[fp3d][multi
     room = find_cell( indoor_open, here.get_abs( p ) );
     REQUIRE( room );
     CHECK_FALSE( room->ceiling_present );
+}
+
+TEST_CASE( "fp3d_skylight_is_a_translucent_ceiling_not_an_opaque_roof", "[fp3d][multilevel]" )
+{
+    // The native skylight stays walkable roof glass; only its presentation
+    // changes from an opaque t_floor sheet to a pane like a glass wall.
+    CHECK( fp3d_snapshot::terrain_shape( "t_glass_roof" ) ==
+           fp3d_snapshot::terrain_kind::floor );
+    CHECK( fp3d_snapshot::is_glass_roof( "t_glass_roof" ) );
+    CHECK_FALSE( fp3d_snapshot::is_glass_roof( "t_flat_roof" ) );
+    CHECK_FALSE( fp3d_snapshot::is_glass_roof( "t_floor" ) );
+    CHECK_FALSE( fp3d_snapshot::is_glass_roof( "t_open_air" ) );
+
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here );
+    const auto overhead = p + tripoint_rel_ms( 0, 0, 1 );
+    REQUIRE( here.ter_set( overhead, ter_str_id( "t_glass_roof" ) ) );
+    refresh_vision( here, p.z() );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto glazed = fp3d_snapshot::capture( you, here );
+    const auto *room = find_cell( glazed, here.get_abs( p ) );
+    REQUIRE( room );
+    CHECK( room->ceiling_present );
+    CHECK( room->glass_ceiling );
+    // The roof glass must still be a normal floor cell in the snapshot, not a
+    // synthetic wall/obstacle or an invented hole in the roof.
+    const auto *roof = find_cell( glazed, here.get_abs( overhead ) );
+    if( roof ) {
+        CHECK( roof->kind == fp3d_snapshot::terrain_kind::floor );
+        CHECK( fp3d_snapshot::is_glass_roof( roof->terrain ) );
+    }
+
+    // The same room under a solid roof keeps an opaque ceiling.
+    REQUIRE( here.ter_set( overhead, ter_str_id( "t_flat_roof" ) ) );
+    refresh_vision( here, p.z() );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto solid = fp3d_snapshot::capture( you, here );
+    room = find_cell( solid, here.get_abs( p ) );
+    REQUIRE( room );
+    CHECK( room->ceiling_present );
+    CHECK_FALSE( room->glass_ceiling );
 }
 
 TEST_CASE( "fp3d_upstairs_atrium_does_not_cover_the_visible_lower_room", "[fp3d][multilevel]" )
@@ -1286,6 +1741,419 @@ TEST_CASE( "fp3d_moving_capture_budget", "[fp3d][performance]" )
     }
 }
 
+TEST_CASE( "fp3d_movement_step_profile", "[fp3d][performance]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto start = you.pos_bub( here );
+    for( int n = 0; n < 6; ++n ) {
+        spawn_npc( ( start + tripoint_rel_ms( n * 2 - 5, -8, 0 ) ).xy(), "test_talker" );
+    }
+    std::ofstream report;
+    if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+        std::filesystem::create_directories( directory );
+        report.open( std::filesystem::path( directory ) / "movement-step.csv" );
+        report << "step,prepare_total_ms,player_layer_ms,extra_layers_ms,extra_layer_calls,"
+                  "visibility_ms,memory_ms,capture_ms,capture_full_ms,tail_ms,cells,sprites\n";
+    }
+    constexpr int steps = 12;
+    double prepare_sum = 0;
+    double capture_full_sum = 0;
+    for( int step = 0; step < steps; ++step ) {
+        const auto before = you.pos_abs();
+        you.set_moves( 1000 );
+        avatar_action::move( you, here, tripoint_rel_ms::east );
+        REQUIRE( you.pos_abs() == before + tripoint_rel_ms::east );
+        // The whole synchronous cost of one step: prepare_view() then capture().
+        const auto timing = fp3d_snapshot::prepare_view( you, here );
+        const auto scene = fp3d_snapshot::capture( you, here );
+        CHECK( scene.origin == you.pos_abs() );
+        CHECK( scene.capture_full_ms >= scene.capture_ms );
+        prepare_sum += timing.total_ms;
+        capture_full_sum += scene.capture_full_ms;
+        if( report ) {
+            report << step << ',' << timing.total_ms << ',' << timing.player_layer_ms << ','
+                   << timing.extra_layers_ms << ',' << timing.extra_layer_calls << ','
+                   << timing.visibility_ms << ',' << timing.memory_ms << ',' << scene.capture_ms << ','
+                   << scene.capture_full_ms << ',' << scene.capture_full_ms - scene.capture_ms << ','
+                   << scene.cells.size() << ',' << scene.sprites.size() << '\n';
+        }
+    }
+    WARN( "movement step: prepare_mean_ms=" << prepare_sum / steps
+          << ", capture_full_mean_ms=" << capture_full_sum / steps );
+}
+
+namespace
+{
+std::uint64_t hash_floats( const cata::mdarray<float, point_bub_ms> &values )
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    for( int x = 0; x < MAPSIZE_X; ++x ) {
+        for( int y = 0; y < MAPSIZE_Y; ++y ) {
+            std::uint32_t bits = 0;
+            const float value = values[x][y];
+            std::memcpy( &bits, &value, sizeof( bits ) );
+            hash = ( hash ^ bits ) * 1099511628211ull;
+        }
+    }
+    return hash;
+}
+std::uint64_t hash_bools( const cata::mdarray<bool, point_bub_ms> &values )
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    for( int x = 0; x < MAPSIZE_X; ++x ) {
+        for( int y = 0; y < MAPSIZE_Y; ++y ) {
+            hash = ( hash ^ ( values[x][y] ? 1ull : 0ull ) ) * 1099511628211ull;
+        }
+    }
+    return hash;
+}
+std::uint64_t hash_visibility( const cata::mdarray<lit_level, point_bub_ms> &values )
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    for( int x = 0; x < MAPSIZE_X; ++x ) {
+        for( int y = 0; y < MAPSIZE_Y; ++y ) {
+            hash = ( hash ^ static_cast<std::uint64_t>( static_cast<int>( values[x][y] ) ) ) *
+                   1099511628211ull;
+        }
+    }
+    return hash;
+}
+std::uint64_t hash_scene( const fp3d_snapshot::scene_snapshot &scene )
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    const auto mix = [&]( std::uint64_t value ) {
+        hash = ( hash ^ value ) * 1099511628211ull;
+    };
+    for( const auto &tile : scene.cells ) {
+        mix( static_cast<std::uint64_t>( std::hash<std::string> {}( tile.terrain ) ) );
+        mix( static_cast<std::uint64_t>( tile.position.x() ) );
+        mix( static_cast<std::uint64_t>( tile.position.y() ) );
+        mix( static_cast<std::uint64_t>( tile.position.z() + 64 ) );
+        mix( static_cast<std::uint64_t>( static_cast<int>( tile.kind ) ) );
+        mix( static_cast<std::uint64_t>( static_cast<int>( tile.known ) ) );
+        mix( ( tile.floor_present ? 1ull : 0ull ) | ( tile.ceiling_present ? 2ull : 0ull ) );
+    }
+    for( const auto &sprite : scene.sprites ) {
+        mix( static_cast<std::uint64_t>( std::hash<std::string> {}( sprite.id ) ) );
+    }
+    return hash;
+}
+} // namespace
+
+TEST_CASE( "fp3d_extra_storey_lightmap_only_costs_time", "[fp3d][multilevel][performance]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int z = 1; z <= 3; ++z ) {
+        for( int x = -4; x <= 4; ++x ) {
+            here.ter_set( player + tripoint_rel_ms( x, -6, z ), ter_str_id( "t_wall" ) );
+            here.ter_set( player + tripoint_rel_ms( x, 6, z ), ter_str_id( "t_floor" ) );
+        }
+        here.ter_set( player + tripoint_rel_ms( 0, 0, z ), ter_str_id( "t_floor" ) );
+    }
+    const auto invalidate_all = [&]() {
+        for( int z = -OVERMAP_DEPTH; z <= OVERMAP_HEIGHT; ++z ) {
+            here.invalidate_map_cache( z );
+        }
+        here.invalidate_visibility_cache();
+    };
+    // Same storey range prepare_view() walks. The upper lightmaps are only
+    // generated when upper_lightmaps is true; the player layer and every level
+    // below it always keep theirs.
+    const auto prepare_like_view = [&]( bool upper_lightmaps ) {
+        const auto p = you.pos_bub( here );
+        here.build_map_cache( p.z() );
+        for( int z = std::max( -OVERMAP_DEPTH, p.z() - fp3d_snapshot::below_for_storey( p.z() ) );
+             z <= std::min( OVERMAP_HEIGHT, p.z() + fp3d_snapshot::render_above ); ++z ) {
+            if( z == p.z() ) {
+                continue;
+            }
+            here.build_map_cache( z, !upper_lightmaps && z > p.z() );
+        }
+        here.update_visibility_cache( p.z() );
+    };
+    const auto sweep = [&]() {
+        std::vector<std::uint64_t> values;
+        for( int z = std::max( -OVERMAP_DEPTH, player.z() - fp3d_snapshot::below_for_storey( player.z() ) );
+             z <= std::min( OVERMAP_HEIGHT, player.z() + fp3d_snapshot::render_above ); ++z ) {
+            const level_cache &cache = here.access_cache( z );
+            values.push_back( hash_floats( cache.seen_cache ) );
+            values.push_back( hash_floats( cache.camera_cache ) );
+            values.push_back( hash_floats( cache.vision_transparency_cache ) );
+            values.push_back( hash_floats( cache.transparency_cache ) );
+            values.push_back( hash_bools( cache.floor_cache ) );
+            values.push_back( hash_bools( cache.outside_cache ) );
+            values.push_back( hash_visibility( cache.visibility_cache ) );
+        }
+        return values;
+    };
+    const auto measure = [&]( bool upper_lightmaps ) {
+        invalidate_all();
+        const auto started = std::chrono::steady_clock::now();
+        prepare_like_view( upper_lightmaps );
+        return std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - started ).count();
+    };
+    // Cold passes first: definitions and caches are identical in both arms.
+    const double cold_with = measure( true );
+    const double cold_without = measure( false );
+    // Steady state is the per-step case: caches are clean, only lightmaps are
+    // regenerated if they are generated at all.
+    const auto steady = [&]( bool upper_lightmaps ) {
+        const auto started = std::chrono::steady_clock::now();
+        prepare_like_view( upper_lightmaps );
+        return std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - started ).count();
+    };
+    double warm_with = 0;
+    double warm_without = 0;
+    for( int pass = 0; pass < 5; ++pass ) {
+        warm_with += steady( true );
+        warm_without += steady( false );
+    }
+    WARN( "extra storeys: cold " << cold_with << " ms with lightmaps / " << cold_without
+          << " ms without; steady state " << warm_with / 5 << " ms / " << warm_without / 5 << " ms" );
+    // The only thing the upper lightmaps may cost is time: every cache the 3D
+    // scene and the native visibility rules read must stay byte-identical.
+    invalidate_all();
+    prepare_like_view( true );
+    const auto with = sweep();
+    const auto scene_with = fp3d_snapshot::capture( you, here );
+    invalidate_all();
+    prepare_like_view( false );
+    const auto without = sweep();
+    const auto scene_without = fp3d_snapshot::capture( you, here );
+    REQUIRE( with.size() == without.size() );
+    CHECK( with == without );
+    CHECK( hash_scene( scene_with ) == hash_scene( scene_without ) );
+    CHECK( scene_with.cells.size() == scene_without.cells.size() );
+}
+
+TEST_CASE( "fp3d_upper_storey_map_cache_calls_are_redundant", "[fp3d][multilevel][performance]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int z = 1; z <= 3; ++z ) {
+        for( int x = -4; x <= 4; ++x ) {
+            here.ter_set( player + tripoint_rel_ms( x, -6, z ), ter_str_id( "t_wall" ) );
+            here.ter_set( player + tripoint_rel_ms( x, 6, z ), ter_str_id( "t_floor" ) );
+        }
+        here.ter_set( player + tripoint_rel_ms( 0, 0, z ), ter_str_id( "t_floor" ) );
+    }
+    const auto invalidate_all = [&]() {
+        for( int z = -OVERMAP_DEPTH; z <= OVERMAP_HEIGHT; ++z ) {
+            here.invalidate_map_cache( z );
+        }
+        here.invalidate_visibility_cache();
+    };
+    // upper_calls == true reproduces the old per-storey build_map_cache() loop;
+    // false is what prepare_view() does now: the player-layer call already
+    // sweeps every z-level's caches and fills the LOS of all of them, so the
+    // upper storeys need no call at all once their lightmap is skipped.
+    const auto prepare_like_view = [&]( bool upper_calls ) {
+        const auto p = you.pos_bub( here );
+        here.build_map_cache( p.z() );
+        const int lowest = std::max( -OVERMAP_DEPTH, p.z() - fp3d_snapshot::below_for_storey( p.z() ) );
+        for( int z = lowest; z < p.z(); ++z ) {
+            here.build_map_cache( z );
+        }
+        if( upper_calls ) {
+            for( int z = p.z() + 1;
+                 z <= std::min( OVERMAP_HEIGHT, p.z() + fp3d_snapshot::render_above ); ++z ) {
+                here.build_map_cache( z, true );
+            }
+        }
+        here.update_visibility_cache( p.z() );
+    };
+    const auto sweep = [&]() {
+        std::vector<std::uint64_t> values;
+        for( int z = std::max( -OVERMAP_DEPTH, player.z() - fp3d_snapshot::below_for_storey( player.z() ) );
+             z <= std::min( OVERMAP_HEIGHT, player.z() + fp3d_snapshot::render_above ); ++z ) {
+            const level_cache &cache = here.access_cache( z );
+            values.push_back( hash_floats( cache.seen_cache ) );
+            values.push_back( hash_floats( cache.camera_cache ) );
+            values.push_back( hash_floats( cache.vision_transparency_cache ) );
+            values.push_back( hash_floats( cache.transparency_cache ) );
+            values.push_back( hash_bools( cache.floor_cache ) );
+            values.push_back( hash_bools( cache.outside_cache ) );
+            values.push_back( hash_visibility( cache.visibility_cache ) );
+        }
+        return values;
+    };
+    const auto measure = [&]( bool upper_calls ) {
+        invalidate_all();
+        const auto started = std::chrono::steady_clock::now();
+        prepare_like_view( upper_calls );
+        return std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - started ).count();
+    };
+    const double cold_with = measure( true );
+    const double cold_without = measure( false );
+    double warm_with = 0;
+    double warm_without = 0;
+    for( int pass = 0; pass < 5; ++pass ) {
+        const auto steady = [&]( bool upper_calls ) {
+            const auto started = std::chrono::steady_clock::now();
+            prepare_like_view( upper_calls );
+            return std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - started ).count();
+        };
+        warm_with += steady( true );
+        warm_without += steady( false );
+    }
+    WARN( "upper storey calls: cold " << cold_with << " ms with / " << cold_without << " ms without; steady "
+          << warm_with / 5 << " ms / " << warm_without / 5 << " ms" );
+    invalidate_all();
+    prepare_like_view( true );
+    const auto with = sweep();
+    const auto scene_with = fp3d_snapshot::capture( you, here );
+    invalidate_all();
+    prepare_like_view( false );
+    const auto without = sweep();
+    const auto scene_without = fp3d_snapshot::capture( you, here );
+    REQUIRE( with.size() == without.size() );
+    CHECK( with == without );
+    CHECK( hash_scene( scene_with ) == hash_scene( scene_without ) );
+    CHECK( scene_with.cells.size() == scene_without.cells.size() );
+}
+
+TEST_CASE( "fp3d_capture_cell_loop_costs", "[fp3d][performance]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    // Same domain the capture walks: (2*radius+1)^2 per storey, render_above+1
+    // storeys above and below_for_storey below.
+    const int lowest = std::max( -OVERMAP_DEPTH, player.z() - fp3d_snapshot::below_for_storey( player.z() ) );
+    const int highest = std::min( OVERMAP_HEIGHT, player.z() + fp3d_snapshot::render_above );
+    const int radius = fp3d_snapshot::radius;
+    long long sink = 0;
+    const auto walk = [&]( const char *name, const std::function<void( const tripoint_bub_ms & )> &body ) {
+        const auto started = std::chrono::steady_clock::now();
+        for( int z = lowest; z <= highest; ++z ) {
+            for( int dy = -radius; dy <= radius; ++dy ) {
+                for( int dx = -radius; dx <= radius; ++dx ) {
+                    const tripoint_bub_ms p = player + tripoint_rel_ms( dx, dy, z - player.z() );
+                    if( !here.inbounds( p ) ) {
+                        continue;
+                    }
+                    body( p );
+                }
+            }
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - started ).count();
+        WARN( "cell loop " << name << ": " << ms << " ms, sink=" << sink );
+        return ms;
+    };
+    // warm the map caches so every variant sees the same prepared state
+    here.build_map_cache( player.z() );
+    for( int z = lowest; z < player.z(); ++z ) {
+        here.build_map_cache( z );
+    }
+    here.update_visibility_cache( player.z(), false );
+    const double bare = walk( "bare", [&]( const tripoint_bub_ms & ) {
+        ++sink;
+    } );
+    const double memory = walk( "with get_memorized_tile", [&]( const tripoint_bub_ms &p ) {
+        sink += static_cast<long long>(
+                    you.get_memorized_tile( here.get_abs( p ) ).get_ter_id().size() );
+    } );
+    const double terrain = walk( "with ter().id()", [&]( const tripoint_bub_ms &p ) {
+        sink += static_cast<long long>( here.ter( p ).id().str().size() );
+    } );
+    const double furniture = walk( "with furn().id()", [&]( const tripoint_bub_ms &p ) {
+        sink += static_cast<long long>( here.furn( p ).id().str().size() );
+    } );
+    const double floor_flags = walk( "with has_floor/is_open_air/is_outside", [&]( const tripoint_bub_ms &p ) {
+        sink += here.has_floor( p ) + here.is_open_air( p ) + here.is_outside( p );
+    } );
+    WARN( "cell loop deltas: memory=" << memory - bare << " ms, ter.id=" << terrain - bare
+          << " ms, furn.id=" << furniture - bare << " ms, flags=" << floor_flags - bare << " ms" );
+    CHECK( sink > 0 );
+}
+
+TEST_CASE( "fp3d_3d_prepare_only_needs_the_player_visibility_cache", "[fp3d][multilevel][performance]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int z = 1; z <= 2; ++z ) {
+        for( int x = -3; x <= 3; ++x ) {
+            here.ter_set( player + tripoint_rel_ms( x, -5, z ), ter_str_id( "t_wall" ) );
+            here.ter_set( player + tripoint_rel_ms( x, 5, z ), ter_str_id( "t_floor" ) );
+        }
+        here.ter_set( player + tripoint_rel_ms( 0, 0, z ), ter_str_id( "t_floor" ) );
+    }
+    const auto invalidate_all = [&]() {
+        for( int z = -OVERMAP_DEPTH; z <= OVERMAP_HEIGHT; ++z ) {
+            here.invalidate_map_cache( z );
+        }
+        here.invalidate_visibility_cache();
+    };
+    // The 3D path skips the native 2D map draw, so it only needs the player's
+    // own visibility cache; the native recursive default additionally refreshes
+    // every storey below within fov_3d_z_range (what the 2D isometric renderer
+    // reads).
+    const auto prepare = [&]( bool lower_levels ) {
+        const auto p = you.pos_bub( here );
+        here.build_map_cache( p.z() );
+        const int lowest = std::max( -OVERMAP_DEPTH, p.z() - fp3d_snapshot::below_for_storey( p.z() ) );
+        for( int z = lowest; z < p.z(); ++z ) {
+            here.build_map_cache( z );
+        }
+        here.update_visibility_cache( p.z(), lower_levels );
+    };
+    const auto time_prepare = [&]( bool lower_levels ) {
+        invalidate_all();
+        const auto started = std::chrono::steady_clock::now();
+        prepare( lower_levels );
+        return std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - started ).count();
+    };
+    double with_lower = 0;
+    double without_lower = 0;
+    for( int pass = 0; pass < 3; ++pass ) {
+        with_lower += time_prepare( true );
+        without_lower += time_prepare( false );
+    }
+    WARN( "player-only visibility cache: " << with_lower / 3 << " ms with lower storeys / "
+          << without_lower / 3 << " ms without" );
+    const auto other_cache_hashes = [&]() {
+        std::vector<std::uint64_t> values;
+        for( int z = std::max( -OVERMAP_DEPTH, player.z() - fp3d_snapshot::below_for_storey( player.z() ) );
+             z <= std::min( OVERMAP_HEIGHT, player.z() + fp3d_snapshot::render_above ); ++z ) {
+            const level_cache &cache = here.access_cache( z );
+            values.push_back( hash_floats( cache.seen_cache ) );
+            values.push_back( hash_floats( cache.camera_cache ) );
+            values.push_back( hash_floats( cache.vision_transparency_cache ) );
+            values.push_back( hash_floats( cache.transparency_cache ) );
+            values.push_back( hash_bools( cache.floor_cache ) );
+            values.push_back( hash_bools( cache.outside_cache ) );
+        }
+        return values;
+    };
+    invalidate_all();
+    prepare( true );
+    const std::uint64_t player_recursive = hash_visibility( here.access_cache( player.z() ).visibility_cache );
+    const auto other_recursive = other_cache_hashes();
+    const auto scene_recursive = fp3d_snapshot::capture( you, here );
+    invalidate_all();
+    prepare( false );
+    const std::uint64_t player_only = hash_visibility( here.access_cache( player.z() ).visibility_cache );
+    const auto other_player_only = other_cache_hashes();
+    const auto scene_player_only = fp3d_snapshot::capture( you, here );
+    CHECK( player_recursive == player_only );
+    REQUIRE( other_recursive.size() == other_player_only.size() );
+    CHECK( other_recursive == other_player_only );
+    CHECK( hash_scene( scene_recursive ) == hash_scene( scene_player_only ) );
+    CHECK( scene_recursive.cells.size() == scene_player_only.cells.size() );
+}
+
 TEST_CASE( "fp3d_fast_perception_retains_native_aiming_and_wall_obstruction",
            "[fp3d][vision][performance]" )
 {
@@ -1423,5 +2291,99 @@ TEST_CASE( "fp3d_dark_indoor_surfaces_and_contents_remain_visible", "[fp3d][mult
         return sprite.position == here.get_abs( target ) && sprite.id == "rock";
     } ) );
     CHECK( rng_get_engine() == before );
+}
+
+TEST_CASE( "fp3d_overhead_capture_lifts_only_the_avatar_room_ceiling",
+           "[fp3d][snapshot][overhead]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto origin = you.pos_bub( here );
+    // One closed room around the avatar, with a real floor above it. The
+    // overhead camera has to look into this room from above, so the capture is
+    // asked to lift exactly this region's overhead boundary.
+    for( int y = -2; y <= 2; ++y ) {
+        for( int x = -2; x <= 2; ++x ) {
+            const auto p = origin + tripoint_rel_ms( x, y, 0 );
+            const bool wall = std::abs( x ) == 2 || std::abs( y ) == 2;
+            here.ter_set( p, ter_str_id( wall ? "t_wall" : "t_floor" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_floor" ) );
+        }
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE_FALSE( here.is_outside( origin ) );
+    const auto eye_view = fp3d_snapshot::capture( you, here, fp3d_snapshot::render_above,
+                           fp3d_snapshot::render_below, false );
+    const auto *room = find_cell( eye_view, here.get_abs( origin ) );
+    REQUIRE( room );
+    // The interior region is reported even for the eye camera; only the cut is
+    // view dependent. Nothing about perception changed.
+    CHECK( room->over_avatar_region );
+    CHECK( room->known == fp3d_snapshot::knowledge::visible );
+    CHECK( room->ceiling_present );
+
+    const auto cut = fp3d_snapshot::capture( you, here, fp3d_snapshot::render_above,
+                     fp3d_snapshot::render_below, true );
+    const auto *cut_room = find_cell( cut, here.get_abs( origin ) );
+    REQUIRE( cut_room );
+    CHECK( cut_room->over_avatar_region );
+    CHECK( cut_room->known == fp3d_snapshot::knowledge::visible );
+    CHECK_FALSE( cut_room->ceiling_present );
+    // Floor and walls of the floor the avatar stands on are never removed; the
+    // cut is not "delete everything above z", it is this region's boundary.
+    CHECK( cut_room->kind == fp3d_snapshot::terrain_kind::floor );
+    CHECK( cut_room->floor_present );
+    for( const auto &tile : cut.cells ) {
+        if( tile.over_avatar_region && tile.position.z() > cut.origin.z() ) {
+            FAIL( "the overhead cut kept an overhead cell of the avatar's region" );
+        }
+    }
+    CHECK( cut.cells.size() <= eye_view.cells.size() );
+    // The cut is surgical: every cell it removed belongs to the avatar's own
+    // region above its own storey, and every cell it kept outside that region is
+    // byte-for-byte the same knowledge the eye camera produced. No neighbouring
+    // building, room or remembered tile is touched.
+    size_t removed = 0;
+    for( const auto &tile : eye_view.cells ) {
+        const bool kept = std::any_of( cut.cells.begin(), cut.cells.end(), [&]( const auto & other ) {
+            return other.position == tile.position;
+        } );
+        if( kept ) {
+            continue;
+        }
+        ++removed;
+        CHECK( tile.over_avatar_region );
+        CHECK( tile.position.z() > eye_view.origin.z() );
+    }
+    size_t outside_region = 0;
+    for( const auto &tile : cut.cells ) {
+        if( tile.over_avatar_region ) {
+            continue;
+        }
+        ++outside_region;
+        const auto *before = find_cell( eye_view, tile.position );
+        REQUIRE( before );
+        CHECK( before->terrain == tile.terrain );
+        CHECK( before->kind == tile.kind );
+        CHECK( before->known == tile.known );
+        CHECK( before->ceiling_present == tile.ceiling_present );
+        CHECK( before->exterior_only == tile.exterior_only );
+    }
+    CHECK( outside_region > 0 );
+
+    // The avatar's own tile sprite exists for the overhead drawer only.
+    const auto avatar_sprite = std::find_if( cut.sprites.begin(), cut.sprites.end(),
+    [&]( const auto & sprite ) {
+        return sprite.is_avatar;
+    } );
+    REQUIRE( avatar_sprite != cut.sprites.end() );
+    CHECK( avatar_sprite->position == cut.origin );
+    CHECK( avatar_sprite->id == ( you.male ? "player_male" : "player_female" ) );
+    // It is not a second creature: nothing in the snapshot can be attacked as
+    // the avatar's own body.
+    CHECK( std::count_if( cut.sprites.begin(), cut.sprites.end(), []( const auto & sprite ) {
+        return sprite.is_avatar;
+    } ) == 1 );
 }
 #endif

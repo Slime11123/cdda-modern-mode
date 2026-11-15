@@ -262,6 +262,13 @@ class input_manager
          * Resize & refresh if necessary, process all pending window events, and ignore keypresses
          */
         void pump_events();
+        /**
+         * Same as @ref pump_events, but returns the pending key press instead of
+         * ignoring it. The event is consumed either way, so it can never reach a
+         * later UI; non-key input is dropped exactly like @ref pump_events.
+         * Returns an event of type `error` when no key was pending.
+         */
+        input_event pump_events_capture_key();
 
         /**
          * Wait until the user presses a key. Mouse and similar input is ignored,

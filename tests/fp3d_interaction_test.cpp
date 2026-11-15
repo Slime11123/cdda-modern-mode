@@ -389,6 +389,96 @@ TEST_CASE( "fp3d_camera_ray_selects_surfaces_and_respects_occlusion", "[fp3d][in
         REQUIRE( fp3d_targeting::ray( scene, 0, 0 ) );
     }
 }
+TEST_CASE( "fp3d_overhead_pointer_ray_shares_the_rendered_camera",
+           "[fp3d][interaction][ray][overhead]" )
+{
+    using namespace fp3d_snapshot;
+    scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 100000, -200000, 0 );
+    scene.render_generation = 3;
+    for( int y = -6; y <= 6; ++y ) {
+        for( int x = -6; x <= 6; ++x ) {
+            cell tile;
+            tile.position = scene.origin + tripoint_rel_ms( x, y, 0 );
+            tile.terrain = "t_floor";
+            tile.kind = terrain_kind::floor;
+            scene.cells.push_back( tile );
+        }
+    }
+    fp3d_camera::orbit view;
+    view.azimuth = 0;
+    view.distance = 12;
+    const auto pose = fp3d_camera::orbit_pose( view, 0, 0 );
+    const float reach = 48;
+    // The centre of the viewport is the pivot, i.e. the avatar's own tile.
+    const auto centre = fp3d_targeting::ray( scene, pose.yaw, pose.pitch, pose.eye, reach, 0, 0 );
+    REQUIRE( centre );
+    CHECK( centre->position == scene.origin );
+
+    // Project any world point through the same frustum, then pick it back.
+    // Rendering and picking therefore agree at every screen position, which is
+    // what the overhead pointer needs and the first-person reticle never sees.
+    constexpr float radians = 3.14159265358979323846f / 180;
+    const float cp = std::cos( pose.pitch * radians );
+    const float sp = std::sin( pose.pitch * radians );
+    const float cy = std::cos( pose.yaw * radians );
+    const float sy = std::sin( pose.yaw * radians );
+    const float tangent = fp3d_camera::horizontal_tangent();
+    const float aspect = 1.6f;
+    const auto project = [&]( float wx, float wy, float height, float &nx, float &ny ) {
+        const float dx = wx - pose.eye.x;
+        const float dy = wy - pose.eye.y;
+        const float dz = height - pose.eye.height;
+        const float depth = dx * cp * sy + dy * ( -cp * cy ) + dz * ( -sp );
+        REQUIRE( depth > 0 );
+        const float right = dx * cy + dy * sy;
+        const float up = dx * sp * sy + dy * ( -sp * cy ) + dz * cp;
+        nx = right / ( depth * tangent );
+        ny = up / ( depth * tangent / aspect );
+    };
+    for( const tripoint_rel_ms offset : {
+             tripoint_rel_ms::zero, tripoint_rel_ms::north, tripoint_rel_ms::east,
+             tripoint_rel_ms::south, tripoint_rel_ms::west,
+             tripoint_rel_ms( 2, -3, 0 ), tripoint_rel_ms( -3, 2, 0 )
+         } ) {
+        CAPTURE( offset );
+        float nx = 0;
+        float ny = 0;
+        project( static_cast<float>( offset.x() ), static_cast<float>( offset.y() ), 0, nx, ny );
+        const auto picked = fp3d_targeting::ray( scene, pose.yaw, pose.pitch, pose.eye, reach,
+                            nx, ny, aspect );
+        REQUIRE( picked );
+        CHECK( picked->position == scene.origin + offset );
+        // Same reconstruction also reaches exactly the same answer from the
+        // route the first-person reticle uses, proving no offset is baked in.
+        if( offset == tripoint_rel_ms::zero ) {
+            CHECK( nx == Approx( 0 ).margin( .001 ) );
+            CHECK( ny == Approx( 0 ).margin( .001 ) );
+        }
+    }
+    // The pointer cannot select a remembered or facade-only cell, and nothing
+    // outside the avatar's own storey is ever produced.
+    auto remembered = scene;
+    for( auto &tile : remembered.cells ) {
+        if( tile.position == scene.origin ) {
+            tile.known = knowledge::remembered;
+        }
+    }
+    const auto origin_only = fp3d_targeting::ray( remembered, pose.yaw, pose.pitch, pose.eye,
+                             reach, 0, 0 );
+    CHECK_FALSE( origin_only );
+    auto above = scene;
+    cell upper;
+    upper.position = scene.origin + tripoint_rel_ms::above;
+    upper.terrain = "t_floor";
+    above.cells.push_back( upper );
+    // A cell on the storey above cannot capture a downward pointer ray.
+    const auto downstairs = fp3d_targeting::ray( above, pose.yaw, pose.pitch, pose.eye, reach, 0, 0 );
+    REQUIRE( downstairs );
+    CHECK( downstairs->position == scene.origin );
+    CHECK( downstairs->position.z() == scene.origin.z() );
+}
+
 TEST_CASE( "fp3d_reticle_attack_selects_native_melee_or_targeted_smash",
            "[fp3d][interaction][combat]" )
 {

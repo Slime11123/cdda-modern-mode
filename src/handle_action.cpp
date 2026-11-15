@@ -2735,11 +2735,13 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
 
         case ACTION_FIRE:
 #if defined(ENABLE_FP3D)
-            if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+            if( fp3d_compositor::controls() == fp3d_input::mode::first_person_3d &&
+                !fp3d_compositor::overhead() ) {
                 fp3d_interaction::fire( player_character, here );
                 break;
             }
-            if( mouse_target && fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
+            if( mouse_target && ( fp3d_compositor::controls() == fp3d_input::mode::modern_2d ||
+                                  fp3d_compositor::overhead() ) ) {
                 fire( here.get_abs( *mouse_target ) );
                 break;
             }
@@ -3372,17 +3374,33 @@ bool game::handle_action()
                 return false;
             }
 
-            const std::optional<tripoint_bub_ms> mouse_pos = ctxt.get_coordinates( w_terrain,
-                    ter_view_p.raw().xy(),
-                    true );
-            if( !mouse_pos ) {
-                return false;
+#if defined(ENABLE_FP3D)
+            // The overhead camera has no native terrain window behind it: the
+            // click target is the snapshot cell under the mouse, resolved with
+            // the same camera the frame was drawn with.
+            if( fp3d_compositor::overhead() ) {
+                const auto picked = act == ACTION_SEC_SELECT ?
+                                    fp3d_compositor::take_secondary_select_target() :
+                                    fp3d_compositor::pointer_tile();
+                if( !picked || !here.inbounds( here.get_bub( *picked ) ) ) {
+                    return false;
+                }
+                mouse_target = here.get_bub( *picked );
+            } else
+#endif
+            {
+                const std::optional<tripoint_bub_ms> mouse_pos = ctxt.get_coordinates( w_terrain,
+                        ter_view_p.raw().xy(),
+                        true );
+                if( !mouse_pos ) {
+                    return false;
+                }
+                if( !player_character.sees( here, *mouse_pos ) ) {
+                    // Not clicked in visible terrain
+                    return false;
+                }
+                mouse_target = mouse_pos;
             }
-            if( !player_character.sees( here, *mouse_pos ) ) {
-                // Not clicked in visible terrain
-                return false;
-            }
-            mouse_target = mouse_pos;
 
             if( act == ACTION_SELECT ) {
                 // Note: The following has the potential side effect of
@@ -3393,8 +3411,13 @@ bool game::handle_action()
                 }
             } else if( act == ACTION_SEC_SELECT ) {
 #if defined(ENABLE_FP3D)
-                if( fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
+                if( fp3d_compositor::controls() == fp3d_input::mode::modern_2d ||
+                    fp3d_compositor::overhead() ) {
+                    // Same dropdown, same entries and the same native resolution
+                    // as modern 2D; only the target source differs.
                     const auto choices = fp3d_interaction::context_2d_entries( *mouse_target, player_character, here );
+                    // Nothing the native rules allow here: no menu to show.
+                    if( choices.empty() ) { return false; }
                     const auto choice = fp3d_quick_menu::show_dropdown( choices, ctxt.get_raw_input().mouse_pos );
                     if( !choice ) { return false; }
                     player_character.clear_destination();

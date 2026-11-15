@@ -706176,3 +706176,42 @@ msgctxt "'hand mirror' but upside down"
 msgid "ɹoɹɹᴉɯ puɐɥ"
 msgid_plural "sɹoɹɹᴉɯ puɐɥ"
 msgstr[0] "镜手"
+
+msgid "Initializing the game"
+msgstr "正在初始化游戏"
+
+msgid "Loading the game data"
+msgstr "正在读取游戏数据"
+
+msgid "Reading the menu data"
+msgstr "正在读取菜单数据"
+
+msgid "Reading the character templates"
+msgstr "正在读取角色模板"
+
+msgid "Preparing the background scene"
+msgstr "正在准备背景场景"
+
+msgid "Receiving the background picture"
+msgstr "正在接收背景画面"
+
+msgid "The animated background scene is unavailable; the menu is fully usable."
+msgstr "动态背景场景不可用；主菜单仍可正常使用。"
+
+msgid "Press Esc to skip the background wait and open the menu now."
+msgstr "按 Esc 跳过背景等待，直接打开主菜单。"
+
+msgid "Random name"
+msgstr "随机名称"
+
+msgid "Advanced settings"
+msgstr "高级设置"
+
+msgid "Basic settings"
+msgstr "基本设置"
+
+msgid "Unnamed world"
+msgstr "未命名世界"
+
+msgid "Advanced options were changed; the preset levels no longer match."
+msgstr "高级设置已修改，预设档位不再相符。"

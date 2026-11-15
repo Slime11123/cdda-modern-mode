@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -138,6 +139,26 @@ static const trait_id trait_DEBUG_NIGHTVISION( "DEBUG_NIGHTVISION" );
 
 static tileset_cache ts_cache;
 std::shared_ptr<cata_tiles> tilecontext;
+// Active only while the final character-creation summary is visible.
+static const Character *creation_preview_character = nullptr;
+static catacurses::window creation_preview_window;
+static std::vector<std::pair<std::string, std::string>> creation_preview_gear;
+
+void set_character_creation_preview( const Character *ch, const catacurses::window &preview,
+                                     const std::vector<std::pair<std::string, std::string>> &gear )
+{
+    creation_preview_character = ch;
+    creation_preview_window = preview;
+    creation_preview_gear = gear;
+}
+
+void clear_character_creation_preview()
+{
+    creation_preview_character = nullptr;
+    creation_preview_window = catacurses::window();
+    creation_preview_gear.clear();
+}
+
 std::shared_ptr<cata_tiles> closetilecontext;
 std::shared_ptr<cata_tiles> fartilecontext;
 std::unique_ptr<cata_tiles> overmap_tilecontext;
@@ -159,6 +180,34 @@ static SDL_Window_Ptr window;
 static SDL_Renderer_Ptr renderer;
 static SDL_PixelFormat_Ptr format;
 static SDL_Texture_Ptr display_buffer;
+#if defined(ENABLE_FP3D)
+static bool main_menu_demo_active = false;
+static bool menu_atlas_preloading = false;
+static bool menu_atlas_needs_game_reload = false;
+#include "fp3d_menu_native_capture.inc"
+bool main_menu_tileset_preload_in_progress()
+{
+    return menu_atlas_preloading;
+}
+bool is_main_menu_demo_active()
+{
+    return main_menu_demo_active;
+}
+bool is_native_menu_demo_worker()
+{
+    return menu_demo_worker_mode;
+}
+void set_main_menu_demo_active( bool active )
+{
+    // Only controls the UI backdrop. The sandbox worker owns world state.
+    main_menu_demo_active = active;
+    menu_demo_terrain_updated = false;
+    if( display_buffer ) {
+        SDL_SetTextureBlendMode( display_buffer.get(), active ?
+                                 SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE );
+    }
+}
+#endif
 static GeometryRenderer_Ptr geometry;
 #if defined(__ANDROID__)
 static SDL_Texture_Ptr touch_joystick;
@@ -264,6 +313,11 @@ static bool SetupRenderTarget()
     if( printErrorIf( !display_buffer, "Failed to create window buffer" ) ) {
         return false;
     }
+#if defined(ENABLE_FP3D)
+    // Resizing/recreating the render target must preserve title compositing.
+    SDL_SetTextureBlendMode( display_buffer.get(), main_menu_demo_active ?
+                             SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE );
+#endif
     if( printErrorIf( SDL_SetRenderTarget( renderer.get(), display_buffer.get() ) != 0,
                       "SDL_SetRenderTarget failed" ) ) {
         return false;
@@ -619,10 +673,29 @@ void refresh_display()
 #if defined(ENABLE_FP3D)
     fp3d_regression::turn_probe display_probe( "display_prepare" );
 #endif
+    // The isolated demonstration process streams native CDDA tile frames.
+#if defined(ENABLE_FP3D)
+    menu_demo_publish_worker_frame();
+#endif
     // Select default target (the window), copy rendered buffer
     // there, present it, select the buffer as target again.
     SetRenderTarget( renderer, nullptr );
     ClearScreen();
+#if defined(ENABLE_FP3D)
+    // Reapply after a display-buffer recreation (for example, resizing the window).
+    if( main_menu_demo_active && display_buffer ) {
+        SDL_SetTextureBlendMode( display_buffer.get(), SDL_BLENDMODE_BLEND );
+    }
+    if( main_menu_demo_active ) {
+        int width = 0;
+        int height = 0;
+        SDL_RenderGetLogicalSize( renderer.get(), &width, &height );
+        if( width <= 0 || height <= 0 ) {
+            SDL_GetRendererOutputSize( renderer.get(), &width, &height );
+        }
+        menu_demo_draw_live_frame( width, height, SDL_GetTicks() );
+    }
+#endif
 #if defined(__ANDROID__)
     SDL_Rect dstrect = get_android_render_rect( TERMINAL_WIDTH * fontwidth,
                        TERMINAL_HEIGHT * fontheight );
@@ -764,10 +837,13 @@ static std::optional<std::pair<tripoint_abs_omt, std::string>> get_mission_arrow
 }
 
 std::pair<std::string, bool> cata_tiles::get_omt_id_rotation_and_subtile(
-    const tripoint_abs_omt &omp, int &rota, int &subtile )
+    const tripoint_abs_omt &omp, int &rota, int &subtile, bool existing_only )
 {
-    auto oter_at = []( const tripoint_abs_omt & p ) {
-        oter_id cur_ter = overmap_buffer.ter( p );
+    auto oter_at = [existing_only]( const tripoint_abs_omt & p ) {
+        oter_id cur_ter = existing_only ? overmap_buffer.ter_existing( p ) : overmap_buffer.ter( p );
+        if( cur_ter == oter_id() ) {
+            return oter_id( "unexplored" );
+        }
         om_vision_level vision = overmap_buffer.seen( p );
         if( cur_ter->blends_adjacent( vision ) ) {
             oter_vision::blended_omt info = oter_vision::get_blended_omt_info( p, vision );
@@ -831,6 +907,101 @@ std::pair<std::string, bool> cata_tiles::get_omt_id_rotation_and_subtile(
     return std::make_pair( id.substr( 3 ), is_omt );
 }
 
+#if defined(ENABLE_FP3D)
+SDL_Texture_Ptr cata_tiles::overmap_texture( const tripoint_abs_omt &center, int radius )
+{
+    if( !is_valid() || tile_width <= 0 || tile_height <= 0 || radius < 0 || radius > 32 ) {
+        return {};
+    }
+    const int diameter = radius * 2 + 1;
+    const int width = diameter * tile_width;
+    const int height = diameter * tile_height;
+    SDL_Texture_Ptr image( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
+                           SDL_TEXTUREACCESS_TARGET, width, height ) );
+    if( !image ) {
+        return {};
+    }
+    auto *target = SDL_GetRenderTarget( renderer.get() );
+    SDL_Rect viewport;
+    SDL_Rect clip;
+    SDL_RenderGetViewport( renderer.get(), &viewport );
+    SDL_RenderGetClipRect( renderer.get(), &clip );
+    const bool clipped = SDL_RenderIsClipEnabled( renderer.get() );
+    int logical_width, logical_height;
+    SDL_RenderGetLogicalSize( renderer.get(), &logical_width, &logical_height );
+    const SDL_bool integer_scale = SDL_RenderGetIntegerScale( renderer.get() );
+    float sx, sy;
+    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    Uint8 red, green, blue, alpha;
+    SDL_GetRenderDrawColor( renderer.get(), &red, &green, &blue, &alpha );
+    SDL_BlendMode blend;
+    SDL_GetRenderDrawBlendMode( renderer.get(), &blend );
+    restore_on_out_of_scope old_origin( o );
+    restore_on_out_of_scope old_offset( op );
+    restore_on_out_of_scope old_width( screentile_width );
+    restore_on_out_of_scope old_height( screentile_height );
+    on_out_of_scope restore( [&]() {
+        SDL_SetRenderTarget( renderer.get(), target );
+        SDL_RenderSetIntegerScale( renderer.get(), integer_scale );
+        SDL_RenderSetLogicalSize( renderer.get(), logical_width, logical_height );
+        SDL_RenderSetScale( renderer.get(), sx, sy );
+        SDL_RenderSetViewport( renderer.get(), &viewport );
+        SDL_RenderSetClipRect( renderer.get(), clipped ? &clip : nullptr );
+        SDL_SetRenderDrawColor( renderer.get(), red, green, blue, alpha );
+        SDL_SetRenderDrawBlendMode( renderer.get(), blend );
+    } );
+    if( SDL_SetRenderTarget( renderer.get(), image.get() ) != 0 ) {
+        return {};
+    }
+    SDL_RenderSetLogicalSize( renderer.get(), 0, 0 );
+    SDL_RenderSetScale( renderer.get(), 1, 1 );
+    SDL_RenderSetViewport( renderer.get(), nullptr );
+    const SDL_Rect bounds{ 0, 0, width, height };
+    SDL_RenderSetClipRect( renderer.get(), &bounds );
+    SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 255 );
+    SDL_RenderClear( renderer.get() );
+    const auto origin = center - point( radius, radius );
+    o = origin.xy().raw();
+    op = point::zero;
+    screentile_width = diameter;
+    screentile_height = diameter;
+    // Use the same vision, connection, rotation, variation and sprite layering
+    // as draw_om. Menu markers and travel controls are drawn by the caller.
+    for( int y = 0; y < diameter; ++y ) {
+        for( int x = 0; x < diameter; ++x ) {
+            const auto position = origin + point( x, y );
+            std::string id = "unknown_terrain";
+            auto category = TILE_CATEGORY::OVERMAP_TERRAIN;
+            int rotation = 0;
+            int subtile = -1;
+            const bool known = overmap_buffer.seen( position ) != om_vision_level::unseen &&
+                               overmap_buffer.ter_existing( position ) != oter_id();
+            if( known ) {
+                bool terrain;
+                std::tie( id, terrain ) = get_omt_id_rotation_and_subtile( position, rotation, subtile, true );
+                if( !terrain ) {
+                    category = TILE_CATEGORY::OVERMAP_VISION_LEVEL;
+                }
+            }
+            const auto light = overmap_buffer.is_explored( position ) ? lit_level::LOW : lit_level::LIT;
+            int height_3d = 0;
+            draw_from_id_string( id, category, category == TILE_CATEGORY::OVERMAP_TERRAIN ?
+                                 "overmap_terrain" : "", position, subtile, rotation, light, false, height_3d );
+            if( known ) {
+                const auto extra = overmap_buffer.extra( position );
+                if( !extra.is_empty() && extra->autonote ) {
+                    draw_from_id_string( extra.str(), TILE_CATEGORY::MAP_EXTRA, "map_extra",
+                                         position, 0, 0, light, false );
+                }
+            }
+        }
+    }
+    SDL_SetTextureBlendMode( image.get(), SDL_BLENDMODE_NONE );
+    SDL_RenderFlush( renderer.get() );
+    return image;
+}
+#endif
+
 static point draw_string( Font &font,
                           const SDL_Renderer_Ptr &renderer,
                           const GeometryRenderer_Ptr &geometry,
@@ -850,6 +1021,16 @@ static point draw_string( Font &font,
 }
 
 #if defined(ENABLE_FP3D)
+void draw_fp3d_overlay_text( const std::string &text, const point &position, int color )
+{
+    if( !font ) {
+        return;
+    }
+    point start = position - point( utf8_width( text ) * font->width / 2, font->height );
+    draw_string( *font, renderer, geometry, text, start + point( 1, 1 ), 0 );
+    draw_string( *font, renderer, geometry, text, start, color );
+}
+
 static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &box, int pad )
 {
     if( hud.body_regions.size() != 6 || box.h <= 2 * pad ) {
@@ -1742,6 +1923,22 @@ static bool draw_window( Font_Ptr &font, const catacurses::window &w, const poin
 
     cata_cursesport::WINDOW *const win = w.get<cata_cursesport::WINDOW>();
 
+#if defined(ENABLE_FP3D)
+    // In the title screen the full-screen curses window is an alpha-only text
+    // layer; the live tileset scene is painted behind it at presentation.
+    const bool title_canvas = main_menu_demo_active && win->pos.x == 0 && win->pos.y == 0 &&
+                              win->width >= TERMX - 1 && win->height >= TERMY - 1;
+    if( title_canvas ) {
+        Uint8 r, g, b, a;
+        SDL_GetRenderDrawColor( renderer.get(), &r, &g, &b, &a );
+        SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 0 );
+        SDL_RenderClear( renderer.get() );
+        SDL_SetRenderDrawColor( renderer.get(), r, g, b, a );
+    }
+#else
+    constexpr bool title_canvas = false;
+#endif
+
     // TODO: Get this from UTF system to make sure it is exactly the kind of space we need
     static const std::string space_string = " ";
 
@@ -1757,9 +1954,11 @@ static bool draw_window( Font_Ptr &font, const catacurses::window &w, const poin
         // only clearing those lines that are touched, we avoid
         // clearing lines that were already drawn in a previous
         // window but are untouched in this one.
-        geometry->rect( renderer, point( win->pos.x * font->width, ( win->pos.y + j ) * font->height ),
-                        win->width * font->width, font->height,
-                        color_as_sdl( catacurses::black ) );
+        if( !title_canvas ) {
+            geometry->rect( renderer, point( win->pos.x * font->width, ( win->pos.y + j ) * font->height ),
+                            win->width * font->width, font->height,
+                            color_as_sdl( catacurses::black ) );
+        }
         update = true;
         win->line[j].touched = false;
         for( int i = 0; i < win->width; i++ ) {
@@ -1972,6 +2171,15 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
         if( pixel_offset != point::zero ) {
             SDL_RenderSetClipRect( renderer.get(), nullptr );
         }
+#if defined(ENABLE_FP3D)
+        // Only real gameplay's 2D terrain window feeds the title replay.
+        if( menu_demo_worker_mode ) {
+            set_menu_demo_terrain_bounds( { win->pos.x * fontwidth,
+                                            win->pos.y * fontheight,
+                                            TERRAIN_WINDOW_TERM_WIDTH * font->width,
+                                            TERRAIN_WINDOW_TERM_HEIGHT * font->height } );
+        }
+#endif
         update = true;
     } else if( g && w == g->w_terrain && map_font ) {
         // When the terrain updates, predraw a black space around its edge
@@ -2023,6 +2231,19 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
     } else {
         // Either not using tiles (tilecontext) or not the w_terrain window.
         update = draw_window( font, w );
+    }
+    // Render inside the preview curses window, not after presenting the screen.
+    // This preserves correct layering when creation dialogs open over it.
+    if( update && creation_preview_character && w == creation_preview_window &&
+        tilecontext && use_tiles && win->width > 6 && win->height > 8 ) {
+        const SDL_Rect bounds = {
+            ( win->pos.x + 2 ) * fontwidth,
+            ( win->pos.y + 3 ) * fontheight,
+            ( win->width - 4 ) * fontwidth,
+            ( win->height - 6 ) * fontheight
+        };
+        tilecontext->draw_character_preview( *creation_preview_character, bounds,
+                                             creation_preview_gear );
     }
     if( update ) {
         needupdate = true;
@@ -4464,14 +4685,46 @@ void catacurses::init_interface()
 }
 
 // This is supposed to be called from init.cpp, and only from there.
+#if defined(ENABLE_FP3D)
+bool prepare_main_menu_demo_tileset()
+{
+    if( !use_tiles || !closetilecontext ) {
+        return false;
+    }
+    try {
+        // Furniture and terrain JSON is not initialized on the title screen.
+        // Suppress premature validation and reload once game data is ready.
+        menu_atlas_preloading = true;
+        on_out_of_scope finish_preloading( []() { menu_atlas_preloading = false; } );
+        closetilecontext->load_tileset( get_option<std::string>( "TILES" ),
+                                        /*precheck=*/false, /*force=*/false,
+                                        /*pump_events=*/true, /*terrain=*/false );
+        tilecontext = closetilecontext;
+        menu_atlas_needs_game_reload = true;
+        return tilecontext->is_valid();
+    } catch( const std::exception &error ) {
+        dbg( D_ERROR ) << "2D menu tileset failed to load: " << error.what();
+        return false;
+    }
+}
+#endif
+
 void load_tileset()
 {
     if( !tilecontext || !use_tiles ) {
         return;
     }
     closetilecontext->load_tileset( get_option<std::string>( "TILES" ),
-                                    /*precheck=*/false, /*force=*/false,
+                                    /*precheck=*/false,
+#if defined(ENABLE_FP3D)
+                                    /*force=*/menu_atlas_needs_game_reload,
+#else
+                                    /*force=*/false,
+#endif
                                     /*pump_events=*/true, /*terrain=*/false );
+#if defined(ENABLE_FP3D)
+    menu_atlas_needs_game_reload = false;
+#endif
     if( use_far_tiles ) {
         fartilecontext->load_tileset( get_option<std::string>( "DISTANT_TILES" ),
                                       /*precheck=*/false, /*force=*/false,
@@ -4531,6 +4784,24 @@ void input_manager::pump_events()
 
     last_input = input_event();
     previously_pressed_key = 0;
+}
+
+input_event input_manager::pump_events_capture_key()
+{
+    if( test_mode ) {
+        return input_event();
+    }
+
+    // Handle all events like pump_events(), but hand back the key press that
+    // arrived instead of dropping it. The event is still consumed here, so it can
+    // never turn into a menu action afterwards.
+    last_input = input_event();
+    CheckMessages();
+    const input_event result = last_input;
+
+    last_input = input_event();
+    previously_pressed_key = 0;
+    return result;
 }
 
 // This is how we're actually going to handle input events, SDL getch

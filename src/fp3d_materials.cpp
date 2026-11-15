@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "cata_tiles.h"
+#include "cursesport.h"
 #include "debug.h"
 #include "field_type.h"
 #include "fp3d_snapshot.h"
@@ -17,6 +18,7 @@
 #include "item.h"
 #include "itype.h"
 #include "mtype.h"
+#include "sdltiles.h"
 #include "type_id.h"
 #include "veh_type.h"
 
@@ -182,6 +184,12 @@ bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot )
     return painted;
 }
 } // namespace
+
+std::string terrain_key( const fp3d_snapshot::cell &tile )
+{
+    return tile.roof_connections < 0 ? tile.terrain :
+           "$roof:" + std::to_string( tile.roof_connections ) + ":" + tile.terrain;
+}
 
 sprite_choice choose_sprites( const tile_type &tile, const std::string &id )
 {
@@ -434,6 +442,11 @@ std::string vehicle_key( const fp3d_vehicle::part_view &part )
            ( part.variant.empty() ? "" : "#" + part.variant );
 }
 
+std::string ground_field_key( const fp3d_snapshot::ground_field &field )
+{
+    return "$field:" + field.id + "#" + std::to_string( field.intensity );
+}
+
 void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview )
 {
     if( !selected || !renderer_owner || !*renderer_owner || failed ) {
@@ -449,17 +462,44 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         auxiliary_cache.clear();
         vehicle_colors.clear();
     }
+    // Material requests depend on types, not on the number of equal wall
+    // tiles. Retained geometry also retains these representative pointers.
+    static unsigned request_geometry = 0;
+    static const fp3d_snapshot::cell *request_allocation = nullptr;
+    static std::vector<const fp3d_snapshot::cell *> material_cells;
+    if( !scene.geometry_generation || request_geometry != scene.geometry_generation ||
+        request_allocation != scene.cells.data() ) {
+        material_cells.clear();
+        std::unordered_set<std::string> unique;
+        for( const auto &tile : scene.cells ) {
+            std::string key = tile.terrain;
+            const auto append = [&]( const std::string &value ) { key.push_back( 0 ); key += value; };
+            append( std::to_string( tile.roof_connections ) );
+            append( std::to_string( static_cast<unsigned>( tile.kind ) ) );
+            append( tile.vegetation );
+            append( tile.ceiling_surface );
+            append( tile.ceiling_present ? "1" : "0" );
+            append( tile.furniture ? tile.furniture->id : "" );
+            if( tile.furniture ) { append( std::to_string( static_cast<unsigned>( tile.furniture->shape ) ) ); }
+            for( const auto &field : tile.ground_fields ) { append( ground_field_key( field ) ); }
+            if( unique.insert( std::move( key ) ).second ) { material_cells.push_back( &tile ); }
+        }
+        request_geometry = scene.geometry_generation;
+        request_allocation = scene.cells.data();
+    }
     struct request {
         std::string key;
         const fp3d_snapshot::sprite *image = nullptr;
         bool plant = false;
         bool window = false;
         bool furniture = false;
-        bool blood = false;
+        bool field = false;
         bool fence = false;
         bool vehicle = false;
         std::string vehicle_looks_like = {};
         bool status = false; // Camera-facing badge using a native tileset icon.
+        std::string field_id = {};
+        int field_intensity = 1;
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
@@ -484,7 +524,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             queue_status( "zombie_revival_indicator" );
         }
         if( image.alerted ) {
-            queue_status( "overlay_effect_attention" );
+            queue_status( "overlay_hostile_sees_player" );
         }
         if( image.bleeding ) {
             queue_status( "overlay_effect_bleed" );
@@ -527,10 +567,18 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 pending.push_back( { std::move( key ), nullptr, false, false, true } );
             }
         }
-        if( !tile.blood.empty() && pending.size() < max_slots ) {
-            std::string key = "$blood:" + tile.blood;
+        for( const auto &field : tile.ground_fields ) {
+            std::string key = ground_field_key( field );
+            if( pending.size() >= max_slots ) {
+                break;
+            }
             if( model_keys.insert( key ).second ) {
-                pending.push_back( { std::move( key ), nullptr, false, false, false, true } );
+                request entry;
+                entry.key = std::move( key );
+                entry.field = true;
+                entry.field_id = field.id;
+                entry.field_intensity = field.intensity;
+                pending.push_back( std::move( entry ) );
             }
         }
     };
@@ -540,8 +588,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     if( preview ) {
         prioritize_cell( *preview );
     }
-    for( const auto &tile : scene.cells ) {
-        prioritize_cell( tile );
+    for( const auto *tile : material_cells ) {
+        prioritize_cell( *tile );
     }
     // Every native-visible vehicle shares this atlas with the terrain and
     // its selected tileset. One slot per vpart_id, never one per vehicle.
@@ -620,7 +668,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 pending.back().plant = true;
             }
         } else if( tile.kind != fp3d_snapshot::terrain_kind::glass ) {
-            add( tile.terrain, nullptr );
+            add( terrain_key( tile ), nullptr );
         }
         if( !tile.ceiling_surface.empty() ) {
             // An exposed metal walkway can be visible from underneath even
@@ -647,15 +695,15 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     if( preview ) {
         add_cell( *preview );
     }
-    for( const auto &tile : scene.cells ) {
-        add_cell( tile );
+    for( const auto *tile : material_cells ) {
+        add_cell( *tile );
     }
     for( const auto &patch : scene.landscape ) {
         if( patch.ground_present ) {
             add( patch.terrain, nullptr );
         }
         if( patch.building_height > 0 ) {
-            add( "t_wall", nullptr );
+            add( patch.wall_material, nullptr );
             add( "t_flat_roof", nullptr );
         }
         if( patch.wooded ) {
@@ -701,7 +749,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         const unsigned index = slots.size();
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
-        const bool transparent = entry.image || entry.plant || entry.window || entry.blood ||
+        const bool transparent = entry.image || entry.plant || entry.window || entry.field ||
                                  entry.fence || entry.vehicle || entry.status;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
@@ -766,9 +814,17 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             if( auto found = selected->find_tile_type_by_season( id.substr( 8 ), season ) ) {
                 tile = &found->tile();
             }
-        } else if( entry.blood ) {
-            std::string name = id.substr( 7 );
-            for( int tries = 0; tries < 10 && !name.empty(); ++tries ) {
+        } else if( entry.field ) {
+            std::string name = entry.field_id;
+            std::unordered_set<std::string> visited;
+            for( int tries = 0; tries < 10 && !name.empty() &&
+                 visited.insert( name ).second; ++tries ) {
+                // Match the native field intensity convention before base art.
+                if( auto found = selected->find_tile_type_by_season(
+                                     name + "_int" + std::to_string( entry.field_intensity ), season ) ) {
+                    tile = &found->tile();
+                    break;
+                }
                 if( auto found = selected->find_tile_type_by_season( name, season ) ) {
                     tile = &found->tile();
                     break;
@@ -790,19 +846,123 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 tile = wood;
             }
         }
+        int roof_rotation = 0;
+        const bool roof_art = id.compare( 0, 6, "$roof:" ) == 0;
+        if( roof_art ) {
+            const auto separator = id.find( ':', 6 );
+            const int mask = std::stoi( id.substr( 6, separator - 6 ) ) & 15;
+            const std::string name = id.substr( separator + 1 );
+            static const std::array<const char *, 16> subtiles{
+                "unconnected", "end_piece", "end_piece", "corner",
+                "end_piece", "corner", "edge", "t_connection",
+                "end_piece", "edge", "corner", "t_connection",
+                "corner", "t_connection", "t_connection", "center" };
+            static const std::array<int, 16> rotations{ 0, 0, 1, 0, 3, 3, 1, 0,
+                                                       2, 0, 1, 1, 2, 3, 2, 0 };
+            tile = resolve_terrain( *selected, name, season );
+            if( auto connected = selected->find_tile_type_by_season(
+                    name + "_" + subtiles[mask], season ) ) {
+                tile = &connected->tile();
+                roof_rotation = rotations[mask];
+            }
+        }
         bool painted = false;
         if( tile ) {
             const auto sprites = choose_sprites( *tile, id );
-            if( ( !entry.plant && !entry.window && !entry.blood && !entry.fence ) ||
+            if( ( !entry.plant && !entry.window && !entry.field && !entry.fence ) ||
                 ( entry.window && sprites.foreground < 0 ) ) {
                 painted = paint( sprites.background, slot );
             }
-            painted = paint( sprites.foreground, slot ) || painted;
+            if( roof_art ) {
+                // No sprite padding between continuous roof-edge tiles.
+                for( bool foreground : { false, true } ) {
+                    const auto *choices = ( foreground ? tile->fg : tile->bg ).pick( stable_seed( id ) );
+                    if( !choices || choices->empty() ) { continue; }
+                    const int index = ( *choices )[choices->size() > 1 ?
+                                      roof_rotation % choices->size() : 0];
+                    const texture *source = selected->get_tile( index );
+                    if( source ) {
+                        const double angle = foreground && choices->size() == 1 ? -90.0 * roof_rotation : 0;
+                        painted = source->render_copy_ex( *renderer_owner, &slot,
+                                  angle, nullptr, SDL_FLIP_NONE ) == 0 || painted;
+                    }
+                }
+            } else {
+                painted = paint( sprites.foreground, slot ) || painted;
+            }
         }
         if( entry.image ) {
             painted = paint_sprite( *entry.image, slot );
         }
-        if( !painted && entry.vehicle ) {
+        if( painted && entry.status ) {
+            // Native badges are positioned within a full creature-sized canvas.
+            // Crop transparent padding before placing them on the small 3D quad.
+            std::array<Uint8, slot_size * slot_size * 4> pixels{};
+            if( SDL_RenderReadPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32,
+                                      pixels.data(), slot_size * 4 ) == 0 ) {
+                int left = slot_size;
+                int top = slot_size;
+                int right = -1;
+                int bottom = -1;
+                for( int y = 0; y < slot_size; ++y ) {
+                    for( int x = 0; x < slot_size; ++x ) {
+                        if( pixels[( y * slot_size + x ) * 4 + 3] > 0 ) {
+                            left = std::min( left, x );
+                            top = std::min( top, y );
+                            right = std::max( right, x );
+                            bottom = std::max( bottom, y );
+                        }
+                    }
+                }
+                if( right >= left && bottom >= top ) {
+                    SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(),
+                                             slot_size, slot_size, 32, slot_size * 4, SDL_PIXELFORMAT_RGBA32 ) );
+                    SDL_Texture_Ptr cropped( surface ? SDL_CreateTextureFromSurface( renderer, surface.get() ) :
+                                             nullptr );
+                    if( cropped ) {
+                        SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
+                        SDL_RenderFillRect( renderer, &slot );
+                        const SDL_Rect source{ left, top, right - left + 1, bottom - top + 1 };
+                        const float scale = ( slot_size - 4.f ) / std::max( source.w, source.h );
+                        const int w = std::max( 1, static_cast<int>( source.w * scale ) );
+                        const int h = std::max( 1, static_cast<int>( source.h * scale ) );
+                        const SDL_Rect dest{ slot.x + ( slot_size - w ) / 2,
+                                             slot.y + ( slot_size - h ) / 2, w, h };
+                        SDL_RenderCopy( renderer, cropped.get(), &source, &dest );
+                    }
+                }
+            }
+        }
+        if( !painted && entry.field ) {
+            // Sparse packs may omit both the field and its looks_like chain.
+            // Retain a readable transparent covering in the native field colour.
+            const field_type_str_id definition( entry.field_id );
+            if( definition.is_valid() ) {
+                const nc_color native = definition->get_intensity_level( entry.field_intensity - 1 ).color;
+                const auto &pair = cata_cursesport::colorpairs[native.to_color_pair_index()];
+                const SDL_Color shade = windowsPalette[( pair.FG != 0 ? pair.FG : pair.BG ) +
+                                                       ( native.is_bold() ? 8 : 0 )];
+                SDL_SetRenderDrawColor( renderer, shade.r, shade.g, shade.b, 210 );
+                const bool web = entry.field_id.find( "web" ) != std::string::npos;
+                const bool debris = entry.field_id.find( "gibs" ) != std::string::npos ||
+                                    entry.field_id == "fd_rubble";
+                for( int n = 0; n < 4 + 3 * entry.field_intensity; ++n ) {
+                    const int x = slot.x + 8 + ( n * 19 ) % 44;
+                    const int y = slot.y + 8 + ( n * 29 ) % 44;
+                    if( web ) {
+                        SDL_RenderDrawLine( renderer, x, slot.y + 5, slot.x + 59 - ( n * 11 ) % 48,
+                                            slot.y + 59 );
+                        SDL_RenderDrawLine( renderer, slot.x + 5, y, slot.x + 59,
+                                            slot.y + 59 - ( n * 13 ) % 48 );
+                    } else {
+                        const int size = debris ? 4 + n % 5 : 7 + 2 * entry.field_intensity;
+                        const SDL_Rect patch{ x - size / 2, y - size / 2, size,
+                                              debris ? size : size * 2 / 3 };
+                        SDL_RenderFillRect( renderer, &patch );
+                    }
+                }
+            }
+        } else if( !painted && entry.vehicle ) {
             // VT fallback is a readable neutral solid, not a magenta tile.
             // It must never remove a visible vehicle from the scene.
             ++missing;
@@ -925,10 +1085,11 @@ std::optional<uv_rect> lookup( const std::string &id )
     }
     const float x = ( it->second % slots_per_row ) * slot_size;
     const float y = ( it->second / slots_per_row ) * slot_size;
-    return uv_rect{ ( x + 2.5f ) / atlas_size * texture_width,
-                    ( y + 2.5f ) / atlas_size * texture_height,
-                    ( x + slot_size - 2.5f ) / atlas_size * texture_width,
-                    ( y + slot_size - 2.5f ) / atlas_size * texture_height };
+    const float inset = id.compare( 0, 6, "$roof:" ) == 0 ? .5f : 2.5f;
+    return uv_rect{ ( x + inset ) / atlas_size * texture_width,
+                    ( y + inset ) / atlas_size * texture_height,
+                    ( x + slot_size - inset ) / atlas_size * texture_width,
+                    ( y + slot_size - inset ) / atlas_size * texture_height };
 }
 
 std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
@@ -941,10 +1102,11 @@ std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
     // colour atlas: same per-material UVs across all three atlas textures.
     const float x = ( it->second % slots_per_row ) * slot_size;
     const float y = ( it->second / slots_per_row ) * slot_size;
-    return uv_rect{ ( x + 2.5f ) / atlas_size * texture_width,
-                    ( y + 2.5f ) / atlas_size * texture_height,
-                    ( x + slot_size - 2.5f ) / atlas_size * texture_width,
-                    ( y + slot_size - 2.5f ) / atlas_size * texture_height };
+    const float inset = id.compare( 0, 6, "$roof:" ) == 0 ? .5f : 2.5f;
+    return uv_rect{ ( x + inset ) / atlas_size * texture_width,
+                    ( y + inset ) / atlas_size * texture_height,
+                    ( x + slot_size - inset ) / atlas_size * texture_width,
+                    ( y + slot_size - inset ) / atlas_size * texture_height };
 }
 
 const fp3d_material_aux::maps *auxiliary( const std::string &id )
@@ -996,6 +1158,60 @@ unsigned prefetch_auxiliary( unsigned budget )
             continue;
         }
         if( auxiliary( id ) ) {
+            ++generated;
+        }
+    }
+    return generated;
+}
+
+unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
+                                     unsigned budget )
+{
+    if( budget == 0 || !atlas || failed || bound ) {
+        return 0;
+    }
+    struct candidate {
+        int distance = 0;
+        std::string id;
+    };
+    std::vector<candidate> wanted;
+    std::unordered_set<std::string> found;
+    for( const auto &cell : scene.cells ) {
+        if( cell.known != fp3d_snapshot::knowledge::visible || cell.exterior_only ) {
+            continue;
+        }
+        const auto relative = cell.position - scene.origin;
+        const int dx = std::abs( relative.x() );
+        const int dz = std::abs( relative.y() );
+        if( dx > 32 || dz > 32 || std::abs( relative.z() ) > 3 ) {
+            continue;
+        }
+        const std::string &key = cell.terrain;
+        if( slots.find( key ) == slots.end() ||
+            auxiliary_cache.find( key ) != auxiliary_cache.end() ||
+            !found.insert( key ).second ) {
+            continue;
+        }
+        const auto properties = fp3d_material_aux::classify( key );
+        if( properties.normal_strength == 0.0f && properties.metallic == 0.0f ) {
+            continue;
+        }
+        // Priority for nearby wall faces: their large, screen-filling texels
+        // make an arbitrary atlas-order warmup particularly ineffective.
+        const bool wall = cell.kind == fp3d_snapshot::terrain_kind::wall;
+        wanted.push_back( { dx * dx + dz * dz - ( wall ? 8 : 0 ), key } );
+    }
+    std::sort( wanted.begin(), wanted.end(), []( const candidate &a,
+    const candidate &b ) {
+        return a.distance != b.distance ? a.distance < b.distance :
+               a.id < b.id;
+    } );
+    unsigned generated = 0;
+    for( const auto &entry : wanted ) {
+        if( generated >= budget ) {
+            break;
+        }
+        if( auxiliary( entry.id ) ) {
             ++generated;
         }
     }
@@ -1075,6 +1291,9 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         result.top = crop( 3, 3, 28, 13 );
         result.front = crop( 1, 18, 30, 30 );
         result.side = crop( 2, 19, 4, 29 );
+    } else if( uses( "f_solar_unit" ) || uses( "f_solar_unit_v2" ) ) {
+        result.top = part_index < 2 ? crop( 3, 8, 6, 20 ) : crop( 15, 5, 16, 22 );
+        result.front = result.side = crop( 15, 5, 16, 22 );
     } else if( uses( "f_locker" ) ) {
         // Preserve both doors together on the cabinet front. The top band
         // belongs only on top; a small panel patch supplies unstriped side metal.
@@ -1236,8 +1455,29 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
         if( part_index >= 1 ) {
             result.top = result.front = result.side = crop( 11, 11, 14, 14 );
         }
+    } else if( id == "f_battery" ) {
+        // A battery has steel outer rails, recessed dark centre and two
+        // different indicator lights.  The 2D sprite already contains a
+        // pseudo-3D rim: only sample *its corresponding physical component*.
+        const auto dark_steel = crop( 3, 9, 5, 22 );
+        const auto silver = crop( 8, 4, 23, 6 );
+        const auto black = crop( 11, 15, 12, 17 ); // Plain dark panel; no duplicate painted LEDs.
+        result.top = result.front = result.side = dark_steel;
+        if( part_index == 3 || part_index == 4 ) {
+            result.top = result.front = result.side = silver;
+        } else if( part_index == 5 ) {
+            result.top = result.front = result.side = black;
+        } else if( part_index == 6 || part_index == 7 ) {
+            result.top = result.front = result.side = crop( 7, 12, 9, 21 );
+        } else if( part_index == 8 ) {
+            result.top = result.front = result.side = crop( 14, 9, 18, 13 );
+        } else if( part_index == 9 ) {
+            result.top = result.front = result.side = crop( 14, 18, 18, 22 );
+        } else if( part_index >= 10 ) {
+            result.top = result.front = result.side = crop( 10, 3, 11, 5 );
+        }
     } else if( id == "f_street_light" || id == "f_traffic_light" ||
-               id == "f_floor_lamp" ) {
+               id == "f_floor_lamp" || id == "f_floor_lamp_on" ) {
         // Keep the real metal pole neutral; the complete large 2D sprite
         // contains a substantial cast shadow and must not be extruded.
         if( const auto metal = lookup( "t_metal_floor" ) ) {
@@ -1250,9 +1490,22 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
             result.top = crop( 13, 7, 20, 10 );
             result.front = crop( 12, 8, 22, 27 );
             result.side = crop( 12, 11, 14, 23 );
-        } else if( id == "f_floor_lamp" && part_index >= 2 ) {
-            result.top = crop( 8, 5, 24, 12 );
-            result.front = result.side = crop( 8, 10, 24, 18 );
+        } else if( id == "f_floor_lamp" || id == "f_floor_lamp_on" ) {
+            // The source shade is trapezoidal and the powered frame includes
+            // a huge fake 2D light halo.  Only sample opaque shade pixels.
+            const auto metal = crop( 14, 20, 18, 25 );
+            result.top = result.front = result.side = metal;
+            if( part_index == 0 || part_index == 1 ) {
+                result.top = crop( 12, 27, 20, 28 );
+                result.front = result.side = crop( 12, 28, 20, 30 );
+            } else if( part_index == 3 ) {
+                result.top = crop( 13, 3, 19, 5 );
+                result.front = result.side = crop( 13, 6, 19, 11 );
+            } else if( part_index == 4 ) {
+                result.top = result.front = result.side = crop( 8, 12, 23, 13 );
+            } else if( part_index == 5 ) {
+                result.top = result.front = result.side = crop( 13, 3, 19, 4 );
+            }
         }
     } else if( uses( "f_workbench" ) ) {
         // Workbench sprite: top-down patterned surface plus a fake shadow.
@@ -1422,6 +1675,73 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
             result.back = result.front;
         } else {
             result.top = result.front = result.side = wood;
+        }
+    } else if( const auto catalog = fp3d_furniture::describe( id );
+               catalog && static_cast<unsigned>( catalog->shape ) >=
+               static_cast<unsigned>( fp3d_furniture::kind::udp_alien ) ) {
+        // UndeadPeople art frequently combines a drawn top plane above a
+        // frontal pseudo-3D elevation. These must be split in UV space:
+        // the whole image must NEVER be wrapped around all six cuboid faces.
+        // Our generic extraction keeps the silhouette's top and lower body
+        // separate, and supplies narrow neutral material strips for 3D sides.
+        const auto &shape = catalog->shape;
+        const bool flat = shape == fp3d_furniture::kind::udp_mat ||
+                          shape == fp3d_furniture::kind::udp_ground_cable ||
+                          shape == fp3d_furniture::kind::udp_alien_scar ||
+                          shape == fp3d_furniture::kind::udp_bridge_flat ||
+                          shape == fp3d_furniture::kind::udp_ash_decal ||
+                          shape == fp3d_furniture::kind::udp_leaf_litter ||
+                          shape == fp3d_furniture::kind::udp_rubble;
+        const bool bale = shape == fp3d_furniture::kind::udp_hay_bale ||
+                          shape == fp3d_furniture::kind::udp_archery_bale;
+        const bool chimney = shape == fp3d_furniture::kind::udp_chimney;
+        const bool scanner = shape == fp3d_furniture::kind::udp_mri ||
+                             shape == fp3d_furniture::kind::udp_ct;
+        const auto top = flat ? crop( 2, 2, 29, 29 ) :
+                         bale ? crop( 9, 9, 23, 21 ) :
+                         scanner ? crop( 8, 4, 25, 14 ) :
+                         crop( 5, 3, 26, 11 );
+        const auto front = bale ? crop( 7, 9, 26, 26 ) :
+                           scanner ? crop( 6, 7, 26, 26 ) :
+                           crop( 5, 13, 26, 28 );
+        const auto neutral = flat ? top :
+                             bale ? crop( 7, 10, 12, 19 ) :
+                             scanner ? crop( 3, 13, 7, 22 ) :
+                             crop( 9, 16, 13, 22 );
+        result.top = top;
+        result.front = front;
+        result.side = result.back = neutral;
+        if( chimney ) {
+            // Stone shaft and painted red tile roof are DIFFERENT regions.
+            const bool roof = part_index >= 2;
+            result.top = roof ? crop( 8, 2, 23, 7 ) : crop( 10, 15, 22, 22 );
+            result.front = roof ? crop( 7, 3, 25, 12 ) : crop( 11, 14, 21, 28 );
+            result.side = result.back = roof ? crop( 9, 5, 15, 10 ) :
+                                                crop( 11, 17, 15, 24 );
+        }
+        if( shape == fp3d_furniture::kind::udp_archery_bale ) {
+            // Use the bulls-eye on the end cap and straw for the curved drum.
+            result.front = crop( 6, 9, 26, 26 );
+            result.side = result.back = crop( 20, 11, 27, 24 );
+        }
+        if( shape == fp3d_furniture::kind::udp_punching_bag && part_index >= 3 &&
+            part_index <= 4 ) {
+            result.top = result.front = result.side = result.back =
+                crop( 10, 12, 21, 24 );
+        }
+        // Supporting legs/bolts/rails use actual color patches, not a tiny
+        // repetition of the original entire painted cabinet/medical scanner.
+        if( part_index != 0 ) {
+            const auto &pieces = fp3d_furniture::parts( shape );
+            if( part_index < pieces.size() ) {
+                const auto &p = pieces[part_index];
+                const bool front_panel = p.z > .20f && p.depth < .20f &&
+                                         p.top - p.bottom > .16f;
+                if( !chimney ) {
+                    result.front = front_panel ? front : neutral;
+                    result.top = p.width > .35f && p.depth > .25f ? top : neutral;
+                }
+            }
         }
     }
     return result;

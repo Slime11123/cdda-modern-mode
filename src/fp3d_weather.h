@@ -26,7 +26,12 @@ state sample( const weather_type &type, int windspeed, int winddirection,
               bool lightning, bool outdoors );
 // A native lightning event gets one brief presentation pulse even while paused.
 float flash( const state &weather, std::uint64_t milliseconds );
-void begin_atmosphere( const state &weather, float daylight, float flash );
+// far_scale stretches the linear fog window. The overhead camera looks at the
+// ground from tens of tiles away, so the eye-height window would fade almost the
+// whole frame into the sky; the renderer passes the actual eye height ratio.
+// Presentation only: it never changes native perception or weather state.
+void begin_atmosphere( const state &weather, float daylight, float flash,
+                       float far_scale = 1.0f );
 void draw( const state &weather, const tripoint_abs_ms &origin, float yaw,
            float daylight, std::uint64_t milliseconds );
 }

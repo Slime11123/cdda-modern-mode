@@ -44,6 +44,7 @@ GLuint attached_depth = 0;
 int target_width = 0;
 int target_height = 0;
 bool unavailable = false;
+bool resolved = false;
 result last;
 
 template<typename T>
@@ -55,7 +56,8 @@ bool load( T &f, const char *name )
 
 bool resolve()
 {
-    return load( gen_fbos, "glGenFramebuffers" ) &&
+    if( resolved ) return true;
+    resolved = load( gen_fbos, "glGenFramebuffers" ) &&
            load( bind_fbo, "glBindFramebuffer" ) &&
            load( delete_fbos, "glDeleteFramebuffers" ) &&
            load( attach_tex, "glFramebufferTexture2D" ) &&
@@ -75,6 +77,7 @@ bool resolve()
            load( uniform_int, "glUniform1i" ) &&
            load( uniform_vec3, "glUniform3f" ) &&
            load( active_texture, "glActiveTexture" );
+    return resolved;
 }
 
 const char *fragment_source = R"GLSL(
@@ -320,7 +323,10 @@ result render( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitc
         }
         const bool treetop = cell.terrain.compare( 0, 9, "t_treetop" ) == 0;
         const bool floor_ok = cell.floor_present && !cell.is_ramp && !cell.goes_down &&
-                              cell.terrain != "t_radio_tower" && !treetop;
+                              cell.terrain != "t_radio_tower" && !treetop &&
+                              // Roof glass is drawn as a blended skylight pane,
+                              // so it must not receive an opaque surface pass.
+                              !fp3d_snapshot::is_glass_roof( cell.terrain );
         if( floor_ok ) {
             const bool door = cell.kind == fp3d_snapshot::terrain_kind::closed_door ||
                               cell.kind == fp3d_snapshot::terrain_kind::open_door ||
@@ -440,6 +446,7 @@ void release()
     surface_fbo = surface_texture = shader_program = fragment_shader = attached_depth = 0;
     target_width = target_height = 0;
     unavailable = false;
+    resolved = false;
     last = {};
 }
 } // namespace fp3d_surface_pass

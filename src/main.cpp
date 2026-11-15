@@ -15,10 +15,13 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,6 +33,7 @@
 
 #include <flatbuffers/util.h>
 
+#include "avatar.h"
 #include "cached_options.h"
 #include "cata_path.h"
 #include "color.h"
@@ -47,7 +51,15 @@
 #include "get_version.h"
 #include "help.h"
 #include "input.h"
+#include "loading_ui.h"
 #include "main_menu.h"
+#include "map.h"
+#include "npc.h"
+#include "overmapbuffer.h"
+#include "sdltiles.h"
+#include "vehicle.h"
+#include "veh_type.h"
+#include "worldfactory.h"
 #include "mapsharing.h"
 #include "memory_fast.h"
 #include "options.h"
@@ -60,6 +72,11 @@
 #include "type_id.h"
 #include "ui_manager.h"
 #include "cata_imgui.h"
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_menu_demo_worker.inc"
+#include "fp3d_menu_startup.h"
+#endif
 
 #if defined(EMSCRIPTEN)
 #include <emscripten.h>
@@ -277,6 +294,11 @@ struct cli_opts {
     std::vector<std::string> opts;
     std::string world; /** if set try to load first save in this world on startup */
     bool disable_ascii_art = false;
+    std::string menu_demo_worker_output;
+    std::string menu_demo_tileset;
+    int menu_demo_canvas_width = 0;
+    int menu_demo_canvas_height = 0;
+    bool userdir_explicit = false;
 };
 
 cli_opts parse_commandline( int argc, const char **argv )
@@ -341,6 +363,41 @@ cli_opts parse_commandline( int argc, const char **argv )
                 1,
                 [&result]( int, const char **params ) -> int {
                     result.world = params[0];
+                    return 1;
+                }
+            },
+            {
+                "--menu-demo-worker", "<private output directory>",
+                "Run an isolated native game-world title scene worker",
+                section_default,
+                1,
+                [&result]( int, const char **params ) -> int {
+                    result.menu_demo_worker_output = params[0];
+                    return 1;
+                }
+            },
+            {
+                "--menu-demo-tileset", "<tileset id>",
+                "Use the main game's active tileset for its isolated demo",
+                section_default,
+                1,
+                [&result]( int, const char **params ) -> int {
+                    result.menu_demo_tileset = params[0];
+                    return 1;
+                }
+            },
+            {
+                "--menu-demo-canvas", "<width>x<height>",
+                "Pixel size the title screen will blit the demo frames at",
+                section_default,
+                1,
+                [&result]( int, const char **params ) -> int {
+                    const std::string spec( params[0] );
+                    const size_t sep = spec.find( 'x' );
+                    if( sep != std::string::npos ) {
+                        result.menu_demo_canvas_width = std::atoi( spec.substr( 0, sep ).c_str() );
+                        result.menu_demo_canvas_height = std::atoi( spec.substr( sep + 1 ).c_str() );
+                    }
                     return 1;
                 }
             },
@@ -415,9 +472,10 @@ cli_opts parse_commandline( int argc, const char **argv )
                 "Base path for user-overrides to files from the ./data directory and named below",
                 section_user_directory,
                 1,
-                []( int, const char **params ) -> int {
+                [&result]( int, const char **params ) -> int {
                     PATH_INFO::init_user_dir( params[0] );
                     PATH_INFO::set_standard_filenames();
+                    result.userdir_explicit = true;
                     return 1;
                 }
             },
@@ -686,6 +744,31 @@ int main( int argc, const char *argv[] )
     MAP_SHARING::setDefaults();
 
     cli_opts cli = parse_commandline( argc, const_cast<const char **>( argv ) );
+#if !defined(__ANDROID__)
+    // Portable layout: when no --userdir was supplied, prefer the "user"
+    // directory that sits next to the executable. The packaged launcher passes
+    // that same directory explicitly, so double-clicking the executable now
+    // opens the very same profile (options, saves, tileset) instead of quietly
+    // creating a second one under the current working directory.
+    if( !cli.userdir_explicit ) {
+        const std::filesystem::path portable =
+            PATH_INFO::base_path().get_unrelative_path() / "user";
+        if( dir_exist( portable.generic_string() ) ) {
+            PATH_INFO::init_user_dir( portable.generic_string() );
+            PATH_INFO::set_standard_filenames();
+        }
+    }
+#endif
+#if defined(_WIN32) && defined(TILES) && defined(ENABLE_FP3D)
+    if( !cli.menu_demo_worker_output.empty() ) {
+        // No second gameplay window or audio device; software SDL still runs
+        // the same original tile renderer in the isolated demo process.
+        _putenv_s( "SDL_VIDEODRIVER", "dummy" );
+        _putenv_s( "SDL_AUDIODRIVER", "dummy" );
+        _putenv_s( "SDL_RENDER_DRIVER", "software" );
+        _putenv_s( "CDDA_FP3D", "0" );
+    }
+#endif
 
     if( !dir_exist( PATH_INFO::datadir() ) ) {
         printf( "Fatal: Can't find data directory \"%s\"\nPlease ensure the current working directory is correct or specify data directory with --datadir.  Perhaps you meant to start \"cataclysm-launcher\"?\n",
@@ -776,16 +859,42 @@ int main( int argc, const char *argv[] )
 
     set_language_from_options();
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    // Startup timeline for cold/warm start measurements. It lives next to the
+    // demonstration frame cache, never in the player's save directory.
+    {
+        const std::filesystem::path timeline =
+            std::filesystem::path( PATH_INFO::config_dir() ) / "native_menu_live" /
+            "startup_timeline.txt";
+        std::error_code timeline_ec;
+        std::filesystem::create_directories( timeline.parent_path(), timeline_ec );
+        fp3d_menu::timeline_set_path( timeline.string() );
+        fp3d_menu::timeline_mark( "interface_ready" );
+    }
+#endif
+
+    // The window can draw from here on (SDL, fonts and ImGui are up), so the
+    // vanilla loading screen goes up before any of the slow startup work starts.
+    loading_ui::begin_startup();
+    loading_ui::set_stage( _( "Initializing the game" ) );
+
     rng_set_engine_seed( cli.seed );
 
     game_ui::init_ui();
 
     g = std::make_unique<game>();
 
+    loading_ui::set_stage( _( "Loading the game data" ) );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    fp3d_menu::timeline_mark( "static_data_begin" );
+#endif
     // First load and initialize everything that does not
     // depend on the mods.
     try {
         g->load_static_data();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        fp3d_menu::timeline_mark( "static_data_done" );
+#endif
         if( cli.verifyexit ) {
             exit_handler( 0 );
         }
@@ -842,14 +951,25 @@ int main( int argc, const char *argv[] )
 
 #if defined(LOCALIZE)
     if( get_option<std::string>( "USE_LANG" ).empty() && !SystemLocale::Language().has_value() ) {
+        // The first language choice belongs to the player: the loading layer must
+        // not cover it. It is rebuilt afterwards so its texts use the new language.
+        loading_ui::end_startup();
         imclient->new_frame(); // we have to prime the pump, because of reasons
         imclient->end_frame();
         const std::string lang = select_language();
         get_options().get_option( "USE_LANG" ).setValue( lang );
         set_language_from_options();
+        loading_ui::begin_startup();
+        loading_ui::set_stage( _( "Initializing the game" ) );
     }
 #endif
     replay_buffered_debugmsg_prompts();
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !cli.menu_demo_worker_output.empty() ) {
+        return run_fp3d_native_menu_worker( cli.menu_demo_worker_output, cli.menu_demo_tileset,
+                                            cli.menu_demo_canvas_width, cli.menu_demo_canvas_height );
+    }
+#endif
 
     main_menu::queued_world_to_load = std::move( cli.world );
 

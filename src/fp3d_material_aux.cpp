@@ -30,7 +30,7 @@ surface classify( const std::string &key )
 {
     // UI sprites and billboard art must not be treated as physical relief.
     if( key.empty() || has( key, "$status:" ) || has( key, "$sprite:" ) ||
-        has( key, "$blood:" ) || has( key, "$item:" ) ) {
+        has( key, "$blood:" ) || has( key, "$field:" ) || has( key, "$item:" ) ) {
         return {};
     }
     if( has( key, "$plant:" ) || has( key, "tree" ) || has( key, "grass" ) ||
@@ -69,6 +69,9 @@ surface classify( const std::string &key )
     if( has( key, "dirt" ) || has( key, "sand" ) || has( key, "soil" ) ||
         has( key, "mud" ) || has( key, "gravel" ) ) {
         return { category::soil, 0.94f, 0.0f, 0.10f };
+    }
+    if( key == "t_floor" ) {
+        return { category::wood, 0.82f, 0.0f, 0.10f };
     }
     return {};
 }

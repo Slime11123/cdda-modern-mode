@@ -344,8 +344,20 @@ class dropdown : public cataimgui::window
         void draw() override {
             if( !is_open ) { return; }
             if( background ) {
-                ImGui::GetBackgroundDrawList()->AddImage( ( ImTextureID )( intptr_t )background.get(),
-                        ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize );
+                auto *draw = ImGui::GetBackgroundDrawList();
+                const auto size = ImGui::GetIO().DisplaySize;
+                const auto viewport = fp3d_compositor::viewport_pixels();
+                // Modern 2D covers the whole screen; a 3D world only covers its
+                // viewport, so the frozen frame must not be stretched across the
+                // HUD sidebar. Same placement as the action wheel.
+                if( fp3d_compositor::controls() == fp3d_input::mode::modern_2d ) {
+                    draw->AddImage( ( ImTextureID )( intptr_t )background.get(), ImVec2( 0, 0 ), size );
+                } else if( viewport[2] > 0 && viewport[3] > 0 ) {
+                    draw->AddImage( ( ImTextureID )( intptr_t )background.get(),
+                                    ImVec2( viewport[0], viewport[1] ),
+                                    ImVec2( viewport[0] + viewport[2], viewport[1] + viewport[3] ),
+                                    ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
+                }
             }
             ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .045f, .043f, .038f, 1 ) );
             cataimgui::window::draw();

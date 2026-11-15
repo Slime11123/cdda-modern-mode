@@ -15,6 +15,8 @@
 #include "cata_scope_helpers.h"
 #include "cata_tiles.h"
 #include "fp3d_materials.h"
+#include "field_type.h"
+#include "fp3d_vehicle_renderer.h"
 #include "fp3d_construction.h"
 #include "construction.h"
 #include "sdl_geometry.h"
@@ -426,5 +428,344 @@ TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.f
             CHECK( render() == front ); // Removing the backing restores the free-space orientation.
         }
     }
+}
+TEST_CASE( "fp3d_gl_model_proportions_and_glass_door_handles", "[.fp3d_gl]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() {
+        SDL_QuitSubSystem( SDL_INIT_VIDEO );
+    } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D hidden storage regression",
+                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    int driver = -1;
+    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
+        SDL_RendererInfo info{};
+        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
+            driver = i;
+        }
+    }
+    REQUIRE( driver >= 0 );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    int width = 0;
+    int height = 0;
+    REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    for( const std::string pack : {
+             "UNDEAD_PEOPLE_BASE", "retrodays"
+         } ) {
+        CAPTURE( pack );
+        REQUIRE( TILESETS.count( pack ) == 1 );
+        auto assets = cache.load_tileset( pack, renderer, false, true, false, false );
+        fp3d_materials::set_tileset( assets, renderer );
+        fp3d_snapshot::scene_snapshot scene;
+        scene.origin = tripoint_abs_ms::zero;
+        for( int y = -5; y <= 1; ++y ) {
+            for( int x = -3; x <= 3; ++x ) {
+                fp3d_snapshot::cell tile;
+                tile.position = tripoint_abs_ms( x, y, 0 );
+                tile.terrain = "t_floor";
+                scene.cells.push_back( tile );
+            }
+        }
+        const auto floor_scene = scene;
+        const auto render = [&]() {
+            SDL_SetRenderDrawColor( renderer.get(), 8, 12, 20, 255 );
+            REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+            fp3d_compositor::publish( scene );
+            fp3d_compositor::compose();
+            REQUIRE( fp3d_materials::ready() );
+            std::vector<std::uint32_t> pixels( width * height );
+            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                           pixels.data(), width * 4 ) == 0 );
+            return pixels;
+        };
+        const auto save = [&]( const std::string & name, const std::vector<std::uint32_t> &pixels ) {
+            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                std::filesystem::create_directories( directory );
+                SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                             const_cast<std::uint32_t *>( pixels.data() ), width, height,
+                                             32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                REQUIRE( picture );
+                CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                     ( pack + "-storage-" + name + ".png" ) ).u8string().c_str() ) == 0 );
+            }
+        };
+        {
+            // Review both sides of native furniture -> grid appliance conversion.
+            const auto empty = render();
+            auto &panel = scene.cells.at( 3 + 3 * 7 );
+            panel.furniture = fp3d_furniture::describe( "f_solar_unit" );
+            REQUIRE( panel.furniture );
+            const auto pitched = render();
+            CHECK( pitched != empty );
+            save( "solar-before-grid", pitched );
+            panel.furniture.reset();
+            fp3d_vehicle::vehicle_view appliance;
+            appliance.origin = panel.position;
+            auto &solar = appliance.parts.emplace_back();
+            solar.id = "ap_ground_solar_panel";
+            scene.vehicles.push_back( appliance );
+            const auto flat = render();
+            CHECK( flat != empty );
+            CHECK( flat != pitched );
+            save( "solar-after-grid", flat );
+            scene = floor_scene;
+            scene.cells.at( 3 + 3 * 7 ).furniture = fp3d_furniture::describe( "f_locker" );
+            save( "narrow-locker", render() );
+            scene = floor_scene;
+            fp3d_vehicle::vehicle_view bicycle;
+            bicycle.origin = tripoint_abs_ms( 0, -3, 0 );
+            bicycle.angle_degrees = 0.f;
+            const auto add = [&]( int x, const std::string &id, fp3d_vehicle::role role ) {
+                auto &p = bicycle.parts.emplace_back();
+                p.mount_x = x;
+                p.id = id;
+                p.kind = role;
+            };
+            for( int x : { -1, 0, 1 } ) {
+                add( x, "xlframe", fp3d_vehicle::role::frame );
+            }
+            add( -1, "wheel_bicycle", fp3d_vehicle::role::wheel );
+            add( 1, "wheel_bicycle", fp3d_vehicle::role::wheel );
+            add( 0, "saddle", fp3d_vehicle::role::seat );
+            add( 0, "foot_pedals", fp3d_vehicle::role::engine );
+            add( -1, "basketsm", fp3d_vehicle::role::cargo );
+            scene.vehicles.push_back( bicycle );
+            const auto cycle = render();
+            CHECK( cycle != empty );
+            save( "bicycle-side", cycle );
+            scene.vehicles.front().angle_degrees = 20.f;
+            const auto oblique = render();
+            CHECK( oblique != cycle );
+            save( "bicycle-oblique", oblique );
+            scene = floor_scene;
+            for( const std::string id : { "t_wall_glass", "t_door_glass_c", "t_door_glass_o" } ) {
+                auto &door = scene.cells.at( 3 + 3 * 7 );
+                door.terrain = id;
+                door.kind = fp3d_snapshot::terrain_shape( id );
+                save( id + "-white-pull", render() );
+            }
+            scene = floor_scene;
+        }
+    }
+}
+TEST_CASE( "fp3d_gl_ground_coverings_render_intensity_mixing_and_removal", "[.fp3d_gl]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D ground coverings",
+                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    int driver = -1;
+    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
+        SDL_RendererInfo info{};
+        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
+            driver = i;
+        }
+    }
+    REQUIRE( driver >= 0 );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    int width = 0;
+    int height = 0;
+    REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    for( const std::string pack : { "UNDEAD_PEOPLE_BASE", "retrodays" } ) {
+        CAPTURE( pack );
+        REQUIRE( TILESETS.count( pack ) == 1 );
+        auto assets = cache.load_tileset( pack, renderer, false, true, false, false );
+        fp3d_materials::set_tileset( assets, renderer );
+        fp3d_snapshot::scene_snapshot scene;
+        scene.origin = tripoint_abs_ms::zero;
+        scene.render_generation = 1;
+        for( int y = -5; y <= 1; ++y ) {
+            for( int x = -3; x <= 3; ++x ) {
+                auto &tile = scene.cells.emplace_back();
+                tile.position = tripoint_abs_ms( x, y, 0 );
+                tile.terrain = "t_floor";
+            }
+        }
+        auto &target = scene.cells.at( 3 + 3 * 7 );
+        const auto render = [&]() {
+            ++scene.render_generation;
+            SDL_SetRenderDrawColor( renderer.get(), 8, 12, 20, 255 );
+            REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+            fp3d_compositor::publish( scene );
+            fp3d_compositor::compose();
+            REQUIRE( fp3d_materials::ready() );
+            std::vector<std::uint32_t> pixels( width * height );
+            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                           pixels.data(), width * 4 ) == 0 );
+            return pixels;
+        };
+        const auto save = [&]( const std::string &name, const auto &pixels ) {
+            if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                std::filesystem::create_directories( directory );
+                SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom(
+                                             const_cast<std::uint32_t *>( pixels.data() ), width, height,
+                                             32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                REQUIRE( picture );
+                CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                                     ( pack + "-" + name + ".png" ) ).u8string().c_str() ) == 0 );
+            }
+        };
+        const auto clean = render();
+        save( "clean", clean );
+        for( const std::string id : { "fd_blood", "fd_blood_veggy", "fd_blood_insect",
+                 "fd_blood_invertebrate", "fd_acid", "fd_bile", "fd_slime", "fd_sap",
+                 "fd_sludge", "fd_gibs_flesh", "fd_gibs_veggy", "fd_gibs_insect",
+                 "fd_gibs_invertebrate", "fd_web", "fd_web_nostick", "fd_void_web",
+                 "fd_churned_earth", "fd_congealed_light", "fd_rubble", "fd_acid_vent" } ) {
+            CAPTURE( id );
+            target.ground_fields = { { id, 1 } };
+            const auto thin = render();
+            CHECK( thin != clean );
+            const int maximum = field_type_str_id( id )->get_max_intensity();
+            target.ground_fields.front().intensity = maximum;
+            const auto thick = render();
+            if( maximum > 1 ) {
+                CHECK( thick != thin );
+            }
+            save( id, thick );
+            target.ground_fields.clear();
+            CHECK( render() == clean );
+        }
+        target.ground_fields = { { "fd_blood", 3 } };
+        const auto blood = render();
+        target.ground_fields.push_back( { "fd_acid", 2 } );
+        const auto mixed = render();
+        CHECK( mixed != blood );
+        save( "mixed-blood-acid", mixed );
+        target.ground_fields.erase( target.ground_fields.begin() );
+        CHECK( render() != mixed );
+        target.ground_fields.clear();
+        CHECK( render() == clean );
+        // The same covering must be hidden behind solid world geometry.
+        auto &wall = scene.cells.at( 3 + 4 * 7 );
+        wall.terrain = "t_wall";
+        wall.kind = fp3d_snapshot::terrain_kind::wall;
+        const auto blocked = render();
+        target.ground_fields = { { "fd_acid", 3 }, { "fd_web", 3 } };
+        CHECK( render() == blocked );
+    }
+}
+TEST_CASE( "fp3d_gl_zombie_status_badges_keep_body_scale_and_show_detection", "[.fp3d_gl]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D zombie status badges",
+                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    int driver = -1;
+    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
+        SDL_RendererInfo info{};
+        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
+            driver = i;
+        }
+    }
+    REQUIRE( driver >= 0 );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    int width = 0;
+    int height = 0;
+    REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    auto assets = cache.load_tileset( "UNDEAD_PEOPLE_BASE", renderer, false, true, false, false );
+    fp3d_materials::set_tileset( assets, renderer );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms::zero;
+    for( int y = -5; y <= 1; ++y ) {
+        for( int x = -3; x <= 3; ++x ) {
+            auto &tile = scene.cells.emplace_back();
+            tile.position = tripoint_abs_ms( x, y, 0 );
+            tile.terrain = "t_floor";
+        }
+    }
+    fp3d_snapshot::sprite zombie;
+    zombie.id = "mon_zombie";
+    zombie.height = 2.16f;
+    zombie.position = tripoint_abs_ms( 0, -2, 0 );
+    scene.sprites.push_back( zombie );
+    const auto render = [&]( const std::string &name ) {
+        SDL_SetRenderDrawColor( renderer.get(), 8, 12, 20, 255 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        fp3d_compositor::publish( scene );
+        fp3d_compositor::compose();
+        std::vector<std::uint32_t> pixels( width * height );
+        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                       pixels.data(), width * 4 ) == 0 );
+        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+            std::filesystem::create_directories( directory );
+            SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(),
+                                     width, height, 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+            REQUIRE( surface );
+            CHECK( IMG_SavePNG( surface.get(), ( std::filesystem::path( directory ) /
+                                                 ( "zombie-" + name + ".png" ) ).u8string().c_str() ) == 0 );
+        }
+        return pixels;
+    };
+    const auto clean = render( "normal" );
+    const auto key = fp3d_materials::sprite_key( scene.sprites.front() );
+    for( const std::string icon : { "overlay_effect_stunned", "overlay_effect_downed",
+             "overlay_effect_bleed", "overlay_effect_onfire" } ) {
+        CAPTURE( icon );
+        scene.sprites.front().status_icons = { icon };
+        const auto affected = render( icon );
+        CHECK( affected != clean );
+        CHECK( fp3d_materials::sprite_key( scene.sprites.front() ) == key );
+        // Status canvases must not alter the body or floor in the lower frame.
+        CHECK( std::equal( clean.begin() + width * height / 2, clean.end(),
+                           affected.begin() + width * height / 2 ) );
+    }
+    scene.sprites.front().status_icons.clear();
+    scene.sprites.front().alerted = true;
+    const auto detected = render( "sees-player" );
+    CHECK( detected != clean );
+    REQUIRE( fp3d_materials::bind() );
+    CHECK( fp3d_materials::lookup( "$status:overlay_hostile_sees_player" ) );
+    fp3d_materials::unbind();
+    scene.sprites.front().alerted = false;
+    CHECK( render( "cleared" ) == clean );
 }
 #endif

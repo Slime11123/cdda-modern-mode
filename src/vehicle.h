@@ -1047,6 +1047,15 @@ class vehicle
         std::set<point_abs_ms> immediate_path( map *here, const units::angle &rotate = 0_degrees );
         std::set<point_abs_ms> collision_check_points; // NOLINT(cata-serialize)
         void autopilot_patrol( map *here );
+        // Read/write the autopilot's current waypoint. Only the isolated title
+        // demonstration uses these; it feeds the patrol autopilot a waypoint so
+        // an otherwise driverless vehicle keeps driving with vanilla physics.
+        void set_autopilot_waypoint( const tripoint_abs_ms &target ) {
+            autodrive_local_target = target;
+        }
+        tripoint_abs_ms get_autopilot_waypoint() const {
+            return autodrive_local_target;
+        }
         units::angle get_angle_from_targ( const tripoint_abs_ms &targ ) const;
         void drive_to_local_target( map *here, const tripoint_abs_ms &target, bool follow_protocol );
         // Drive automatically towards some destination for one turn.

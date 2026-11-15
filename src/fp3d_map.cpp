@@ -13,6 +13,7 @@
 #include "output.h"
 #include "overmap.h"
 #include "overmapbuffer.h"
+#include "uistate.h"
 namespace fp3d_map
 {
 namespace
@@ -123,7 +124,7 @@ model capture( const avatar &you, const tripoint_abs_omt &center, int radius )
     result.player = you.pos_abs_omt();
     result.center = tripoint_abs_omt( center.x(), center.y(),
                                       std::clamp( center.z(), -OVERMAP_DEPTH, OVERMAP_HEIGHT ) );
-    result.radius = std::clamp( radius, 4, 18 );
+    result.radius = std::clamp( radius, 4, 32 );
     auto destination = you.get_active_mission_target();
     if( !you.omt_path.empty() ) {
         destination = you.omt_path.front();
@@ -155,6 +156,17 @@ model capture( const avatar &you, const tripoint_abs_omt &center, int radius )
             row.route = route.count( row.position ) != 0;
             row.objective = result.objective && row.position == *result.objective;
             result.cells.push_back( std::move( row ) );
+        }
+    }
+    if( result.center.z() == 0 && uistate.overmap_show_city_labels ) {
+        for( const auto &city : overmap_buffer.get_cities_near(
+                 project_to<coords::sm>( result.center ), result.radius * 2 ) ) {
+            const auto position = project_to<coords::omt>( city.abs_sm_pos );
+            if( std::abs( position.x() - result.center.x() ) <= result.radius &&
+                std::abs( position.y() - result.center.y() ) <= result.radius &&
+                overmap_buffer.seen_more_than( position, om_vision_level::outlines ) ) {
+                result.cities.push_back( { position, city.city->name } );
+            }
         }
     }
     return result;

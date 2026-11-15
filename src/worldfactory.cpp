@@ -1462,43 +1462,95 @@ int worldfactory::show_worldgen_tab_modselection( const catacurses::window &win,
     return tab_output;
 }
 
-static std::string get_opt_slider( int width, int current, int max, bool no_color,
-                                   bool no_selector = false )
+namespace
 {
-    int new_cur = clamp<int>( std::round( ( width * current ) / static_cast<float>( max ) ),
-                              0, width - 1 );
-    if( no_selector ) {
-        new_cur = -2;
-    }
 
-    std::string ret;
-    for( int i = 0; i < width; i++ ) {
-        char ch = '-';
-        if( i == new_cur - 1 ) {
-            ch = '<';
-        } else if( i == new_cur + 1 ) {
-            ch = '>';
-        } else if( i == new_cur ) {
-            ch = '|';
-        }
-        if( !no_color && ch != '-' ) {
-            ret.append( colorize( std::string( 1, ch ), c_yellow ) );
-        } else {
-            ret.append( 1, ch );
-        }
-    }
+enum wg_button_id {
+    wg_btn_mods = 0,
+    wg_btn_advanced,
+    wg_btn_reset,
+    wg_btn_randomize,
+    wg_btn_finish,
+    wg_btn_back,
+    wg_btn_count
+};
 
-    return ret;
-}
+/** Selectable element of the create world panel. */
+enum class wg_focus_kind {
+    name,
+    random_name,
+    slider,
+    world_option,
+    button
+};
+
+struct wg_focus_entry {
+    wg_focus_kind kind = wg_focus_kind::name;
+    // Slider index, world option index, or id of the bottom button.
+    int index = 0;
+    inclusive_rectangle<point> rect;
+};
+
+/** One settings row: heading and description on the left, current preset on the right. */
+struct wg_row {
+    std::string label;
+    std::string value;
+    std::vector<std::string> desc;
+    int top = 0;
+    int height = 1;
+};
+
+struct wg_row_hit {
+    wg_focus_kind kind = wg_focus_kind::slider;
+    int index = 0;
+    inclusive_rectangle<point> left_arrow;
+    inclusive_rectangle<point> center;
+    inclusive_rectangle<point> right_arrow;
+};
+
+struct wg_button {
+    int id = 0;
+    std::string text;
+    point text_pos = point::zero;
+    inclusive_rectangle<point> rect;
+};
+
+/** Geometry and texts of the panel, shared by drawing and mouse hit testing. */
+struct wg_layout {
+    int win_w = 80;
+    int win_h = 24;
+    int inner_x1 = 78;
+    int content_x0 = 2;
+    int content_x1 = 76;
+    int name_y = 1;
+    int separator_y = 2;
+    int content_top = 3;
+    int content_bottom = 3;
+    int viewport_h = 1;
+    int divider_x = 1;
+    int left_w = 1;
+    int right_x = 2;
+    int right_w = 1;
+    int field_x = 1;
+    int field_w = 1;
+    int random_btn_x = 1;
+    int bottom_separator_y = 1;
+    int btn_row0 = 1;
+    int btn_row1 = 2;
+    int top_row = 0;
+    int content_size = 0;
+    int scroll_pos = 0;
+    std::string random_text;
+    std::vector<wg_row> rows;
+};
+
+} // namespace
 
 int worldfactory::show_worldgen_basic( WORLD *world )
 {
     catacurses::window w_confirmation;
 
     ui_adaptor ui;
-
-    constexpr int namebar_y = 10;
-    int sidebar_width = 28;
 
     input_context ctxt( "WORLDGEN_CONFIRM_DIALOG" );
     // dialog actions
@@ -1511,29 +1563,27 @@ int worldfactory::show_worldgen_basic( WORLD *world )
     ctxt.register_action( "FINALIZE" );
     ctxt.register_action( "RANDOMIZE" );
     ctxt.register_action( "RESET" );
+    // list navigation, the mouse wheel only scrolls the center area
+    ctxt.register_action( "UP" );
+    ctxt.register_action( "DOWN" );
+    ctxt.register_action( "PAGE_UP" );
+    ctxt.register_action( "PAGE_DOWN" );
+    ctxt.register_action( "HOME" );
+    ctxt.register_action( "END" );
+    ctxt.register_action( "SCROLL_UP" );
+    ctxt.register_action( "SCROLL_DOWN" );
     ctxt.register_leftright();
-    ctxt.register_navigate_ui_list();
     // mouse selection
     ctxt.register_action( "SELECT" );
     ctxt.register_action( "MOUSE_MOVE" );
-    ctxt.register_action( "CLICK_AND_DRAG" );
 
-    int win_height = 0;
-    int content_height = 0; // buttons & sliders
-    bool recalc_startpos = false;
     const auto init_windows = [&]( ui_adaptor & ui ) {
-        recalc_startpos = true;
         const int iMinScreenWidth = std::min( TERMX, std::max( FULL_SCREEN_WIDTH, TERMX * 4 / 5 ) );
         const int iOffsetX = TERMX > FULL_SCREEN_WIDTH ? ( TERMX - iMinScreenWidth ) / 2 : 0;
 
-        const int dialog_height = std::min( TERMY, std::max( 32, TERMY * 9 / 10 ) );
+        const int dialog_height = std::min( TERMY, std::max( 22, TERMY * 9 / 10 ) );
         const int dialog_y = ( TERMY - dialog_height ) / 2;
         w_confirmation = catacurses::newwin( dialog_height, iMinScreenWidth, point( iOffsetX, dialog_y ) );
-        sidebar_width = clamp( iMinScreenWidth / 5, 24, 32 );
-
-        win_height = getmaxy( w_confirmation );
-        content_height = win_height - 14;
-
         ui.position_from_window( w_confirmation );
     };
     init_windows( ui );
@@ -1541,24 +1591,15 @@ int worldfactory::show_worldgen_basic( WORLD *world )
 
     bool noname = false;
     bool custom_opts = false;
+    bool advanced_view = false;
+    // Follow the focused row when it would scroll out of the center area.  The mouse wheel turns
+    // this off so that scrolling never drags the focus back.
+    bool follow_focus = true;
 
-    std::map<int, inclusive_rectangle<point>> btn_map;
-    std::map<int, inclusive_rectangle<point>> slider_inc_map;
-    std::map<int, inclusive_rectangle<point>> slider_track_map;
-    std::map<int, inclusive_rectangle<point>> world_option_map;
+    std::string worldname = world->world_name;
+
     std::vector<option_slider_id> wg_sliders; // option sliders
     std::vector<int> wg_slevels; // current slider levels
-    std::string worldname = world->world_name;
-    const std::vector<std::string> world_option_ids = {
-        "WORLD_END", "WANDER_SPAWNS", "BLACK_ROAD", "CHARACTER_POINT_POOLS", "META_PROGRESS"
-    };
-    int sel_opt = 0;
-    int top_opt = 0;
-    int active_tab = 0;
-    int selected_world_option = 0;
-    std::optional<int> dragging_slider;
-    bool suppress_slider_release = false;
-
     for( const option_slider &osl : option_slider::get_all() ) {
         if( osl.context() == "WORLDGEN" ) {
             wg_sliders.emplace_back( osl.id );
@@ -1567,452 +1608,647 @@ int worldfactory::show_worldgen_basic( WORLD *world )
     }
     const std::vector<int> wg_slvl_default = wg_slevels; // save default slider levels
 
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        slider_inc_map.clear();
-        slider_track_map.clear();
-        world_option_map.clear();
-        btn_map.clear();
-        const int win_width = getmaxx( w_confirmation ) - 2;
-        const int content_x = sidebar_width + 2;
-        const int content_width = win_width - sidebar_width - 2;
-        const point namebar_pos( content_x + utf8_width( _( "World name:" ) ), namebar_y );
-
-        int start = top_opt == 0 ? 0 : ( 2 + ( top_opt - 1 ) * 3 );
-        int sel_y = sel_opt == 0 ? 0 :
-                    ( sel_opt <= static_cast<int>( wg_sliders.size() ) ?
-                      ( 2 + ( sel_opt - 1 ) * 3 ) : ( 2 + wg_sliders.size() * 3 ) );
-        if( recalc_startpos ) {
-            calcStartPos( start, sel_y, content_height, wg_sliders.size() * 3 + 4 );
+    // World options reachable from the advanced view of this panel.
+    std::vector<std::string> adv_options;
+    for( const char *option_id : {
+             "WORLD_END", "WANDER_SPAWNS", "BLACK_ROAD", "CHARACTER_POINT_POOLS", "META_PROGRESS"
+         } ) {
+        if( world->WORLD_OPTIONS.count( option_id ) > 0 ) {
+            adv_options.emplace_back( option_id );
         }
-        top_opt = start < 2 ? 0 : start / 3 + 1;
+    }
+
+    wg_focus_kind sel_kind = wg_focus_kind::name;
+    int sel_index = 0;
+    int top_row = 0;
+    int page_step = 1;
+
+    std::vector<wg_focus_entry> focus_entries;
+    std::vector<wg_row_hit> row_hits;
+    std::vector<wg_button> button_hits;
+
+    // Text of one bottom button, including its key binding like the previous panel did.
+    const auto button_text = [&]( const char *action, const std::string &label, bool focused ) {
+        const nc_color bracket = focused ? hilite( c_yellow ) : c_yellow;
+        const nc_color key = focused ? hilite( c_light_green ) : c_light_green;
+        return string_format( "%s%s%s %s %s", colorize( "[", bracket ),
+                              colorize( ctxt.get_desc( action, 1U ), key ), colorize( "][", bracket ),
+                              label, colorize( "]", bracket ) );
+    };
+
+    const auto button_action = []( int id ) -> const char * {
+        switch( id ) {
+            case wg_btn_mods:
+                return "PICK_MODS";
+            case wg_btn_advanced:
+                return "ADVANCED_SETTINGS";
+            case wg_btn_reset:
+                return "RESET";
+            case wg_btn_randomize:
+                return "RANDOMIZE";
+            case wg_btn_finish:
+                return "FINALIZE";
+            default:
+                return "WORLDGEN_CONFIRM.QUIT";
+        }
+    };
+
+    const auto bottom_button_labels = [&]() {
+        std::vector<std::pair<int, std::string>> ret;
+        ret.emplace_back( wg_btn_mods, _( "Mods" ) );
+        ret.emplace_back( wg_btn_advanced,
+                          advanced_view ? _( "Basic settings" ) : _( "Advanced settings" ) );
+        ret.emplace_back( wg_btn_reset, _( "Reset" ) );
+        ret.emplace_back( wg_btn_randomize, _( "Randomize" ) );
+        ret.emplace_back( wg_btn_finish, _( "Finish" ) );
+        ret.emplace_back( wg_btn_back, _( "Back" ) );
+        return ret;
+    };
+
+    // Layout is computed from the current window and font metrics, and reused by the drawing code
+    // and by the mouse hit testing, so clicks always match what was painted.
+    const auto build_layout = [&]() -> wg_layout {
+        wg_layout L;
+        L.win_h = getmaxy( w_confirmation );
+        L.win_w = getmaxx( w_confirmation );
+        L.inner_x1 = L.win_w - 2;
+
+        L.content_x0 = 2;
+        L.name_y = 1;
+        L.separator_y = 2;
+        L.content_top = 3;
+
+        L.btn_row1 = L.win_h - 3;
+        L.btn_row0 = L.btn_row1 - 1;
+        L.bottom_separator_y = L.btn_row0 - 1;
+        L.content_bottom = L.bottom_separator_y - 1;
+        L.viewport_h = std::max( 1, L.content_bottom - L.content_top + 1 );
+
+        // Two columns sharing one divider: descriptions on the left, presets on the right.
+        L.content_x1 = std::max( L.content_x0 + 20, L.inner_x1 - 1 );
+        const int usable = L.content_x1 - L.content_x0 + 1;
+        L.left_w = std::min( std::max( 8, usable * 43 / 100 ), std::max( 8, usable - 18 ) );
+        L.divider_x = L.content_x0 + L.left_w;
+        L.right_x = L.divider_x + 2;
+        L.right_w = std::max( 6, L.content_x1 - L.right_x + 1 );
+        const int left_text_w = std::max( 4, L.left_w - 1 );
+
+        // World name row: label, editable name box, random name button.
+        L.random_text = button_text( "PICK_RANDOM_WORLDNAME", _( "Random name" ),
+                                     sel_kind == wg_focus_kind::random_name );
+        const int random_w = utf8_width( L.random_text, true );
+        L.field_x = L.content_x0 + utf8_width( _( "World name:" ) ) + 2;
+        L.random_btn_x = std::max( L.field_x + 12, L.content_x1 - random_w + 1 );
+        // The name box stays moderate; the random name button keeps the right edge.
+        const int name_box_max = std::max( 12, usable * 2 / 5 );
+        L.field_w = std::min( std::max( 6, L.random_btn_x - L.field_x - 2 ), name_box_max );
+
+        // Settings rows of the active view.
+        L.rows.clear();
+        if( advanced_view ) {
+            for( const std::string &option_id : adv_options ) {
+                const options_manager::cOpt &opt = world->WORLD_OPTIONS.at( option_id );
+                wg_row row;
+                row.label = opt.getMenuText();
+                row.value = opt.getValueName();
+                row.height = 2; // heading plus one gap line
+                L.rows.emplace_back( row );
+            }
+        } else {
+            for( size_t i = 0; i < wg_sliders.size(); ++i ) {
+                wg_row row;
+                row.label = wg_sliders[i]->name().translated();
+                if( custom_opts ) {
+                    row.value = _( "Custom" );
+                    row.desc = foldstring(
+                                   _( "Advanced options were changed; the preset levels no longer match." ),
+                                   left_text_w );
+                } else {
+                    row.value = wg_sliders[i]->level_name( wg_slevels[i] ).translated();
+                    row.desc = foldstring( wg_sliders[i]->level_desc( wg_slevels[i] ).translated(),
+                                           left_text_w );
+                }
+                row.height = 1 + static_cast<int>( row.desc.size() ) + 1;
+                L.rows.emplace_back( row );
+            }
+        }
+
+        const int row_count = static_cast<int>( L.rows.size() );
+        L.content_size = 0;
+        for( const wg_row &row : L.rows ) {
+            L.content_size += row.height;
+        }
+
+        // Keep the focused row inside the visible area.
+        int focus_row = -1;
+        if( sel_kind == wg_focus_kind::slider && !advanced_view ) {
+            focus_row = sel_index;
+        } else if( sel_kind == wg_focus_kind::world_option && advanced_view ) {
+            focus_row = sel_index;
+        }
+        if( follow_focus && focus_row >= 0 && focus_row < row_count ) {
+            if( top_row > focus_row ) {
+                top_row = focus_row;
+            }
+            int used = 0;
+            for( int i = top_row; i <= focus_row; ++i ) {
+                used += L.rows[i].height;
+            }
+            while( used > L.viewport_h && top_row < focus_row ) {
+                used -= L.rows[top_row].height;
+                ++top_row;
+            }
+        }
+        top_row = std::max( 0, std::min( top_row, std::max( 0, row_count - 1 ) ) );
+        if( L.content_size <= L.viewport_h ) {
+            top_row = 0;
+        } else {
+            // Never leave a gap at the bottom of the viewport.
+            while( top_row > 0 ) {
+                int remaining = 0;
+                for( int i = top_row - 1; i < row_count; ++i ) {
+                    remaining += L.rows[i].height;
+                }
+                if( remaining <= L.viewport_h ) {
+                    --top_row;
+                } else {
+                    break;
+                }
+            }
+        }
+        L.top_row = top_row;
+        L.scroll_pos = 0;
+        for( int i = 0; i < top_row; ++i ) {
+            L.scroll_pos += L.rows[i].height;
+        }
+        int y = L.content_top;
+        for( int i = top_row; i < row_count; ++i ) {
+            L.rows[i].top = y;
+            y += L.rows[i].height;
+        }
+
+        // Selectable elements, in keyboard order: name, random name, rows, bottom buttons.
+        focus_entries.clear();
+        row_hits.clear();
+        focus_entries.push_back( wg_focus_entry{ wg_focus_kind::name, 0,
+                                inclusive_rectangle<point>( point( L.field_x - 1, L.name_y ),
+                                        point( L.field_x + L.field_w, L.name_y ) ) } );
+        focus_entries.push_back( wg_focus_entry{ wg_focus_kind::random_name, 0,
+                                inclusive_rectangle<point>( point( L.random_btn_x, L.name_y ),
+                                        point( L.random_btn_x + random_w - 1, L.name_y ) ) } );
+
+        const wg_focus_kind row_kind = advanced_view ? wg_focus_kind::world_option :
+                                       wg_focus_kind::slider;
+        for( int i = 0; i < row_count; ++i ) {
+            const wg_row &row = L.rows[i];
+            if( i < top_row || row.top > L.content_bottom ) {
+                // Off screen rows keep their place in the keyboard order but cannot be clicked.
+                focus_entries.push_back( wg_focus_entry{ row_kind, i,
+                                        inclusive_rectangle<point>( point( -1, -1 ), point( -1, -1 ) ) } );
+                continue;
+            }
+            const int first_y = row.top;
+            const int last_y = std::min( row.top + std::max( 0, row.height - 2 ), L.content_bottom );
+            focus_entries.push_back( wg_focus_entry{ row_kind, i,
+                                    inclusive_rectangle<point>( point( L.content_x0, first_y ),
+                                            point( L.content_x1, last_y ) ) } );
+            wg_row_hit hit;
+            hit.kind = row_kind;
+            hit.index = i;
+            // The arrows are single cells on screen, so the clickable area around each of them
+            // is widened by one cell on both sides.
+            const int arrow_y = first_y;
+            const int right_arrow_x = L.right_x + L.right_w - 1;
+            hit.left_arrow = inclusive_rectangle<point>( point( L.right_x - 1, arrow_y ),
+                             point( L.right_x + 1, arrow_y ) );
+            hit.center = inclusive_rectangle<point>( point( L.right_x + 2, arrow_y ),
+                         point( right_arrow_x - 2, arrow_y ) );
+            hit.right_arrow = inclusive_rectangle<point>( point( right_arrow_x - 1, arrow_y ),
+                              point( right_arrow_x + 1, arrow_y ) );
+            row_hits.push_back( hit );
+        }
+
+        // Bottom buttons: three equally wide columns, two equally high rows, centered.
+        button_hits.clear();
+        const std::vector<std::pair<int, std::string>> labels = bottom_button_labels();
+        std::vector<std::string> texts;
+        texts.reserve( labels.size() );
+        int max_text_w = 0;
+        for( const std::pair<int, std::string> &entry : labels ) {
+            const bool focused = sel_kind == wg_focus_kind::button && sel_index == entry.first;
+            texts.emplace_back( button_text( button_action( entry.first ), entry.second, focused ) );
+            max_text_w = std::max( max_text_w, utf8_width( texts.back(), true ) );
+        }
+        int cell_w = max_text_w + 2;
+        const int available_w = std::max( 3, L.win_w - 4 );
+        if( cell_w * 3 > available_w ) {
+            cell_w = std::max( 8, available_w / 3 );
+        }
+        const int group_x = std::max( 2, ( L.win_w - cell_w * 3 ) / 2 );
+        for( size_t i = 0; i < texts.size(); ++i ) {
+            const int col = static_cast<int>( i ) % 3;
+            const int text_row = static_cast<int>( i ) / 3;
+            const int cell_x = group_x + col * cell_w;
+            const int cell_y = text_row == 0 ? L.btn_row0 : L.btn_row1;
+            const int text_w = utf8_width( texts[i], true );
+            wg_button btn;
+            btn.id = labels[i].first;
+            btn.text = texts[i];
+            btn.text_pos = point( cell_x + std::max( 0, ( cell_w - text_w ) / 2 ), cell_y );
+            btn.rect = inclusive_rectangle<point>( point( cell_x, cell_y ),
+                                                   point( cell_x + cell_w - 1, cell_y ) );
+            button_hits.push_back( btn );
+            focus_entries.push_back( wg_focus_entry{ wg_focus_kind::button, btn.id, btn.rect } );
+        }
+
+        return L;
+    };
+
+    ui.on_redraw( [&]( const ui_adaptor & ) {
+        const wg_layout L = build_layout();
+        follow_focus = false;
+        page_step = std::max( 1, L.viewport_h / 3 );
 
         werase( w_confirmation );
-        draw_border( w_confirmation, BORDER_COLOR, _( "< Create World >" ), c_white );
+        draw_border( w_confirmation, BORDER_COLOR );
 
-        // Compact profile rail and the main tabbed configuration area.
-        wattron( w_confirmation, BORDER_COLOR );
-        mvwvline( w_confirmation, point( sidebar_width, 1 ), LINE_XOXO, win_height - 2 );
-        mvwaddch( w_confirmation, point( sidebar_width, 0 ), LINE_OXXX );
-        mvwaddch( w_confirmation, point( sidebar_width, win_height - 1 ), LINE_XXOX );
-        mvwhline( w_confirmation, point( sidebar_width + 1, 5 ), LINE_OXOX, content_width );
-        wattroff( w_confirmation, BORDER_COLOR );
-
-        mvwprintz( w_confirmation, point( 3, 2 ), c_white, _( "World name:" ) );
-        const point profile_name( 3, 5 );
-        const std::string profile_text = noname ? _( "________NO NAME ENTERED!________" ) :
-                                         ( worldname.empty() ? _( "Unnamed world" ) : worldname );
-        const std::string profile_label = string_format( "< %s >", profile_text );
-        trim_and_print( w_confirmation, profile_name, sidebar_width - 5,
-                        sel_opt == 0 ? hilite( c_yellow ) : c_white, profile_label );
-        btn_map.emplace( 0, inclusive_rectangle<point>( profile_name,
-                             profile_name + point( std::min( sidebar_width - 5,
-                                                    utf8_width( profile_label ) - 1 ), 0 ) ) );
-        mvwprintz( w_confirmation, point( 3, 8 ), c_light_gray, "[%s] %s",
-                   ctxt.get_desc( "PICK_RANDOM_WORLDNAME", 1U ), _( "Randomize" ) );
-        btn_map.emplace( static_cast<int>( wg_sliders.size() + 6 ), inclusive_rectangle<point>(
-                             point( 3, 8 ), point( sidebar_width - 2, 8 ) ) );
-        mvwprintz( w_confirmation, point( 3, 15 ), c_light_gray, _( "Advanced options" ) );
-        mvwprintz( w_confirmation, point( 3, 17 ), c_light_gray, _( "Open mod manager" ) );
-        btn_map.emplace( static_cast<int>( wg_sliders.size() + 7 ), inclusive_rectangle<point>(
-                             point( 3, 15 ), point( sidebar_width - 2, 15 ) ) );
-        btn_map.emplace( static_cast<int>( wg_sliders.size() + 8 ), inclusive_rectangle<point>(
-                             point( 3, 17 ), point( sidebar_width - 2, 17 ) ) );
-
-        const std::array<std::pair<const char *, int>, 3> tabs = {{
-                { "World", static_cast<int>( wg_sliders.size() + 9 ) },
-                { "Options", static_cast<int>( wg_sliders.size() + 4 ) },
-                { "Mods", static_cast<int>( wg_sliders.size() + 5 ) }
-            }};
-        int tab_x = content_x + 2;
-        for( size_t tab_index = 0; tab_index < tabs.size(); ++tab_index ) {
-            const auto &tab = tabs[tab_index];
-            const nc_color tab_color = active_tab == static_cast<int>( tab_index ) ?
-                                       hilite( c_yellow ) : c_white;
-            mvwprintz( w_confirmation, point( tab_x, 3 ), tab_color, "[%s]", _( tab.first ) );
-            const int tab_width = utf8_width( _( tab.first ) ) + 2;
-            {
-                btn_map.emplace( tab.second, inclusive_rectangle<point>( point( tab_x, 3 ),
-                                 point( tab_x + tab_width - 1, 3 ) ) );
-            }
-            tab_x += tab_width + 3;
+        // Title stays left aligned, as in the reference layout.
+        mvwprintz( w_confirmation, point( 2, 0 ), c_white, _( "< Create World >" ) );
+        if( advanced_view ) {
+            const std::string view_txt = string_format( "[ %s ]", _( "Advanced settings" ) );
+            mvwprintz( w_confirmation, point( L.win_w - utf8_width( view_txt ) - 2, 0 ), c_light_gray,
+                       view_txt );
         }
 
-        wattron( w_confirmation, c_white );
-        mvwhline( w_confirmation, point( content_x, namebar_y + 2 ), LINE_OXOX, content_width );
-        wattroff( w_confirmation, c_white );
+        const auto horizontal_rule = [&]( int rule_y ) {
+            wattron( w_confirmation, BORDER_COLOR );
+            mvwaddch( w_confirmation, point( 0, rule_y ), LINE_XXXO );
+            mvwhline( w_confirmation, point( 1, rule_y ), LINE_OXOX, L.win_w - 2 );
+            mvwaddch( w_confirmation, point( L.win_w - 1, rule_y ), LINE_XOXX );
+            wattroff( w_confirmation, BORDER_COLOR );
+        };
+        horizontal_rule( L.separator_y );
+        horizontal_rule( L.bottom_separator_y );
 
-        // World settings are shown in the first tab.  The options tab stays in this panel.
-        int y = namebar_pos.y;
-        bool all_sliders_drawn = false;
-        const int first_slider = top_opt == 0 ? 0 : top_opt - 1;
-        const int col_width = std::max( 18, content_width / 2 - 2 );
-        const int row_height = 5;
-        if( active_tab == 0 ) for( int i = first_slider; i < static_cast<int>( wg_sliders.size() ); i++ ) {
-            const int visible_index = i - first_slider;
-            const int col = visible_index % 2;
-            const int row = visible_index / 2;
-            const int block_x = content_x + 2 + col * ( content_width / 2 );
-            const int block_y = namebar_y + row * row_height;
-            if( block_y + 3 >= win_height - 12 ) {
+        // World name row.
+        const bool name_focus = sel_kind == wg_focus_kind::name;
+        mvwprintz( w_confirmation, point( L.content_x0, L.name_y ),
+                   name_focus ? hilite( c_yellow ) : c_white, _( "World name:" ) );
+        const nc_color field_border = name_focus ? hilite( c_yellow ) : BORDER_COLOR;
+        mvwputch( w_confirmation, point( L.field_x - 1, L.name_y ), field_border, '[' );
+        mvwputch( w_confirmation, point( L.field_x + L.field_w, L.name_y ), field_border, ']' );
+        nc_color name_color = c_white;
+        if( noname ) {
+            name_color = hilite( c_yellow );
+        } else if( worldname.empty() ) {
+            name_color = c_light_gray;
+        }
+        const std::string name_shown = noname ? _( "________NO NAME ENTERED!________" ) :
+                                       ( worldname.empty() ? _( "Unnamed world" ) : worldname );
+        trim_and_print( w_confirmation, point( L.field_x, L.name_y ), L.field_w, name_color,
+                        name_shown );
+        nc_color random_color = c_white;
+        print_colored_text( w_confirmation, point( L.random_btn_x, L.name_y ), random_color, c_white,
+                            L.random_text );
+
+        // Settings rows.
+        wattron( w_confirmation, BORDER_COLOR );
+        mvwvline( w_confirmation, point( L.divider_x, L.content_top ), LINE_XOXO, L.viewport_h );
+        wattroff( w_confirmation, BORDER_COLOR );
+
+        const wg_focus_kind row_kind = advanced_view ? wg_focus_kind::world_option :
+                                       wg_focus_kind::slider;
+        for( int i = L.top_row; i < static_cast<int>( L.rows.size() ); ++i ) {
+            const wg_row &row = L.rows[i];
+            if( row.top > L.content_bottom ) {
                 break;
             }
-            std::string sl_txt = get_opt_slider( col_width, wg_slevels[i],
-                                                 wg_sliders[i]->count() - 1,
-                                                 i == sel_opt - 1, custom_opts );
-            trim_and_print( w_confirmation, point( block_x, block_y ), col_width,
-                            c_white, wg_sliders[i]->name().translated() );
-            trim_and_print( w_confirmation, point( block_x, block_y + 1 ), col_width,
-                            i == sel_opt - 1 ? hilite( c_white ) : c_white, sl_txt );
-            if( i == sel_opt - 1 ) {
-                mvwputch( w_confirmation, point( block_x - 1, block_y + 1 ), hilite( c_yellow ), '<' );
-                mvwputch( w_confirmation, point( block_x + col_width, block_y + 1 ), hilite( c_yellow ), '>' );
-            }
-            slider_inc_map.emplace( i * 2, inclusive_rectangle<point>( point( block_x - 1, block_y + 1 ),
-                                    point( block_x + col_width / 2, block_y + 1 ) ) );
-            slider_inc_map.emplace( i * 2 + 1, inclusive_rectangle<point>( point( block_x + col_width / 2 + 1,
-                                    block_y + 1 ), point( block_x + col_width, block_y + 1 ) ) );
-            slider_track_map.emplace( i, inclusive_rectangle<point>( point( block_x, block_y + 1 ),
-                                    point( block_x + col_width - 1, block_y + 1 ) ) );
-            trim_and_print( w_confirmation, point( block_x, block_y + 2 ), col_width,
-                            i == sel_opt - 1 ? hilite( c_white ) : c_light_gray,
-                            custom_opts ? _( "Custom" ) : wg_sliders[i]->level_name( wg_slevels[i] ).translated() );
-            btn_map.emplace( 1 + i, inclusive_rectangle<point>( point( block_x - 1, block_y ),
-                             point( block_x + col_width, block_y + 2 ) ) );
-            if( i == static_cast<int>( wg_sliders.size() ) - 1 ) {
-                all_sliders_drawn = true;
-            }
-        }
-        if( active_tab == 1 ) {
-            const int option_col_width = content_width / 2 - 3;
-            for( size_t i = 0; i < world_option_ids.size(); ++i ) {
-                const int col = static_cast<int>( i % 2 );
-                const int row = static_cast<int>( i / 2 );
-                const int x = content_x + 2 + col * ( content_width / 2 );
-                const int option_y = namebar_y + row * 4;
-                if( option_y + 1 >= win_height - 12 ||
-                    world->WORLD_OPTIONS.find( world_option_ids[i] ) == world->WORLD_OPTIONS.end() ) {
-                    continue;
+            const bool row_sel = sel_kind == row_kind && sel_index == i;
+            trim_and_print( w_confirmation, point( L.content_x0, row.top ), L.left_w - 1,
+                            row_sel ? hilite( c_yellow ) : c_white, row.label );
+            for( size_t k = 0; k < row.desc.size(); ++k ) {
+                const int desc_y = row.top + 1 + static_cast<int>( k );
+                if( desc_y > L.content_bottom ) {
+                    break;
                 }
-                const auto &opt = world->WORLD_OPTIONS.at( world_option_ids[i] );
-                const bool selected = static_cast<int>( i ) == selected_world_option;
-                trim_and_print( w_confirmation, point( x, option_y ), option_col_width,
-                                selected ? hilite( c_white ) : c_white, opt.getMenuText() );
-                trim_and_print( w_confirmation, point( x, option_y + 1 ), option_col_width,
-                                selected ? hilite( c_yellow ) : c_yellow, opt.getValueName() );
-                world_option_map.emplace( static_cast<int>( i ), inclusive_rectangle<point>(
-                                              point( x, option_y ), point( x + option_col_width - 1, option_y + 1 ) ) );
+                trim_and_print( w_confirmation, point( L.content_x0, desc_y ),
+                                L.left_w - 1, c_light_gray, row.desc[k] );
             }
-            all_sliders_drawn = true;
-        }
-        y = win_height - 12;
 
-        auto get_clr = []( const nc_color & base, bool hi ) {
-            return hi ? hilite( base ) : base;
-        };
-
-        if( all_sliders_drawn ) {
-            int opt_num = wg_sliders.size() + 1;
-            nc_color acc_clr;
-            nc_color acc_clr2;
-            nc_color base_clr;
-            std::string btn_txt;
-            auto add_button = [&]( const char *action, const char *label, int x ) {
-                const bool hi = sel_opt == opt_num;
-                acc_clr = get_clr( c_yellow, hi );
-                acc_clr2 = get_clr( c_light_green, hi );
-                base_clr = get_clr( c_white, hi );
-                btn_txt = string_format( "%s%s%s %s %s", colorize( "[", acc_clr ),
-                                         colorize( ctxt.get_desc( action,     1U ), acc_clr2 ),
-                                         colorize( "][", acc_clr ), label, colorize( "]", acc_clr ) );
-                const point pos( x - utf8_width( btn_txt, true ) / 2, y );
-                print_colored_text( w_confirmation, pos, base_clr, base_clr, btn_txt );
-                btn_map.emplace( opt_num++, inclusive_rectangle<point>( pos,
-                                 pos + point( utf8_width( btn_txt, true ), 0 ) ) );
-            };
-            add_button( "FINALIZE", _( "Finish" ), content_x + content_width / 4 );
-            add_button( "RESET", _( "Reset" ), content_x + content_width / 2 );
-            add_button( "RANDOMIZE", _( "Randomize" ), content_x + content_width * 3 / 4 );
-            y++;
+            const int right_arrow_x = L.right_x + L.right_w - 1;
+            const nc_color arrow_color = row_sel ? hilite( c_yellow ) : c_yellow;
+            mvwputch( w_confirmation, point( L.right_x, row.top ), arrow_color, '<' );
+            mvwputch( w_confirmation, point( right_arrow_x, row.top ), arrow_color, '>' );
+            const int box_left = L.right_x + 2;
+            const int box_right = right_arrow_x - 2;
+            if( box_right > box_left ) {
+                const nc_color box_color = row_sel ? hilite( c_yellow ) : BORDER_COLOR;
+                mvwputch( w_confirmation, point( box_left - 1, row.top ), box_color, '[' );
+                mvwputch( w_confirmation, point( box_right + 1, row.top ), box_color, ']' );
+                const int inner_w = box_right - box_left + 1;
+                const int value_w = utf8_width( row.value );
+                const int value_x = box_left + std::max( 0, ( inner_w - value_w ) / 2 );
+                trim_and_print( w_confirmation, point( value_x, row.top ), inner_w,
+                                row_sel ? hilite( c_white ) : c_white, row.value );
+            }
         }
 
-        if( active_tab == 0 ) {
-            scrollbar()
-            .border_color( BORDER_COLOR )
-            .offset_x( content_x - 1 )
-            .offset_y( 1 )
-            .content_size( wg_sliders.size() * 3 + 3 )
-            .viewport_pos( top_opt * 3 )
-            .viewport_size( content_height )
-            .apply( w_confirmation );
+        scrollbar()
+        .border_color( BORDER_COLOR )
+        .offset_x( L.inner_x1 )
+        .offset_y( L.content_top )
+        .content_size( L.content_size )
+        .viewport_pos( L.scroll_pos )
+        .viewport_size( L.viewport_h )
+        .apply( w_confirmation, true );
+
+        for( const wg_button &btn : button_hits ) {
+            nc_color btn_color = c_white;
+            print_colored_text( w_confirmation, btn.text_pos, btn_color, c_white, btn.text );
         }
 
-        // Bottom box
-        wattron( w_confirmation, BORDER_COLOR );
-        mvwaddch( w_confirmation, point( 0,             win_height - 10 ), LINE_XXXO );
-        mvwhline( w_confirmation, point( 1,             win_height - 10 ), LINE_OXOX, win_width - 2 );
-        mvwaddch( w_confirmation, point( win_width - 1, win_height - 10 ), LINE_XOXX );
-        wattroff( w_confirmation, BORDER_COLOR );
-
-        // Hint text
-        std::string hint_txt =
-            string_format( _( "Press [<color_yellow>%s</color>] to pick a random name for your world.\n"
-                              "Navigate options with [<color_yellow>directional keys</color>] "
-                              "and confirm with [<color_yellow>%s</color>].\n"
-                              "Press [<color_yellow>%s</color>] to see additional control information." ),
-                           ctxt.get_desc( "PICK_RANDOM_WORLDNAME", 1U ), ctxt.get_desc( "CONFIRM", 1U ),
-                           ctxt.get_desc( "HELP_KEYBINDINGS", 1U ) );
-        if( !custom_opts && sel_opt > 0 && sel_opt <= static_cast<int>( wg_sliders.size() ) ) {
-            hint_txt = wg_sliders[sel_opt - 1]->level_desc( wg_slevels[sel_opt - 1] ).translated();
-        }
-        if( active_tab == 1 ) {
-            hint_txt = world->WORLD_OPTIONS.at( world_option_ids[selected_world_option] ).getTooltip();
-        }
-        y += fold_and_print( w_confirmation, point( content_x + 1, win_height - 9 ),
-                             content_width - 1, c_light_gray, hint_txt ) + 1;
-
-        // Advanced settings legend
-        nc_color dummy = c_light_gray;
-        std::string sctxt = string_format( _( "[<color_yellow>%s</color>] - Advanced options" ),
-                                           ctxt.get_desc( "ADVANCED_SETTINGS", 1U ) );
-        mvwprintz( w_confirmation, point( 2, win_height - 4 ), c_light_gray, _( "高级设置:" ) );
-        print_colored_text( w_confirmation, point( 2, win_height - 3 ), dummy, c_light_gray, sctxt );
-        sctxt = string_format( _( "[<color_yellow>%s</color>] - Open mod manager" ),
-                               ctxt.get_desc( "PICK_MODS", 1U ) );
-        print_colored_text( w_confirmation, point( 2, win_height - 2 ), dummy, c_light_gray, sctxt );
         wnoutrefresh( w_confirmation );
     } );
 
-    const auto set_slider_from_mouse = [&]( const int index, const point &coord ) {
-        const auto track = slider_track_map.find( index );
-        if( track == slider_track_map.end() ) {
+    const auto focus_pos = [&]() -> int {
+        for( size_t i = 0; i < focus_entries.size(); ++i ) {
+            if( focus_entries[i].kind == sel_kind && focus_entries[i].index == sel_index ) {
+                return static_cast<int>( i );
+            }
+        }
+        return -1;
+    };
+
+    const auto set_focus = [&]( wg_focus_kind kind, int index ) {
+        sel_kind = kind;
+        sel_index = index;
+        follow_focus = true;
+    };
+
+    const auto move_focus = [&]( int delta ) {
+        const int pos = focus_pos();
+        if( pos < 0 || focus_entries.empty() ) {
+            set_focus( wg_focus_kind::name, 0 );
             return;
         }
-        const int track_width = std::max( 1, track->second.p_max.x - track->second.p_min.x );
-        const int position = clamp( coord.x - track->second.p_min.x, 0, track_width );
-        const int max_level = wg_sliders[index]->count() - 1;
-        wg_slevels[index] = track_width == 0 ? 0 : static_cast<int>( std::round(
-                                 position * max_level / static_cast<double>( track_width ) ) );
-        wg_sliders[index]->apply_opts( wg_slevels[index], world->WORLD_OPTIONS );
+        const int target = clamp<int>( pos + delta, 0, static_cast<int>( focus_entries.size() ) - 1 );
+        sel_kind = focus_entries[target].kind;
+        sel_index = focus_entries[target].index;
+        follow_focus = true;
+    };
+
+    // Changing a preset level follows the existing rules: shared presets cannot describe
+    // customized advanced options, so those are reset (after confirmation) first.
+    const auto change_slider_level = [&]( int index, int delta ) {
+        if( index < 0 || index >= static_cast<int>( wg_sliders.size() ) ) {
+            return;
+        }
+        if( custom_opts ) {
+            if( query_yn( _( "Currently using customized advanced options.  "
+                             "Reset world options to defaults?" ) ) ) {
+                world->WORLD_OPTIONS = get_options().get_world_defaults();
+                wg_slevels = wg_slvl_default;
+                custom_opts = false;
+            }
+            return;
+        }
+        const int max_level = std::max( 0, wg_sliders[index]->count() - 1 );
+        const int level = clamp<int>( wg_slevels[index] + delta, 0, max_level );
+        if( level != wg_slevels[index] ) {
+            wg_slevels[index] = level;
+            wg_sliders[index]->apply_opts( level, world->WORLD_OPTIONS );
+        }
+    };
+
+    const auto change_world_option = [&]( int index, int delta ) {
+        if( index < 0 || index >= static_cast<int>( adv_options.size() ) ) {
+            return;
+        }
+        options_manager::cOpt &opt = world->WORLD_OPTIONS.at( adv_options[index] );
+        if( delta < 0 ) {
+            opt.setPrev();
+        } else {
+            opt.setNext();
+        }
+        custom_opts = true;
     };
 
     do {
         ui_manager::redraw();
 
-        recalc_startpos = false;
         std::string action = ctxt.handle_input();
         std::optional<point> mouse_coord;
-        if( action == "CLICK_AND_DRAG" || action == "MOUSE_MOVE" || action == "SELECT" ) {
+        if( action == "SELECT" || action == "MOUSE_MOVE" ) {
             mouse_coord = ctxt.get_coordinates_text( w_confirmation );
         }
-        if( action == "CLICK_AND_DRAG" && mouse_coord ) {
-            int slider_index = -1;
-            const bool on_slider = run_for_point_in<int, point>( slider_track_map, *mouse_coord,
-            [&slider_index]( const std::pair<int, inclusive_rectangle<point>> &entry ) {
-                slider_index = entry.first;
-            } ) > 0;
-            if( on_slider ) {
-                suppress_slider_release = true;
-                if( custom_opts && !query_yn( _( "Currently using customized advanced options.  "
-                                                 "Reset world options to defaults?" ) ) ) {
-                    action = "SLIDER_DRAG";
-                } else {
-                    if( custom_opts ) {
-                        world->WORLD_OPTIONS = get_options().get_world_defaults();
-                        wg_slevels = wg_slvl_default;
-                        custom_opts = false;
-                    }
-                    dragging_slider = slider_index;
-                    sel_opt = slider_index + 1;
-                    set_slider_from_mouse( slider_index, *mouse_coord );
-                    action = "SLIDER_DRAG";
-                }
-            }
-        } else if( action == "MOUSE_MOVE" && dragging_slider && mouse_coord ) {
-            set_slider_from_mouse( *dragging_slider, *mouse_coord );
-            action = "SLIDER_DRAG";
-        } else if( action == "SELECT" && suppress_slider_release ) {
-            dragging_slider.reset();
-            suppress_slider_release = false;
-            action = "SLIDER_DRAG";
-        } else if( action == "SELECT" && mouse_coord ) {
-            int slider_index = -1;
-            if( run_for_point_in<int, point>( slider_track_map, *mouse_coord,
-            [&slider_index]( const std::pair<int, inclusive_rectangle<point>> &entry ) {
-                slider_index = entry.first;
-            } ) > 0 ) {
-                if( custom_opts && !query_yn( _( "Currently using customized advanced options.  "
-                                                 "Reset world options to defaults?" ) ) ) {
-                    action = "SLIDER_DRAG";
-                } else {
-                    if( custom_opts ) {
-                        world->WORLD_OPTIONS = get_options().get_world_defaults();
-                        wg_slevels = wg_slvl_default;
-                        custom_opts = false;
-                    }
-                    sel_opt = slider_index + 1;
-                    set_slider_from_mouse( slider_index, *mouse_coord );
-                    action = "SLIDER_DRAG";
-                }
-            }
-        }
-        // Handle mouse input
-        if( action == "MOUSE_MOVE" || action == "SELECT" ) {
-            const std::optional<point> &coord = mouse_coord;
-            if( !!coord ) {
-                int orig_opt = sel_opt;
-                bool found = run_for_point_in<int, point>( btn_map, *coord,
-                [&sel_opt]( const std::pair<int, inclusive_rectangle<point>> &p ) {
-                    sel_opt = p.first;
-                } ) > 0;
-                int clicked_world_option = -1;
-                const bool found_world_option = run_for_point_in<int, point>( world_option_map, *coord,
-                [&clicked_world_option]( const std::pair<int, inclusive_rectangle<point>> &p ) {
-                    clicked_world_option = p.first;
-                } ) > 0;
-                if( found_world_option ) {
-                    selected_world_option = clicked_world_option;
-                    if( action == "SELECT" ) {
-                        action = "OPTION_NEXT";
-                    }
-                }
-                if( found && action == "SELECT" ) {
-                    if( sel_opt == static_cast<int>( wg_sliders.size() + 4 ) ||
-                        sel_opt == static_cast<int>( wg_sliders.size() + 7 ) ) {
-                        active_tab = 1;
-                        action = "TAB_SWITCH";
-                    } else if( sel_opt == static_cast<int>( wg_sliders.size() + 5 ) ||
-                               sel_opt == static_cast<int>( wg_sliders.size() + 8 ) ) {
-                        action = "PICK_MODS";
-                    } else if( sel_opt == static_cast<int>( wg_sliders.size() + 9 ) ) {
-                        active_tab = 0;
-                        action = "TAB_SWITCH";
-                    } else if( sel_opt == static_cast<int>( wg_sliders.size() + 6 ) ) {
-                        action = "PICK_RANDOM_WORLDNAME";
-                    } else if( sel_opt == static_cast<int>( wg_sliders.size() + 1 ) ) {
-                        action = "FINALIZE";
-                    } else if( sel_opt == static_cast<int>( wg_sliders.size() + 2 ) ) {
-                        action = "RESET";
-                    } else if( sel_opt == static_cast<int>( wg_sliders.size() + 3 ) ) {
-                        action = "RANDOMIZE";
-                    } else {
-                        action = "CONFIRM";
-                        run_for_point_in<int, point>( slider_inc_map, *coord,
-                        [&action]( const std::pair<int, inclusive_rectangle<point>> &p ) {
-                            action = p.first % 2 == 0 ? "LEFT" : "RIGHT";
-                        } );
-                    }
-                }
-                if( action == "MOUSE_MOVE" && sel_opt > static_cast<int>( wg_sliders.size() + 3 ) ) {
-                    sel_opt = orig_opt;
-                } else if( action == "TAB_SWITCH" || action == "ADVANCED_SETTINGS" || action == "PICK_MODS" ||
-                           action == "PICK_RANDOM_WORLDNAME" ) {
-                    sel_opt = orig_opt;
-                }
-            }
-        }
 
-        // Button shortcuts
-        if( action == "FINALIZE" ) {
-            action = "CONFIRM";
-            sel_opt = wg_sliders.size() + 1;
-            ui_manager::redraw();
-        } else if( action == "RESET" ) {
-            action = "CONFIRM";
-            sel_opt = wg_sliders.size() + 2;
-            ui_manager::redraw();
-        } else if( action == "RANDOMIZE" ) {
-            action = "CONFIRM";
-            sel_opt = wg_sliders.size() + 3;
-            // no confirmation prompt, no need to redraw the ui
-        }
+        // Bottom button activated this iteration, by mouse click or by a key binding.
+        std::optional<int> activated;
+        bool edit_name = false;
+        bool randomize_name = false;
 
-        // Handle other inputs
-        if( active_tab == 1 && ( action == "OPTION_NEXT" || action == "CONFIRM" ||
-                                 action == "LEFT" || action == "RIGHT" ) ) {
-            options_manager::cOpt &opt = world->WORLD_OPTIONS.at(
-                                             world_option_ids[selected_world_option] );
-            if( action == "LEFT" ) {
-                opt.setPrev();
-            } else {
-                opt.setNext();
-            }
-        } else if( active_tab == 1 && navigate_ui_list( action, selected_world_option, 1,
-                   static_cast<int>( world_option_ids.size() ) - 1, true ) ) {
-            recalc_startpos = true;
-        } else if( action == "CONFIRM" ) {
-            if( sel_opt == 0 ) {
-                // rename
-                std::optional<std::string> ret = prompt_world_name( _( "World name:" ), worldname );
-                if( !ret.value_or( "" ).empty() ) {
-                    world->world_name = worldname = ret.value();
+        if( mouse_coord.has_value() ) {
+            const point coord = *mouse_coord;
+            const bool clicking = action == "SELECT";
+            bool handled = false;
+            for( const wg_row_hit &hit : row_hits ) {
+                if( hit.left_arrow.contains( coord ) || hit.right_arrow.contains( coord ) ) {
+                    set_focus( hit.kind, hit.index );
+                    if( clicking ) {
+                        const int delta = hit.left_arrow.contains( coord ) ? -1 : 1;
+                        if( hit.kind == wg_focus_kind::slider ) {
+                            change_slider_level( hit.index, delta );
+                        } else {
+                            change_world_option( hit.index, delta );
+                        }
+                    }
+                    handled = true;
+                    break;
                 }
-            } else if( sel_opt == static_cast<int>( wg_sliders.size() + 1 ) ) {
-                // finish
-                if( worldname.empty() ) {
-                    noname = true;
-                    ui.invalidate_ui();
-                    if( !query_yn( _( "Are you SURE you're finished?  World name will be randomly generated." ) ) ) {
-                        noname = false;
+                if( hit.center.contains( coord ) ) {
+                    set_focus( hit.kind, hit.index );
+                    handled = true;
+                    break;
+                }
+            }
+            if( !handled ) {
+                for( const wg_button &btn : button_hits ) {
+                    if( btn.rect.contains( coord ) ) {
+                        set_focus( wg_focus_kind::button, btn.id );
+                        if( clicking ) {
+                            activated = btn.id;
+                        }
+                        handled = true;
+                        break;
+                    }
+                }
+            }
+            if( !handled ) {
+                for( const wg_focus_entry &entry : focus_entries ) {
+                    if( entry.kind != wg_focus_kind::name || !entry.rect.contains( coord ) ) {
                         continue;
-                    } else {
+                    }
+                    set_focus( wg_focus_kind::name, 0 );
+                    if( clicking ) {
+                        edit_name = true;
+                    }
+                    handled = true;
+                    break;
+                }
+            }
+            if( !handled ) {
+                for( const wg_focus_entry &entry : focus_entries ) {
+                    if( entry.kind != wg_focus_kind::random_name || !entry.rect.contains( coord ) ) {
+                        continue;
+                    }
+                    set_focus( wg_focus_kind::random_name, 0 );
+                    if( clicking ) {
+                        randomize_name = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if( action == "PICK_RANDOM_WORLDNAME" ) {
+            set_focus( wg_focus_kind::random_name, 0 );
+            randomize_name = true;
+        } else if( action == "FINALIZE" || action == "RESET" || action == "RANDOMIZE" ||
+                   action == "ADVANCED_SETTINGS" || action == "PICK_MODS" ||
+                   action == "WORLDGEN_CONFIRM.QUIT" ) {
+            int button_id = wg_btn_back;
+            if( action == "FINALIZE" ) {
+                button_id = wg_btn_finish;
+            } else if( action == "RESET" ) {
+                button_id = wg_btn_reset;
+            } else if( action == "RANDOMIZE" ) {
+                button_id = wg_btn_randomize;
+            } else if( action == "ADVANCED_SETTINGS" ) {
+                button_id = wg_btn_advanced;
+            } else if( action == "PICK_MODS" ) {
+                button_id = wg_btn_mods;
+            }
+            set_focus( wg_focus_kind::button, button_id );
+            activated = button_id;
+        } else if( action == "UP" || action == "DOWN" || action == "PAGE_UP" ||
+                   action == "PAGE_DOWN" || action == "HOME" || action == "END" ) {
+            if( action == "HOME" ) {
+                move_focus( -static_cast<int>( focus_entries.size() ) );
+            } else if( action == "END" ) {
+                move_focus( static_cast<int>( focus_entries.size() ) );
+            } else if( action == "PAGE_UP" ) {
+                move_focus( -page_step );
+            } else if( action == "PAGE_DOWN" ) {
+                move_focus( page_step );
+            } else if( action == "UP" ) {
+                move_focus( -1 );
+            } else {
+                move_focus( 1 );
+            }
+        } else if( action == "SCROLL_UP" || action == "SCROLL_DOWN" ) {
+            // The wheel only moves the settings list, it never changes a value.
+            top_row += action == "SCROLL_UP" ? -1 : 1;
+            follow_focus = false;
+        } else if( action == "LEFT" || action == "RIGHT" ) {
+            const int delta = action == "LEFT" ? -1 : 1;
+            if( sel_kind == wg_focus_kind::slider && !advanced_view ) {
+                change_slider_level( sel_index, delta );
+            } else if( sel_kind == wg_focus_kind::world_option && advanced_view ) {
+                change_world_option( sel_index, delta );
+            } else if( sel_kind == wg_focus_kind::button ) {
+                set_focus( wg_focus_kind::button,
+                           clamp<int>( sel_index + delta, wg_btn_mods, wg_btn_count - 1 ) );
+            }
+        } else if( action == "CONFIRM" ) {
+            switch( sel_kind ) {
+                case wg_focus_kind::name:
+                    edit_name = true;
+                    break;
+                case wg_focus_kind::random_name:
+                    randomize_name = true;
+                    break;
+                case wg_focus_kind::slider:
+                    break;
+                case wg_focus_kind::world_option:
+                    change_world_option( sel_index, 1 );
+                    break;
+                case wg_focus_kind::button:
+                    activated = sel_index;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if( edit_name ) {
+            const std::optional<std::string> ret = prompt_world_name( _( "World name:" ), worldname );
+            if( ret.has_value() && !ret.value().empty() ) {
+                world->world_name = worldname = ret.value();
+                noname = false;
+            }
+        }
+        if( randomize_name ) {
+            world->world_name = worldname = pick_random_name();
+            noname = false;
+        }
+
+        if( activated.has_value() ) {
+            switch( *activated ) {
+                case wg_btn_mods:
+                    show_worldgen_tab_modselection( w_confirmation, world, false );
+                    break;
+                case wg_btn_advanced:
+                    advanced_view = !advanced_view;
+                    top_row = 0;
+                    follow_focus = true;
+                    break;
+                case wg_btn_reset:
+                    if( query_yn( _( "Are you sure you want to reset this world?" ) ) ) {
+                        world->WORLD_OPTIONS = get_options().get_world_defaults();
+                        world->world_saves.clear();
+                        world->active_mod_order = world_generator->get_mod_manager().get_default_mods();
+                        wg_slevels = wg_slvl_default;
+                        custom_opts = false;
+                        follow_focus = true;
+                    }
+                    break;
+                case wg_btn_randomize:
+                    for( int i = 0; i < static_cast<int>( wg_sliders.size() ); ++i ) {
+                        wg_slevels[i] = wg_sliders[i]->random_level();
+                        wg_sliders[i]->apply_opts( wg_slevels[i], world->WORLD_OPTIONS );
+                    }
+                    custom_opts = false;
+                    break;
+                case wg_btn_finish:
+                    if( worldname.empty() ) {
+                        noname = true;
+                        ui.invalidate_ui();
+                        if( !query_yn( _( "Are you SURE you're finished?  "
+                                          "World name will be randomly generated." ) ) ) {
+                            noname = false;
+                            break;
+                        }
                         noname = false;
                         world->world_name = pick_random_name();
                         if( !valid_worldname( world->world_name ) ) {
-                            continue;
+                            break;
                         }
                         return 1;
+                    } else if( valid_worldname( worldname ) &&
+                               query_yn( _( "Are you SURE you're finished?" ) ) ) {
+                        world->world_name = worldname;
+                        return 1;
                     }
-                } else if( valid_worldname( worldname ) && query_yn( _( "Are you SURE you're finished?" ) ) ) {
-                    world->world_name = worldname;
-                    return 1;
-                }
-            } else if( sel_opt == static_cast<int>( wg_sliders.size() + 2 ) &&
-                       query_yn( _( "Are you sure you want to reset this world?" ) ) ) {
-                // reset
-                world->WORLD_OPTIONS = get_options().get_world_defaults();
-                world->world_saves.clear();
-                world->active_mod_order = world_generator->get_mod_manager().get_default_mods();
-                wg_slevels = wg_slvl_default;
-                custom_opts = false;
-            } else if( sel_opt == static_cast<int>( wg_sliders.size() + 3 ) ) {
-                // randomize
-                for( int i = 0; i < static_cast<int>( wg_sliders.size() ); i++ ) {
-                    wg_slevels[i] = wg_sliders[i]->random_level();
-                }
+                    break;
+                case wg_btn_back:
+                    if( query_yn( _( "Do you want to abort World Generation?" ) ) ) {
+                        world->world_name = worldname;
+                        return -999;
+                    }
+                    break;
+                default:
+                    break;
             }
-        } else if( navigate_ui_list( action, sel_opt, 1, wg_sliders.size() + 3, true ) ) {
-            recalc_startpos = true;
-        } else if( action == "LEFT" || action == "RIGHT" ) {
-            if( sel_opt > 0 && sel_opt <= static_cast<int>( wg_sliders.size() ) ) {
-                if( custom_opts && query_yn( _( "Currently using customized advanced options.  "
-                                                "Reset world options to defaults?" ) ) ) {
-                    world->WORLD_OPTIONS = get_options().get_world_defaults();
-                    wg_slevels = wg_slvl_default;
-                    custom_opts = false;
-                    continue;
-                } else if( custom_opts ) {
-                    continue;
-                }
-                int lvl = wg_slevels[sel_opt - 1] + ( action == "LEFT" ? -1 : 1 );
-                wg_slevels[sel_opt - 1] = clamp<int>( lvl, 0, wg_sliders[sel_opt - 1]->count() - 1 );
-                wg_sliders[sel_opt - 1]->apply_opts( wg_slevels[sel_opt - 1], world->WORLD_OPTIONS );
-            } else if( sel_opt > static_cast<int>( wg_sliders.size() ) ) {
-                if( action == "LEFT" && sel_opt > static_cast<int>( wg_sliders.size() + 1 ) ) {
-                    sel_opt--;
-                } else if( action == "RIGHT" && sel_opt < static_cast<int>( wg_sliders.size() + 3 ) ) {
-                    sel_opt++;
-                }
-            }
-        } else if( action == "PICK_MODS" ) {
-            show_worldgen_tab_modselection( w_confirmation, world, false );
-        } else if( action == "ADVANCED_SETTINGS" ) {
-            active_tab = 1;
-        } else if( action == "PICK_RANDOM_WORLDNAME" ) {
-            world->world_name = worldname = pick_random_name();
-        } else if( action == "WORLDGEN_CONFIRM.QUIT" &&
-                   query_yn( _( "Do you want to abort World Generation?" ) ) ) {
-            world->world_name = worldname;
-            return -999;
         }
     } while( true );
 

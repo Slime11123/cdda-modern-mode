@@ -35,8 +35,13 @@ struct target {
 // may query further up to the native weapon's range.
 // Remembered/enclosing surfaces block selection but cannot become targets.
 // Native interaction reach and perception must still be checked before acting.
+// screen_x/y are normalised device coordinates (-1..1, +y up) inside the world
+// viewport; the first-person reticle uses the centre (0, 0). The overhead view
+// passes the mouse position so picking and rendering share one camera. aspect
+// is the world viewport's width/height, the same one the projection uses.
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
-                           fp3d_camera::offset offset = {}, float max_reach = 6.0f );
+                           fp3d_camera::offset offset = {}, float max_reach = 6.0f,
+                           float screen_x = 0.0f, float screen_y = 0.0f, float aspect = 1.0f );
 
 // First stage: one neighbouring tile in the camera direction, same storey.
 // Looking down selects the player's feet. Memory and facades are excluded.

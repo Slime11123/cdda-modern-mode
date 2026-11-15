@@ -1,10 +1,12 @@
 #include "game.h"
+#include "fp3d_save_preview.h"
 
 #if defined(ENABLE_FP3D)
 #include "fp3d_compositor.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_input.h"
 #include "fp3d_entry.h"
+#include "fp3d_light_lab.h"
 #endif
 
 #include <algorithm>
@@ -899,6 +901,14 @@ void game::legacy_migrate_npctalk_var_prefix( global_variables::impl_t &map_of_v
         }
     }
 }
+
+#if defined(ENABLE_FP3D)
+bool game::start_isolated_menu_game()
+{
+    // This API is used solely by the isolated --menu-demo-worker path.
+    return start_game();
+}
+#endif
 
 // Set up all default values for a new game
 bool game::start_game()
@@ -3407,6 +3417,50 @@ bool game::load( const save_t &name )
 
     loading_ui::done();
 #if defined(ENABLE_FP3D)
+    // One-shot provisioning for a COPY of the QA world in the user's normal
+    // save directory. Never touches the player's other worlds or normal loads.
+    const char *light_lab_request = std::getenv( "CDDA_FP3D_PROVISION_LIGHT_TEST" );
+    if( light_lab_request && std::string( light_lab_request ) == "1" &&
+        world_generator->active_world &&
+        world_generator->active_world->world_name == "光影电网测试" ) {
+        const fp3d_light_lab::status lab = fp3d_light_lab::provision( here, u );
+        const bool persisted = lab.ready && save();
+        std::ofstream result_file( ( PATH_INFO::world_base_save_path() /
+                                     "LIGHT_LAB_SETUP_RESULT.txt" ).get_unrelative_path() );
+        if( result_file ) {
+            result_file << "saved=" << static_cast<int>( persisted ) << "\n"
+                        << "battery_charged=" << lab.charged_kj << "\n"
+                        << "connected_grid_charge=" << lab.grid_kj << "\n"
+                        << "flashlight_charges=" << lab.flashlight_charges << "\n"
+                        << "phone_charges=" << lab.phone_charges << "\n"
+                        << "powered_lamp=" << static_cast<int>( lab.powered_fixture ) << "\n"
+                        << "off_lamp=" << static_cast<int>( lab.inactive_fixture ) << "\n"
+                        << "isolated_lamp=" << static_cast<int>( lab.isolated_fixture ) << "\n";
+        }
+    }
+    const char *light_diag = std::getenv( "CDDA_FP3D_LIGHT_DIAGNOSTICS" );
+    if( light_diag && std::string( light_diag ) == "1" ) {
+        std::ofstream file( "C:/Users/StickySlime/Documents/Codex/Projects/cdda3dproject/qa/LIGHT_LAB_DIAGNOSTICS.txt" );
+        const std::array<std::pair<const char *, point>, 4> test_points = {{
+                { "powered", point( 3, -2 ) }, { "battery", point( 4, -2 ) },
+                { "off", point( 4, -3 ) }, { "isolated", point( -4, -2 ) }
+            }};
+        for( const auto &candidate : test_points ) {
+            const tripoint_bub_ms target = u.pos_bub() + candidate.second;
+            const auto vp = here.veh_at( target );
+            file << candidate.first << " found=" << static_cast<int>( vp.has_value() );
+            if( vp ) {
+                const vehicle_part &part = vp->vehicle().part(
+                                               static_cast<int>( vp->part_index() ) );
+                file << " part=" << part.info().id.str() << " enabled=" << part.enabled
+                     << " hidden=" << part.hidden << " available=" << part.is_available()
+                     << " is_light=" << part.is_light() << " bonus=" << part.info().bonus
+                     << " grid_charge=" << vp->vehicle().connected_battery_power_level( here ).first
+                     << " player_sees=" << u.sees( here, target );
+            }
+            file << "\n";
+        }
+    }
     fp3d_entry::begin( u );
 #endif
     return true;
@@ -3695,6 +3749,9 @@ bool game::save()
             world_generator->last_character_name = u.name;
             world_generator->save_last_world_info();
             world_generator->active_world->add_save( save_t::from_save_id( u.get_save_id() ) );
+#if defined(TILES) && defined(ENABLE_FP3D)
+            fp3d_save_preview::record();
+#endif
             write_to_file( PATH_INFO::world_base_save_path() / ( base64_encode(
             u.get_save_id() ) + ".pt" ), [&total_time_played]( std::ostream & fout ) {
                 fout.imbue( std::locale::classic() );
@@ -4219,7 +4276,11 @@ void game::draw( ui_adaptor &ui )
 #if defined(ENABLE_FP3D)
     // Publish before any native map drawing so the first 3D frame can skip it.
     if( capture_3d ) {
-        fp3d_compositor::publish( fp3d_snapshot::capture( u, here ) );
+        // The overhead camera asks the capture to lift the avatar's own ceiling
+        // and the storeys above it. That is a presentation cut performed while
+        // the snapshot is built, so the renderer and the pointer ray can never
+        // disagree about which surfaces exist.
+        fp3d_compositor::publish_camera( u, here, fp3d_compositor::overhead() );
     } else if( fp3d_compositor::uses_hud() &&
                fp3d_compositor::controls() != fp3d_input::mode::first_person_3d ) {
         fp3d_compositor::publish_hud( fp3d_hud::capture( u ) );
@@ -4340,6 +4401,13 @@ void game::draw_pixel_minimap( const catacurses::window &w )
 void game::draw_critter( const Creature &critter, const tripoint_bub_ms &center )
 {
     const map &here = get_map();
+#if defined(ENABLE_FP3D)
+    // The isolated title demonstration keeps an avatar only to satisfy game
+    // logic; it must never appear on screen in any renderer path.
+    if( is_native_menu_demo_worker() && critter.is_avatar() ) {
+        return;
+    }
+#endif
 
     const tripoint_bub_ms critter_pos = critter.pos_bub( here );
     const int my = POSY + ( critter_pos.y() - center.y() );

@@ -411,6 +411,20 @@ class mode_settings : public cataimgui::window
                 fp3d_shaderpacks::set_shadow_volume_enabled( volume );
             }
             ImGui::TextWrapped( "上述两项为 MC 视觉桥的极高档实验特性。SSR 仅渲染原版已可见的水面与下雨的道路，具有屏幕外反射缺失的限制。不影响 2D、原生光影和直接 final.fsh。" );
+            bool experimental_pbr = fp3d_shaderpacks::pbr_enabled();
+            if( ImGui::Checkbox( "实验性 PBR 法线与材质高光（Ultra）", &experimental_pbr ) ) {
+                fp3d_shaderpacks::set_pbr_enabled( experimental_pbr );
+            }
+            int pbr_strength = fp3d_shaderpacks::pbr_strength_percent();
+            if( ImGui::SliderInt( "PBR 细节强度 (%)", &pbr_strength, 0, 200 ) ) {
+                fp3d_shaderpacks::set_pbr_strength_percent( pbr_strength );
+            }
+            ImGui::TextWrapped( "PBR 默认关闭，仅在极高画质及受支持的内置/MC 视觉桥中启用。\n当前只覆盖普通墙面、地面；有额外显存与 GPU 负载。若画面或帧数异常可直接关闭。" );
+            bool local_lights = fp3d_shaderpacks::local_lights_enabled();
+            if( ImGui::Checkbox( "动态灯光（电网 / 手电筒 / 手机）", &local_lights ) ) {
+                fp3d_shaderpacks::set_local_lights_enabled( local_lights );
+            }
+            ImGui::TextWrapped( "灯具必须在原版中确实通电、开启；便携设备必须正在发光。近距离色彩与光晕在 Photon/内置光影生效。最多 8 个邻近光源；暂不包含逐灯阴影。关闭以立即回退。" );
             ImGui::TextWrapped( "Minecraft 光影：简单 GLSL 1.20 final.fsh 可直接运行；Photon 等复杂光影使用 CDDA 视觉适配，暂不支持完整 Iris 多阶段效果。" );
             ImGui::EndChild();
 
@@ -481,6 +495,8 @@ class mode_settings : public cataimgui::window
                 result = 1;
                 is_open = false;
             }
+            ImGui::SetCursorPos( ImVec2( font, top + height - font * 2.6f ) );
+            ImGui::TextDisabled( "3D 世界中按 F6 切换第一人称 / 上帝视角（俯视）；俯视下滚轮缩放、中键旋转、右键地块菜单" );
             ImGui::SetCursorPos( ImVec2( font, top + height - font * 1.5f ) );
             ImGui::TextDisabled( "左右选列 / 上下选择 / Enter 完成 / Esc 取消" );
         }

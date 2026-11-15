@@ -45,6 +45,10 @@
 #include "weather_type.h"
 #endif
 
+// Defined in sdltiles.cpp: true only inside the isolated title demonstration
+// process, which streams its own frames and must never stall on a wait.
+bool menu_demo_spectator_visibility();
+
 namespace
 {
 
@@ -70,13 +74,22 @@ class basic_animation
             draw();
 
             const auto sleep_till = std::chrono::steady_clock::now() + std::chrono::nanoseconds( delay );
+            // The isolated title demonstration streams its own frames. Sleeping here
+            // would freeze the backdrop for the whole animation, so it keeps redrawing
+            // at frame rate instead (the worker's camera advances once per frame).
+            const bool keep_frames = menu_demo_spectator_visibility();
             do {
                 const auto sleep_for = std::min( sleep_till - std::chrono::steady_clock::now(),
+                                                 keep_frames
+                                                 ? std::chrono::nanoseconds( 16000000 )
                                                  // Pump events every 100 ms
-                                                 std::chrono::nanoseconds( 100000000 ) );
+                                                 : std::chrono::nanoseconds( 100000000 ) );
                 if( sleep_for > std::chrono::nanoseconds( 0 ) ) {
                     std::this_thread::sleep_for( sleep_for );
                     inp_mngr.pump_events();
+                    if( keep_frames ) {
+                        draw();
+                    }
                 } else {
                     break;
                 }
@@ -555,10 +568,24 @@ void hit_animation( const avatar &u, const tripoint_bub_ms &center, nc_color cCo
         g->add_draw_callback( hit_cb );
 
         ui_manager::redraw();
-        inp_mngr.set_timeout( get_option<int>( "ANIMATION_DELAY" ) );
-        // Skip input (if any), because holding down a key with sleep_for can get yourself killed
-        inp_mngr.get_input_event();
-        inp_mngr.reset_timeout();
+        if( menu_demo_spectator_visibility() ) {
+            // The isolated title demonstration must not stall on an input wait: keep
+            // producing frames so the camera keeps gliding while the hit flashes.
+            const auto till = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds( get_option<int>( "ANIMATION_DELAY" ) );
+            while( std::chrono::steady_clock::now() < till ) {
+                std::this_thread::sleep_for( std::chrono::milliseconds( 16 ) );
+                inp_mngr.pump_events();
+                g->invalidate_main_ui_adaptor();
+                ui_manager::redraw_invalidated();
+                refresh_display();
+            }
+        } else {
+            inp_mngr.set_timeout( get_option<int>( "ANIMATION_DELAY" ) );
+            // Skip input (if any), because holding down a key with sleep_for can get yourself killed
+            inp_mngr.get_input_event();
+            inp_mngr.reset_timeout();
+        }
     }
 }
 

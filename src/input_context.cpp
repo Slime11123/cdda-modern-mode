@@ -474,6 +474,14 @@ const std::string &input_context::handle_input( const int timeout )
         const bool fp3d_idle = !nonblocking && category == "DEFAULTMODE" && fp3d_compositor::turn_based();
         inp_mngr.set_timeout( fp3d_idle ? 16 : timeout >= 0 ? timeout : old_timeout );
         if( fp3d_world ) {
+            // The overhead camera consumes its own right-click and hands the world
+            // dispatcher one plain secondary select, which opens the same dropdown
+            // modern 2D uses on the picked tile.
+            if( fp3d_compositor::take_secondary_select( &next_action.mouse_pos ) ) {
+                next_action.text = action_ident( ACTION_SEC_SELECT );
+                result = &next_action.text;
+                break;
+            }
             const auto intent = fp3d_input::world_gestures().poll( SDL_GetTicks() );
             if( !intent.empty() && is_registered_action( intent ) ) {
                 next_action.text = intent;
@@ -506,7 +514,8 @@ const std::string &input_context::handle_input( const int timeout )
         }
         if( ( category == "DEFAULTMODE" || category == "FP3D_BUILD" ) && fp3d_compositor::captures_game_input() ) {
             const auto mapped = fp3d_input::resolve( fp3d_compositor::controls(),
-                                next_action, fp3d_compositor::heading(), fp3d_input::vehicle_controls() );
+                                next_action, fp3d_compositor::movement_heading(),
+                                fp3d_input::vehicle_controls() );
             if( !mapped.empty() && is_registered_action( mapped ) ) {
                 next_action.text = mapped;
                 result = &next_action.text;

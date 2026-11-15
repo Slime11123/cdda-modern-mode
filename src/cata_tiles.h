@@ -455,9 +455,18 @@ class cata_tiles
                    color_block_overlay_container &color_blocks,
                    const point &pixel_offset = point::zero );
         void draw_om( const point &dest, const tripoint_abs_omt &center_abs_omt, bool blink );
+#if defined(ENABLE_FP3D)
+        // Continuous native overmap terrain for the survival menu.
+        SDL_Texture_Ptr overmap_texture( const tripoint_abs_omt &center, int radius );
+#endif
 
         /** Minimap functionality */
         void draw_minimap( const point &dest, const tripoint_bub_ms &center, int width, int height );
+
+
+        /** Draw a live paper-doll using the currently loaded player sprite and appearance overlays. */
+        void draw_character_preview( const Character &ch, const SDL_Rect &bounds,
+                                     const std::vector<std::pair<std::string, std::string>> &gear );
 
     protected:
         /** How many rows and columns of tiles fit into given dimensions, fully
@@ -772,7 +781,7 @@ class cata_tiles
         static std::vector<options_manager::id_and_option> build_display_list();
     private:
         std::pair<std::string, bool> get_omt_id_rotation_and_subtile( const tripoint_abs_omt &omp,
-                int &rota, int &subtile );
+                int &rota, int &subtile, bool existing_only = false );
     protected:
         template <typename maptype>
         void tile_loading_report_map( const maptype &tiletypemap, TILE_CATEGORY category,
@@ -831,6 +840,7 @@ class cata_tiles
         bool do_draw_hit = false;
         bool do_draw_line = false;
         bool do_draw_cursor = false;
+        bool collecting_3d_overlays = false;
         bool do_draw_highlight = false;
         bool do_draw_weather = false;
         bool do_draw_sct = false;

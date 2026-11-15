@@ -53,10 +53,14 @@ bool vehicle_roof_sheet_suppressed( const tripoint_abs_ms &position,
 // Call before destroying the current OpenGL context.
 void release();
 // Draws only owned snapshot data within the compositor's saved GL state/FBO.
+// overhead switches the hand overlay, the centre crosshair and the avatar's own
+// tile sprite. Everything else (world geometry, lighting, shadows, reflections)
+// is unchanged, so both cameras share one rendering path.
 void draw( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
            float aspect, fp3d_camera::offset offset, const std::optional<blueprint> &preview = std::nullopt,
            bool interactable = false, float swing = 0,
-           const std::optional<fp3d_targeting::target> &aim = std::nullopt );
+           const std::optional<fp3d_targeting::target> &aim = std::nullopt,
+           bool overhead = false );
 } // namespace fp3d_scene
 #endif
 #endif // CATA_SRC_FP3D_SCENE_H

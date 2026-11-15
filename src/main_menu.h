@@ -15,12 +15,16 @@
 #include "point.h"
 #include "worldfactory.h"
 
+class game;
 class main_menu
 {
     public:
         main_menu() : ctxt( "MAIN_MENU", keyboard_mode::keychar ) { }
         // Shows the main menu and returns whether a game was started or not
         bool opening_screen();
+        // Narrow bridge for the isolated title-demo process. main_menu is
+        // already a friend of game; normal world startup remains private.
+        static bool start_native_demo_game( game &session );
 
         static std::string queued_world_to_load;
         static std::string queued_save_id_to_load;

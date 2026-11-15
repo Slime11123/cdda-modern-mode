@@ -6730,7 +6730,7 @@ void map::update_submaps_with_active_items()
     submaps_with_active_items_dirty.clear();
 }
 
-void map::update_visibility_cache( const int zlev )
+void map::update_visibility_cache( const int zlev, bool update_lower_levels )
 {
     Character &player_character = get_player_character();
     const tripoint_bub_ms pos = player_character.pos_bub( *this );
@@ -6740,8 +6740,8 @@ void map::update_visibility_cache( const int zlev )
         return;
     }
 
-    if( pos.z() - zlev < fov_3d_z_range && zlev > -OVERMAP_DEPTH ) {
-        update_visibility_cache( zlev - 1 );
+    if( update_lower_levels && pos.z() - zlev < fov_3d_z_range && zlev > -OVERMAP_DEPTH ) {
+        update_visibility_cache( zlev - 1, update_lower_levels );
     }
     visibility_variables_cache.variables_set = true; // Not used yet
     visibility_variables_cache.g_light_level = static_cast<int>( g->light_level( zlev ) );

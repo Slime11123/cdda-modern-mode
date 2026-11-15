@@ -79,6 +79,7 @@
 #include "overmap.h"
 #include "path_info.h"
 #include "pixel_minimap.h"
+#include "profession.h"
 #include "rect_range.h"
 #include "scent_map.h"
 #include "sdl_utils.h"
@@ -926,7 +927,15 @@ void tileset_cache::loader::load_layers( const JsonObject &config )
                 furn_exists = furn_str_id( context );
                 ter_exists = ter_str_id( context );
                 if( !furn_exists.is_valid() && !ter_exists.is_valid() ) {
-                    debugmsg( "Layering data: %s not a valid furniture/terrain object", context );
+#if defined(ENABLE_FP3D)
+                    // During title loading, furniture/terrain ids aren't yet
+                    // registered. Full validation happens during world loading.
+                    if( !main_menu_tileset_preload_in_progress() ) {
+#endif
+                        debugmsg( "Layering data: %s not a valid furniture/terrain object", context );
+#if defined(ENABLE_FP3D)
+                    }
+#endif
                 }
             }
             //currently, only one flag can be defined, and must be in an array
@@ -1929,6 +1938,50 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     }
 
     if( skip_covered_map ) {
+#if defined(ENABLE_FP3D)
+        fp3d_compositor::clear_map_overlays();
+        if( fp3d_compositor::overhead() ) {
+            // Reuse native animation selection, visibility and lifetime rules.
+            // Only their draw requests are copied; no hidden terrain is drawn.
+            collecting_3d_overlays = true;
+            draw_footsteps_frame( center );
+            if( do_draw_explosion ) { draw_explosion_frame(); }
+            if( do_draw_custom_explosion ) { draw_custom_explosion_frame(); }
+            if( do_draw_bullet ) { draw_bullet_frame(); }
+            if( do_draw_hit ) { draw_hit_frame(); }
+            if( do_draw_line ) { draw_line(); }
+            if( do_draw_cursor ) { draw_cursor(); }
+            if( do_draw_highlight ) { draw_highlight(); }
+            if( do_draw_zones ) { draw_zones_frame(); }
+            if( do_draw_async_anim ) { draw_async_anim(); }
+            if( do_draw_sct ) { draw_sct_frame( overlay_strings ); }
+            if( !do_draw_explosion && !do_draw_custom_explosion && !do_draw_bullet &&
+                !do_draw_hit && !do_draw_line && !do_draw_cursor && !do_draw_highlight &&
+                !do_draw_sct && !do_draw_zones && !do_draw_async_anim &&
+                you.view_offset != tripoint_rel_ms::zero && !you.in_vehicle &&
+                !is_native_menu_demo_worker() ) {
+                draw_from_id_string( "cursor", TILE_CATEGORY::NONE, empty_string,
+                                     tripoint_bub_ms( g->ter_view_p.xy(), center.z() ),
+                                     0, 0, lit_level::LIT, false );
+            }
+            if( !do_draw_explosion && !do_draw_custom_explosion && !do_draw_bullet &&
+                !do_draw_hit && !do_draw_line && !do_draw_cursor && !do_draw_highlight &&
+                !do_draw_sct && !do_draw_zones && !do_draw_async_anim &&
+                you.view_offset != tripoint_rel_ms::zero && !you.in_vehicle &&
+                !is_native_menu_demo_worker() ) {
+                draw_from_id_string( "cursor", TILE_CATEGORY::NONE, empty_string,
+                                     tripoint_bub_ms( g->ter_view_p.xy(), center.z() ),
+                                     0, 0, lit_level::LIT, false );
+            }
+            if( you.controlling_vehicle ) {
+                if( const auto offset = g->get_veh_dir_indicator_location( true ) ) {
+                    draw_from_id_string( "cursor", you.pos_bub( here ) + offset->xy(),
+                                         0, 0, lit_level::LIT, false );
+                }
+            }
+            collecting_3d_overlays = false;
+        }
+#endif
         // Consume transient native overlays without submitting hidden 2D draws.
         // Keep persistent animations owned by their original callers.
         void_hit();
@@ -1990,10 +2043,19 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
             draw_async_anim();
         }
     } else if( you.view_offset != tripoint_rel_ms::zero && !you.in_vehicle ) {
-        // check to see if player is located at ter
-        draw_from_id_string( "cursor", TILE_CATEGORY::NONE, empty_string,
-                             tripoint_bub_ms( g->ter_view_p.xy(), center.z() ), 0, 0, lit_level::LIT,
-                             false );
+#if defined(ENABLE_FP3D)
+        // The isolated title demonstration pans the viewport with view_offset.
+        // Its look-around crosshair is not part of the scene, so keep it out of
+        // the streamed frames.
+        if( !is_native_menu_demo_worker() ) {
+#endif
+            // check to see if player is located at ter
+            draw_from_id_string( "cursor", TILE_CATEGORY::NONE, empty_string,
+                                 tripoint_bub_ms( g->ter_view_p.xy(), center.z() ), 0, 0, lit_level::LIT,
+                                 false );
+#if defined(ENABLE_FP3D)
+        }
+#endif
     }
     if( you.controlling_vehicle ) {
         std::optional<tripoint_rel_ms> indicator_offset = g->get_veh_dir_indicator_location( true );
@@ -2581,6 +2643,22 @@ bool cata_tiles::draw_from_id_string_internal( const std::string &id, TILE_CATEG
         int intensity_level, const std::string &variant,
         const point &offset )
 {
+#if defined(ENABLE_FP3D)
+    if( collecting_3d_overlays ) {
+        std::string name = id;
+        if( const tile_type *tile = tileset_ptr->find_tile_type( id ) ) {
+            if( subtile >= 0 && subtile < static_cast<int>( multitile_keys.size() ) && tile->multitile ) {
+                const auto &key = multitile_keys[subtile];
+                if( std::find( tile->available_subtiles.begin(), tile->available_subtiles.end(), key ) !=
+                    tile->available_subtiles.end() ) {
+                    name += "_" + key;
+                }
+            }
+        }
+        fp3d_compositor::add_map_overlay( { get_map().get_abs( pos ), name, rota, {}, 0 } );
+        return true;
+    }
+#endif
     bool nv_color_active = apply_night_vision_goggles && get_option<bool>( "NV_GREEN_TOGGLE" );
     // If the ID string does not produce a drawable tile
     // it will revert to the "unknown" tile.
@@ -4211,6 +4289,13 @@ bool cata_tiles::draw_critter_at( const tripoint_bub_ms &p, lit_level ll, int &h
         }
         const Character *pl = dynamic_cast<const Character *>( &critter );
         if( pl != nullptr ) {
+#if defined(ENABLE_FP3D)
+            if( pl->is_avatar() && is_native_menu_demo_worker() ) {
+                // Avatar is only an invulnerable and invisible camera anchor.
+                // Neither it nor its equipment belongs in the menu scene.
+                return false;
+            }
+#endif
             draw_entity_with_overlays( *pl, p, ll, height_3d );
             result = true;
             if( pl->is_avatar() ) {
@@ -4423,6 +4508,123 @@ void cata_tiles::draw_zlevel_overlay( const tripoint_bub_ms &p, const lit_level 
     SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_BLEND );
     geometry->rect( renderer, draw_rect, fog_color );
     SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_NONE );
+}
+
+void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bounds,
+        const std::vector<std::pair<std::string, std::string>> &gear )
+{
+    if( !tileset_ptr || bounds.w <= 0 || bounds.h <= 0 ) {
+        return;
+    }
+
+    struct preview_sprite {
+        const texture *image;
+        float x;
+        float y;
+        float w;
+        float h;
+    };
+    std::vector<preview_sprite> sprites;
+
+    // Tile offsets are stored in unscaled tileset pixels. Keep every clothing,
+    // hair and mutation layer aligned with the character's base sprite.
+    const auto add_tile = [&]( const std::string & id ) {
+        auto found = find_tile_with_season( id );
+        if( !found ) {
+            return false;
+        }
+        const tile_type &tile = found->tile();
+        const auto add_list = [&]( const weighted_int_list<std::vector<int>> &list ) {
+            const std::vector<int> *indices = list.pick( 0 );
+            if( !indices || indices->empty() ) {
+                return;
+            }
+            const texture *image = tileset_ptr->get_tile( indices->front() );
+            if( !image ) {
+                return;
+            }
+            const auto [width, height] = image->dimension();
+            if( width > 0 && height > 0 ) {
+                sprites.push_back( { image, static_cast<float>( tile.offset.x ),
+                                     static_cast<float>( tile.offset.y ),
+                                     width * tile.pixelscale, height * tile.pixelscale } );
+            }
+        };
+        add_list( tile.bg );
+        add_list( tile.fg );
+        return true;
+    };
+
+    const std::vector<trait_id> appearance_overrides = ch.get_functioning_mutations(
+                true, false, []( const mutation_branch & mut ) {
+        return mut.override_look.has_value();
+    } );
+    if( appearance_overrides.empty() ) {
+        const std::string base_id = ch.male ? "player_male" : "player_female";
+        if( !add_tile( base_id ) ) {
+            add_tile( ch.male ? "npc_male" : "npc_female" );
+        }
+    } else {
+        add_tile( appearance_overrides.front().obj().override_look->id );
+    }
+
+    const auto overlays = appearance_overrides.empty() ?
+                          ch.get_overlay_ids() : ch.get_overlay_ids_when_override_look();
+    for( const auto &overlay : overlays ) {
+        std::string draw_id;
+        if( find_overlay_looks_like( ch.male, overlay.first, overlay.second, draw_id ) ) {
+            add_tile( draw_id );
+        }
+    }
+
+    // Preview clothing planned for creation; it is cached by the summary UI
+    // rather than rerolling the profession item groups on every paint.
+    if( appearance_overrides.empty() ) {
+        for( const auto &layer : gear ) {
+            std::string draw_id;
+            if( find_overlay_looks_like( ch.male, layer.first, layer.second, draw_id ) ) {
+                add_tile( draw_id );
+            }
+        }
+    }
+    if( sprites.empty() ) {
+        return;
+    }
+
+    float min_x = sprites.front().x;
+    float min_y = sprites.front().y;
+    float max_x = sprites.front().x + sprites.front().w;
+    float max_y = sprites.front().y + sprites.front().h;
+    for( const preview_sprite &sprite : sprites ) {
+        min_x = std::min( min_x, sprite.x );
+        min_y = std::min( min_y, sprite.y );
+        max_x = std::max( max_x, sprite.x + sprite.w );
+        max_y = std::max( max_y, sprite.y + sprite.h );
+    }
+
+    const float image_w = std::max( 1.0f, max_x - min_x );
+    const float image_h = std::max( 1.0f, max_y - min_y );
+    const float scale = std::min( { 12.0f, bounds.w * 0.8f / image_w,
+                                   bounds.h * 0.85f / image_h } );
+    const float origin_x = bounds.x + ( bounds.w - image_w * scale ) / 2;
+    const float origin_y = bounds.y + ( bounds.h - image_h * scale ) / 2;
+
+    SDL_Rect previous_clip{};
+    const SDL_bool had_clip = SDL_RenderIsClipEnabled( renderer.get() );
+    if( had_clip ) {
+        SDL_RenderGetClipRect( renderer.get(), &previous_clip );
+    }
+    SDL_RenderSetClipRect( renderer.get(), &bounds );
+    for( const preview_sprite &sprite : sprites ) {
+        const SDL_Rect dest = {
+            static_cast<int>( std::lround( origin_x + ( sprite.x - min_x ) * scale ) ),
+            static_cast<int>( std::lround( origin_y + ( sprite.y - min_y ) * scale ) ),
+            std::max( 1, static_cast<int>( std::lround( sprite.w * scale ) ) ),
+            std::max( 1, static_cast<int>( std::lround( sprite.h * scale ) ) )
+        };
+        sprite.image->render_copy_ex( renderer, &dest, 0, nullptr, SDL_FLIP_NONE );
+    }
+    SDL_RenderSetClipRect( renderer.get(), had_clip ? &previous_clip : nullptr );
 }
 
 void cata_tiles::draw_entity_with_overlays( const Character &ch, const tripoint_bub_ms &p,
@@ -4983,6 +5185,16 @@ void cata_tiles::draw_sct_frame( std::multimap<point, formatted_text> &overlay_s
     for( const scrollingcombattext::cSCT &sct : SCT.vSCT ) {
         const point iD( sct.getPosX(), sct.getPosY() );
         const int full_text_length = utf8_width( sct.getText() );
+
+#if defined(ENABLE_FP3D)
+        if( collecting_3d_overlays ) {
+            const tripoint_bub_ms pos( point_bub_ms( iD ), player_pos.z() );
+            fp3d_compositor::add_map_overlay( { get_map().get_abs( pos ), {}, 0, sct.getText(),
+                msgtype_to_tilecolor( sct.getMsgType( "first" ),
+                                     sct.getStep() >= scrollingcombattext::iMaxSteps / 2 ) } );
+            continue;
+        }
+#endif
 
         point iOffset;
 

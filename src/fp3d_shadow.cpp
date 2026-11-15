@@ -12,6 +12,7 @@
 #include "fp3d_camera.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_scene.h"
+#include "fp3d_regression.h"
 #include "debug.h"
 #include "sdl_wrappers.h"
 
@@ -30,6 +31,13 @@ bool unavailable = false;
 unsigned cached_generation = 0;
 int cached_quality = -1;
 data cached_shadow;
+GLuint occluder_list = 0;
+unsigned occluder_generation = 0;
+tripoint_abs_ms occluder_origin;
+bool occluder_no_props = false;
+bool occluder_only_props = false;
+bool occluder_had_vehicles = false;
+data occluder_statistics;
 PFNGLGENFRAMEBUFFERSPROC gen_framebuffer = nullptr;
 PFNGLBINDFRAMEBUFFERPROC bind_framebuffer = nullptr;
 PFNGLFRAMEBUFFERTEXTURE2DPROC attach_texture = nullptr;
@@ -132,10 +140,11 @@ bool ensure_far_target( int size )
     return true;
 }
 
-void box( float x, float z, float bottom, float top, float half = .5f )
+void box( float x, float z, float bottom, float top, float half = .5f, float half_z = -1.f )
 {
     const float left = x - half, right = x + half;
-    const float north = z - half, south = z + half;
+    if( half_z < 0 ) { half_z = half; }
+    const float north = z - half_z, south = z + half_z;
     glBegin( GL_QUADS );
     // Top
     glVertex3f( left, top, north ); glVertex3f( left, top, south );
@@ -160,11 +169,7 @@ void box( float x, float z, float bottom, float top, float half = .5f )
 void wall_run( float x, float z, float bottom, float top,
                float half_x, float half_z )
 {
-    glPushMatrix();
-    glTranslatef( x, 0.0f, z );
-    glScalef( 2.0f * half_x, 1.0f, 2.0f * half_z );
-    box( 0.0f, 0.0f, bottom, top );
-    glPopMatrix();
+    box( x, z, bottom, top, half_x, half_z );
 }
 
 // The native radio tower is an open red/grey steel lattice, NOT a solid
@@ -231,10 +236,16 @@ void furniture_shadow_part( const fp3d_furniture::part &part )
         return;
     }
     if( !part.round ) {
+        if( part.roll == 0 ) {
+            box( part.x, part.z, part.bottom, part.top, part.width * .5f, part.depth * .5f );
+            return;
+        }
         glPushMatrix();
-        glTranslatef( part.x, 0, part.z );
+        const float mid = .5f * ( part.bottom + part.top );
+        glTranslatef( part.x, mid, part.z );
+        glRotatef( part.roll, 0, 0, 1 );
         glScalef( part.width, 1.0f, part.depth );
-        box( 0, 0, part.bottom, part.top, .5f );
+        box( 0, 0, part.bottom - mid, part.top - mid, .5f );
         glPopMatrix();
         return;
     }
@@ -425,6 +436,64 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
                 glPopMatrix();
             }
             glPopMatrix();
+        } else if( !qa_only_props &&
+                   ( cell.kind == fp3d_snapshot::terrain_kind::fence ||
+                     fp3d_snapshot::is_chain_gate( cell.terrain ) ) ) {
+            const auto connects = [&]( tripoint_rel_ms direction ) {
+                const auto *other = known_cell( cell.position + direction );
+                return other && fp3d_snapshot::fence_connects( cell.terrain, other->terrain );
+            };
+            const std::array<bool, 4> neighbours{
+                connects( tripoint_rel_ms::north ), connects( tripoint_rel_ms::east ),
+                connects( tripoint_rel_ms::south ), connects( tripoint_rel_ms::west ) };
+            auto parts = fp3d_snapshot::terrain_model_parts( cell.terrain, neighbours );
+            if( parts.empty() ) {
+                parts = fp3d_snapshot::is_chain_gate( cell.terrain ) ?
+                        fp3d_snapshot::chain_gate_parts( cell.terrain,
+                                fp3d_snapshot::chain_gate_along_x( neighbours ) ) :
+                        fp3d_snapshot::fence_parts( neighbours,
+                                cell.terrain == "t_chainfence_posts" ||
+                                cell.terrain == "t_chickenwire_fence_post" ||
+                                cell.terrain == "t_fence_post" );
+            }
+            glPushMatrix();
+            glTranslatef( x, bottom, z );
+            for( const auto &part : parts ) {
+                if( part.width > 0 && part.depth > 0 ) {
+                    furniture_shadow_part( part );
+                    continue;
+                }
+                // Native chain-link spans have zero thickness in the shared
+                // part list. Rasterize their rails and open diamond wire, not
+                // a solid panel or an empty shadow.
+                const bool along_x = part.width > part.depth;
+                const float width = along_x ? part.width : part.depth;
+                furniture_shadow_part( { part.x, part.z, along_x ? width : .03f,
+                                        along_x ? .03f : width, 1.86f, 1.915f } );
+                furniture_shadow_part( { part.x, part.z, along_x ? width : .025f,
+                                        along_x ? .025f : width, .11f, .145f } );
+                glPushAttrib( GL_LINE_BIT );
+                glLineWidth( 1.85f );
+                glBegin( GL_LINES );
+                const auto vertex = [&]( float u, float y ) {
+                    glVertex3f( part.x + ( along_x ? u : 0.f ), y,
+                                part.z + ( along_x ? 0.f : u ) );
+                };
+                for( int col = 0; col < 8; ++col ) {
+                    for( int row = 0; row < 13; ++row ) {
+                        const float a = width * ( col / 8.f - .5f );
+                        const float b = width * ( ( col + 1 ) / 8.f - .5f );
+                        const float lo = .13f + 1.70f * row / 13;
+                        const float hi = .13f + 1.70f * ( row + 1 ) / 13;
+                        vertex( a, lo ); vertex( b, hi );
+                        vertex( a, hi ); vertex( b, lo );
+                    }
+                }
+                glEnd();
+                glPopAttrib();
+            }
+            glPopMatrix();
+            ++statistics.fence_casters;
         } else if( !qa_only_props && cell.terrain == "t_radio_tower" ) {
             // Match the visible, transparent steel tower; NEVER cast an
             // opaque one-metre cube from its native obstacle category.
@@ -469,6 +538,9 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
         // same mask, otherwise an invisible slab still casts dark footprints.
         // Do not invent occluding upper floors from unknown map cells.
         if( !qa_only_props && cell.ceiling_present && !cell.open_air &&
+            // Roof glass is a skylight: the sun must reach the room below
+            // just as it reaches the street through a glass wall.
+            !cell.glass_ceiling &&
             // A tower is open lattice and has NO full-width ceiling mesh.
             // Its steel members already cast their individual shadows.
             cell.terrain != "t_radio_tower" &&
@@ -524,6 +596,7 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
         ( !cached_shadow.far_texture || far_shadow_texture == cached_shadow.far_texture ) ) {
         return cached_shadow;
     }
+    fp3d_regression::turn_probe profile( "shadow_setup" );
     const int desired_size = quality >= 3 ? 2048 : quality >= 2 ? 1536 : 1024;
     const float radius = quality >= 3 ? 38.0f : quality >= 2 ? 30.0f : 23.0f;
     constexpr float distance = 78.0f;
@@ -539,6 +612,7 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
     };
     GLint previous_fbo = 0, previous_viewport[4]{}, previous_program = 0;
     GLint previous_matrix_mode = 0;
+    profile.stage( "shadow_state" );
     glGetIntegerv( GL_FRAMEBUFFER_BINDING, &previous_fbo );
     glGetIntegerv( GL_VIEWPORT, previous_viewport );
     glGetIntegerv( GL_CURRENT_PROGRAM, &previous_program );
@@ -556,7 +630,29 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
     const bool qa_only_props = qa_capture && qa_flag( "CDDA_FP3D_QA_ONLY_PROP_SHADOWS" );
     const bool qa_disable_far = qa_capture &&
                                 qa_flag( "CDDA_FP3D_QA_DISABLE_FAR_SHADOW" );
+    // Compile static world casters once for both cascades. The light-space
+    // projection clips the full loaded geometry; walking translates that same
+    // geometry instead of re-indexing and submitting every wall twice.
+    const unsigned geometry_generation = scene.geometry_generation ?
+                                         scene.geometry_generation : scene.render_generation;
+    profile.stage( "shadow_geometry" );
+    if( !occluder_list || !geometry_generation || occluder_generation != geometry_generation ||
+        qa_no_props != occluder_no_props || qa_only_props != occluder_only_props ||
+        ( occluder_had_vehicles && scene.vehicles.empty() ) ||
+        ( !scene.vehicles.empty() && cached_generation != scene.render_generation ) ) {
+        if( !occluder_list ) { occluder_list = glGenLists( 1 ); }
+        occluder_statistics = {};
+        if( occluder_list ) { glNewList( occluder_list, GL_COMPILE ); }
+        draw_known_occluders( scene, 1000000.f, occluder_statistics, qa_no_props, qa_only_props );
+        if( occluder_list ) { glEndList(); }
+        occluder_origin = scene.origin;
+        occluder_generation = geometry_generation;
+        occluder_no_props = qa_no_props;
+        occluder_only_props = qa_only_props;
+        occluder_had_vehicles = !scene.vehicles.empty();
+    }
     // Two stable, camera-rotation-independent solar light-space maps.
+    profile.stage( "shadow_targets" );
     // Near: 28m at 2048; far: 96m at 1536. FBO failure -> original 38m
     // near map, without changing source geometry or scene simulation.
     const bool far_ready = success && quality >= 3 && !qa_disable_far &&
@@ -652,15 +748,30 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
         };
         glMatrixMode( GL_MODELVIEW );
         glLoadMatrixf( view );
-        draw_known_occluders( scene, cast_radius, stats, qa_no_props, qa_only_props );
+        if( occluder_list ) {
+            const auto offset = occluder_origin - scene.origin;
+            glPushMatrix();
+            glTranslatef( offset.x(), offset.z() * fp3d_camera::floor_height, offset.y() );
+            glCallList( occluder_list );
+            glPopMatrix();
+            stats.furniture_casters = occluder_statistics.furniture_casters;
+            stats.fence_casters = occluder_statistics.fence_casters;
+            stats.street_light_casters = occluder_statistics.street_light_casters;
+            stats.mailbox_casters = occluder_statistics.mailbox_casters;
+            stats.streetlights_with_ceiling = occluder_statistics.streetlights_with_ceiling;
+        } else {
+            draw_known_occluders( scene, cast_radius, stats, qa_no_props, qa_only_props );
+        }
         if( !qa_only_props ) { fp3d_vehicle::draw_shadow( scene, cast_radius ); }
         const bool ok = glGetError() == GL_NO_ERROR;
         if( ok ) { capture_depth( size, result, outer ); }
         return ok;
     };
+    profile.stage( "shadow_near" );
     if( success ) {
         success = draw_cascade( shadow_fbo, desired_size, near_radius, result, false );
     }
+    profile.stage( "shadow_far" );
     if( success && far_ready ) {
         data far_stats;
         if( draw_cascade( far_shadow_fbo, 1536, outer_radius, far_stats, true ) ) {
@@ -675,6 +786,7 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
                                     near_radius, result, false );
         }
     }
+    profile.stage( "shadow_finish" );
     bind_framebuffer( GL_FRAMEBUFFER, previous_fbo );
     glViewport( previous_viewport[0], previous_viewport[1],
                 previous_viewport[2], previous_viewport[3] );
@@ -710,6 +822,9 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
 
 void release()
 {
+    if( occluder_list ) { glDeleteLists( occluder_list, 1 ); }
+    occluder_list = 0;
+    occluder_generation = 0;
     if( loaded ) {
         clear_targets();
     }

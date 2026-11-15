@@ -1,19 +1,36 @@
 #include "fp3d_furniture.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <algorithm>
+#include <unordered_map>
 #include <utility>
 #include "mapdata.h"
 namespace fp3d_furniture
 {
+#include "fp3d_furniture_catalog.inc"
+
 std::optional<model> describe( const std::string &id )
 {
+    // These IDs have native UnDeadPeople art.  f_battery and the powered
+    // lamp can be supplied by appliance/mod content without an 0.I furniture
+    // definition, so resolve their physical shape before the looks_like loop.
+    if( id == "f_battery" ) {
+        return model{ id, kind::battery_unit };
+    }
+    if( id == "f_floor_lamp_on" ) {
+        return model{ id, kind::floor_lamp };
+    }
     std::string appearance = id;
     for( int jumps = 0; jumps < 10 && !appearance.empty(); ++jumps ) {
         const furn_str_id definition( appearance );
         if( !definition.is_valid() ) {
             break;
         }
+        if( appearance == "f_midden" || appearance == "f_alien_anemone" ||
+            appearance == "f_sea_anemone" || appearance == "f_sea_sponge" ) {
+            return std::nullopt; // Organic silhouettes are native crossed sprites.
+        }
         if( appearance == "f_counter_gate_c" ) {
-            break; // The swinging panel shares the counter art, but not its body.
+            return model{ id, kind::udp_gate }; // A separate swinging leaf, never the counter body.
         }
         if( appearance == "f_coffee_table" ) {
             return model{ id, kind::coffee_table };
@@ -166,6 +183,9 @@ std::optional<model> describe( const std::string &id )
             appearance == "f_planter_seedling" ) {
             return model{ id, kind::planter };
         }
+        if( const auto extra = catalog_kind( appearance ) ) {
+            return model{ id, *extra };
+        }
         appearance = definition->looks_like;
     }
     return std::nullopt;
@@ -246,7 +266,7 @@ const std::vector<part> &parts( kind shape )
         { 0, 0, .94f, .80f, 0, .86f }
     };
     static const std::vector<part> locker{
-        { 0, 0, .94f, .84f, 0, 1.85f }
+        { 0, 0, .66f, .62f, 0, 1.85f }
     };
     static const std::vector<part> cabinet{
         { -.43f, 0, .08f, .84f, 0, 1.85f },
@@ -544,11 +564,33 @@ const std::vector<part> &parts( kind shape )
         { 0, .295f, .51f, .025f, 1.13f, 1.33f }, // door lip
         { .33f, .10f, .055f, .08f, 1.27f, 1.55f } // raised flag
     };
+    // Original UnDeadPeople floor lamp (both unlit and powered):
+    // weighted circular foot, thin pole, and a WIDE-BOTTOM tapered shade.
+    // A flat cylinder here looked like an inverted drum instead of the sprite.
     static const std::vector<part> floor_lamp{
-        { 0, 0, .28f, .28f, 0, .10f, true },
-        { 0, 0, .055f, .055f, .10f, 1.37f, true },
-        { 0, 0, .48f, .48f, 1.33f, 1.69f, true },// shade
-        { 0, 0, .28f, .28f, 1.69f, 1.72f, true }
+        { 0, 0, .42f, .42f, 0, .073f, true },       // black round foot
+        { 0, 0, .12f, .12f, .071f, .115f, true },   // foot collar
+        { 0, 0, .052f, .052f, .11f, 1.20f, true }, // narrow steel stem
+        { 0, 0, .63f, .63f, 1.17f, 1.61f, true },  // tapered fabric shade
+        { 0, 0, .68f, .68f, 1.16f, 1.195f, true },// dark lower lip
+        { 0, 0, .25f, .25f, 1.60f, 1.65f, true }  // small top ring
+    };
+    // The battery image is a dark steel FRAME around two bright end contacts,
+    // a recessed panel and two distinct status indicators.  The metallic
+    // bars in the 2D pseudo-3D art are NOT the front and top of a solid block.
+    static const std::vector<part> battery_unit{
+        { 0, 0, .88f, .65f, 0, 1.03f },              // chassis
+        { -.414f, .335f, .085f, .10f, 0, 1.03f },    // left upright
+        { .414f, .335f, .085f, .10f, 0, 1.03f },     // right upright
+        { 0, .365f, .77f, .093f, .87f, 1.03f },     // upper silver terminal bar
+        { 0, .365f, .77f, .093f, .03f, .20f },      // lower silver terminal bar
+        { 0, .383f, .66f, .049f, .205f, .865f },   // inset black control panel
+        { -.267f, .426f, .067f, .027f, .27f, .79f },// left inner contact
+        { .267f, .426f, .067f, .027f, .27f, .79f },// right inner contact
+        { 0, .445f, .136f, .125f, .610f, .745f, true, false, true }, // green
+        { 0, .445f, .126f, .115f, .355f, .473f, true, false, true }, // amber
+        { -.24f, .421f, .043f, .035f, .915f, .998f },
+        { .24f, .421f, .043f, .035f, .915f, .998f }
     };
     static const std::vector<part> planter{
         { 0, 0, .94f, .94f, 0, .36f },
@@ -651,6 +693,13 @@ const std::vector<part> &parts( kind shape )
             return mailbox;
         case kind::floor_lamp:
             return floor_lamp;
+        case kind::battery_unit:
+            return battery_unit;
+        default:
+            break;
+    }
+    if( const auto *extra = catalog_parts( shape ) ) {
+        return *extra;
     }
     return table;
 }
@@ -658,6 +707,8 @@ const std::vector<part> &parts( kind shape )
 float item_surface( kind shape )
 {
     switch( shape ) {
+        case kind::udp_glass_cabinet:
+            return .96f; // Interior shelf, not the opaque cabinet roof.
         case kind::coffee_table:
             return .45f;
         case kind::table:
@@ -743,14 +794,17 @@ float item_surface( kind shape )
             return 0;
         case kind::mailbox:
             return 1.37f;
+        default:
+            break;
     }
-    return 0;
+    return catalog_surface( shape );
 }
 
 bool shows_contents( kind shape )
 {
-    return shape == kind::cupboard || shape == kind::locker || shape == kind::dresser ||
-           shape == kind::fridge || shape == kind::mini_fridge || shape == kind::chest_freezer;
+    return shape == kind::udp_glass_cabinet ||
+           shape == kind::cupboard || shape == kind::locker || shape == kind::dresser ||
+           shape == kind::fridge || shape == kind::mini_fridge || shape == kind::chest_freezer || catalog_storage( shape );
 }
 
 bool chair_table( const std::optional<model> &furniture )
@@ -781,7 +835,7 @@ unsigned facing( kind shape, const std::array<bool, 4> &walls,
         shape != kind::piano && shape != kind::table_saw &&
         shape != kind::kiln && shape != kind::metal_kiln &&
         shape != kind::street_light && shape != kind::mailbox &&
-        shape != kind::traffic_light ) {
+        shape != kind::traffic_light && !catalog_has_front( shape ) ) {
         return 0;
     }
     // Preserve the established orientation in free space. Prefer a wall behind

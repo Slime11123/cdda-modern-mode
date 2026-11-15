@@ -101,9 +101,9 @@ TEST_CASE( "fp3d_map_does_not_generate_distant_overmaps_and_bounds_view_size", "
     const auto before_rng = rng_get_engine();
     const auto view = fp3d_map::capture( get_avatar(),
                                          tripoint_abs_omt( remote.xy(), 100 ), std::numeric_limits<int>::max() );
-    CHECK( view.radius == 18 );
+    CHECK( view.radius == 32 );
     CHECK( view.center.z() == OVERMAP_HEIGHT );
-    CHECK( view.cells.size() == 1369 );
+    CHECK( view.cells.size() == 4225 );
     CHECK( std::all_of( view.cells.begin(), view.cells.end(), []( const auto & row ) {
         return !row.known && row.symbol.empty() && row.note.empty();
     } ) );

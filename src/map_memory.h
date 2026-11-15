@@ -140,6 +140,13 @@ class map_memory
         const memorized_tile &get_tile( const tripoint_abs_ms &pos ) const;
 
         /**
+         * Returns the submap holding the given submap position, so callers that
+         * read a whole region tile by tile can look it up once per submap
+         * instead of once per cell. Never returns a cached pointer.
+         */
+        const mm_submap &get_submap( const tripoint_abs_sm &sm_pos ) const;
+
+        /**
          * Memorizes terrain at \p pos, overwriting old terrain values.
          * @param pos tile position, in global ms coords.
          */
@@ -184,7 +191,6 @@ class map_memory
 
         /** Get submap from within the cache */
         //@{
-        const mm_submap &get_submap( const tripoint_abs_sm &sm_pos ) const;
         mm_submap &get_submap( const tripoint_abs_sm &sm_pos );
         //@}
 

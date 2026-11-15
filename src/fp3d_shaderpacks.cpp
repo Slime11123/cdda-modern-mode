@@ -1,6 +1,7 @@
 #include "fp3d_shaderpacks.h"
 #include "fp3d_shader_archive.h"
 #include "fp3d_mcshader.h"
+#include "fp3d_local_lights.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <cctype>
@@ -33,6 +34,10 @@ int mc_intensity = 145;
 bool native_shadows_enabled = true;
 bool wet_ssr = true;
 bool shadow_volume = true;
+bool native_local_lights = true;
+bool local_shader_compiled = false;
+bool experimental_pbr = false;
+int pbr_strength = 100;
 bool mc_bridge = false;
 bool mc_direct = false;
 fp3d_mcshader::profile mc_profile;
@@ -63,6 +68,7 @@ PFNGLUNIFORM1IPROC uniform_1i = nullptr;
 PFNGLUNIFORM1FPROC uniform_1f = nullptr;
 PFNGLUNIFORM2FPROC uniform_2f = nullptr;
 PFNGLUNIFORM3FPROC uniform_3f = nullptr;
+PFNGLUNIFORM4FPROC uniform_4f = nullptr;
 PFNGLGENFRAMEBUFFERSPROC gen_fbo = nullptr;
 PFNGLBINDFRAMEBUFFERPROC bind_fbo = nullptr;
 PFNGLFRAMEBUFFERTEXTURE2DPROC attach_texture = nullptr;
@@ -100,6 +106,7 @@ bool get_procs()
         load( uniform_1f, "glUniform1f" ) &&
         load( uniform_2f, "glUniform2f" ) &&
         load( uniform_3f, "glUniform3f" ) &&
+        load( uniform_4f, "glUniform4f" ) &&
         load( gen_fbo, "glGenFramebuffers" ) &&
         load( bind_fbo, "glBindFramebuffer" ) &&
         load( attach_texture, "glFramebufferTexture2D" ) &&
@@ -450,10 +457,27 @@ void restore_choice()
     if( wet_file >> stored_wet && ( stored_wet == 0 || stored_wet == 1 ) ) {
         wet_ssr = stored_wet != 0;
     }
+    int stored_local_lights = 1;
+    std::ifstream local_file( root_path() / ".local_lights", std::ios::binary );
+    if( local_file >> stored_local_lights &&
+        ( stored_local_lights == 0 || stored_local_lights == 1 ) ) {
+        native_local_lights = stored_local_lights != 0;
+    }
     int stored_volume = 1;
     std::ifstream volume_file( root_path() / ".shadow_volume", std::ios::binary );
     if( volume_file >> stored_volume && ( stored_volume == 0 || stored_volume == 1 ) ) {
         shadow_volume = stored_volume != 0;
+    }
+    int stored_pbr = 0;
+    std::ifstream pbr_file( root_path() / ".pbr", std::ios::binary );
+    if( pbr_file >> stored_pbr && ( stored_pbr == 0 || stored_pbr == 1 ) ) {
+        experimental_pbr = stored_pbr != 0;
+    }
+    int stored_pbr_strength = 100;
+    std::ifstream pbr_strength_file( root_path() / ".pbr_strength", std::ios::binary );
+    if( pbr_strength_file >> stored_pbr_strength &&
+        stored_pbr_strength >= 0 && stored_pbr_strength <= 200 ) {
+        pbr_strength = stored_pbr_strength;
     }
     int stored_shadow = 1;
     std::ifstream shadow_file( root_path() / ".shadows", std::ios::binary );
@@ -499,6 +523,7 @@ GLuint compile_part( GLenum type, const std::string &source )
 void compile_current()
 {
     compiled_choice = choice;
+    local_shader_compiled = false;
     if( program ) {
         delete_program( program );
         program = 0;
@@ -546,14 +571,31 @@ void compile_current()
     if( !v ) {
         return;
     }
-    GLuint f = compile_part( GL_FRAGMENT_SHADER, fragment );
+    // Inject native-world light only in the generated CDDA/Photon bridge.
+    // Custom final.fsh and post.frag remain byte-for-byte untouched.
+    const std::string with_native_lights = fp3d_local_lights::augment_fragment( fragment );
+    GLuint f = compile_part( GL_FRAGMENT_SHADER, with_native_lights );
+    if( !f && with_native_lights != fragment ) {
+        // Some old GLSL drivers reject uniform-indexed loops. Photon itself
+        // must still run without local lights when that happens.
+        f = compile_part( GL_FRAGMENT_SHADER, fragment );
+        if( f ) { report = "动态灯光 GLSL 不兼容，原光影继续可用。"; }
+    } else {
+        local_shader_compiled = f && with_native_lights != fragment;
+    }
     if( !f && mc_direct ) {
         // Some standalone Minecraft final passes reference extra uniforms
         // not provided by CDDA; retain a visible effect via safe adaptation.
         mc_direct = false;
         mc_bridge = true;
         fragment = fp3d_mcshader::bridge_fragment( mc_profile, builtin_source );
-        f = compile_part( GL_FRAGMENT_SHADER, fragment );
+        const auto bridged = fp3d_local_lights::augment_fragment( fragment );
+        f = compile_part( GL_FRAGMENT_SHADER, bridged );
+        local_shader_compiled = f && bridged != fragment;
+        if( !f && bridged != fragment ) {
+            f = compile_part( GL_FRAGMENT_SHADER, fragment );
+            local_shader_compiled = false;
+        }
     }
     if( !f ) {
         delete_shader( v );
@@ -574,6 +616,7 @@ void compile_current()
         report = "GLSL 链接失败：" + std::string( message, std::max( 0, static_cast<int>( size ) ) );
         delete_program( program );
         program = 0;
+        local_shader_compiled = false;
     } else {
         report = mc_direct ? "Minecraft final.fsh 已编译，使用有限的直接最终 Pass。" :
                  mc_bridge ? mc_profile.label +
@@ -693,6 +736,7 @@ void request_reload()
 {
     restore_choice();
     compiled_choice.clear();
+    local_shader_compiled = false;
     report = "已刷新光影包；返回 3D 世界后重新编译当前光影。";
 }
 
@@ -714,6 +758,7 @@ bool choose( const std::string &id )
     }
     choice = id;
     compiled_choice.clear();
+    local_shader_compiled = false;
     report = id == "off" ? "光影已关闭，返回游戏后恢复原版 3D。" :
              "已选择光影；返回 3D 世界后编译并应用。";
     std::ofstream file( root_path() / ".selected", std::ios::binary | std::ios::trunc );
@@ -773,6 +818,26 @@ void set_wet_ssr_enabled( bool enabled )
     else { report = "湿地反射已更改，但无法保存选项。"; }
 }
 
+bool local_lights_enabled()
+{
+    restore_choice();
+    return native_local_lights;
+}
+
+void set_local_lights_enabled( bool enabled )
+{
+    restore_choice();
+    native_local_lights = enabled;
+    std::ofstream file( root_path() / ".local_lights", std::ios::trunc );
+    if( file ) { file << static_cast<int>( enabled ) << '\n'; }
+    else { report = "动态灯光设置未能写入光影目录。"; }
+}
+
+bool local_lights_compiled()
+{
+    return local_shader_compiled && program != 0;
+}
+
 bool shadow_volume_enabled()
 {
     restore_choice();
@@ -786,6 +851,36 @@ void set_shadow_volume_enabled( bool enabled )
     std::ofstream file( root_path() / ".shadow_volume", std::ios::trunc );
     if( file ) { file << static_cast<int>( enabled ) << '\n'; }
     else { report = "体积太阳光已更改，但无法保存选项。"; }
+}
+
+bool pbr_enabled()
+{
+    restore_choice();
+    return experimental_pbr;
+}
+
+void set_pbr_enabled( bool enabled )
+{
+    restore_choice();
+    experimental_pbr = enabled;
+    std::ofstream file( root_path() / ".pbr", std::ios::trunc );
+    if( file ) { file << static_cast<int>( enabled ) << '\n'; }
+    else { report = "PBR 法线选项已修改，但无法保存到游戏目录。"; }
+}
+
+int pbr_strength_percent()
+{
+    restore_choice();
+    return pbr_strength;
+}
+
+void set_pbr_strength_percent( int percent )
+{
+    restore_choice();
+    pbr_strength = std::clamp( percent, 0, 200 );
+    std::ofstream file( root_path() / ".pbr_strength", std::ios::trunc );
+    if( file ) { file << pbr_strength << '\n'; }
+    else { report = "PBR 细节强度已更改，但无法保存到游戏目录。"; }
 }
 
 bool prepare()
@@ -854,6 +949,7 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
         compiled_choice.clear();
         mc_bridge = mc_direct = false;
         mc_profile = {};
+        local_shader_compiled = false;
         return scene_color;
     }
     last_processed_fbo = 0;
@@ -901,6 +997,30 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
         const GLint loc = uniform_location( program, name );
         if( loc >= 0 ) { uniform_1f( loc, value ); }
     };
+    const int local_count = native_local_lights && local_shader_compiled &&
+        quality_level > 0 ? std::clamp( values.native_local_count, 0, 8 ) : 0;
+    const GLint native_count = uniform_location( program, "u_native_local_count" );
+    if( native_count >= 0 ) { uniform_1i( native_count, local_count ); }
+    for( int index = 0; index < local_count; ++index ) {
+        const std::string at = "[" + std::to_string( index ) + "]";
+        const GLint pos_loc = uniform_location( program,
+                                                 ( "u_native_local_pos" + at ).c_str() );
+        const GLint col_loc = uniform_location( program,
+                                                 ( "u_native_local_color" + at ).c_str() );
+        const GLint beam_loc = uniform_location( program,
+                                                  ( "u_native_local_beam" + at ).c_str() );
+        if( pos_loc >= 0 ) {
+            const float *v = values.native_local_position[index];
+            uniform_4f( pos_loc, v[0], v[1], v[2], v[3] );
+        }
+        if( col_loc >= 0 ) {
+            const float *v = values.native_local_color[index];
+            uniform_4f( col_loc, v[0], v[1], v[2], v[3] );
+        }
+        if( beam_loc >= 0 ) {
+            uniform_1f( beam_loc, values.native_local_beam[index] );
+        }
+    }
     set_int( "u_scene", 0 );
     set_int( "u_depth", 1 );
     set_int( "u_shadow", 2 );

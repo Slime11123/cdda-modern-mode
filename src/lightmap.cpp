@@ -39,6 +39,12 @@
 #include "submap.h"
 #include "tileray.h"
 #include "type_id.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+// Defined in sdltiles.cpp: the isolated title demonstration renders its private
+// world without fog. Declared here so the lighting code stays free of SDL.
+bool menu_demo_spectator_visibility();
+bool menu_demo_night_scene();
+#endif
 #include "units.h"
 #include "units_utility.h"
 #include "veh_type.h"
@@ -800,6 +806,25 @@ map::apparent_light_info map::apparent_light_helper( const level_cache &map_cach
 
 lit_level map::apparent_light_at( const tripoint_bub_ms &p,
                                   const visibility_variables &cache ) const
+{
+    const lit_level computed = apparent_light_at_raw( p, cache );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    // The isolated title demonstration is a spectator camera over its own private
+    // world. Ordinary scenes never show unexplored or occluded squares; the night
+    // scene keeps the real lighting (street lamps, shadows) but still refuses to
+    // fall back to "unexplored" black.
+    if( menu_demo_spectator_visibility() && inbounds( p ) ) {
+        if( !menu_demo_night_scene() ) {
+            return lit_level::BRIGHT;
+        }
+        return computed == lit_level::BLANK ? lit_level::LIT : computed;
+    }
+#endif
+    return computed;
+}
+
+lit_level map::apparent_light_at_raw( const tripoint_bub_ms &p,
+                                      const visibility_variables &cache ) const
 {
     Character &player_character = get_player_character();
     const int dist = rl_dist( player_character.pos_bub(), p );

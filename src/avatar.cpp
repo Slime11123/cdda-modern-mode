@@ -265,6 +265,17 @@ const memorized_tile &avatar::get_memorized_tile( const tripoint_abs_ms &p ) con
     return mm_submap::default_tile;
 }
 
+const mm_submap *avatar::get_memorized_submap( const tripoint_abs_sm &sm ) const
+{
+    if( !should_show_map_memory() ) {
+        return nullptr;
+    }
+    // Bind to const so the read-only overload is used; the writable one stays
+    // private to map_memory.
+    const map_memory &memory = *player_map_memory;
+    return &memory.get_submap( sm );
+}
+
 void avatar::memorize_terrain( const tripoint_abs_ms &p, std::string_view id,
                                int subtile, int rotation )
 {

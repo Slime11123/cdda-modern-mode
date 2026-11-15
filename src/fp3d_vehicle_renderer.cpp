@@ -293,6 +293,7 @@ struct shell_profile {
     using key = std::pair<int, int>;
     std::map<key, shell_cell> cells;
     bool enclosed = false;
+    bool pedal_cycle = false;
     // CDDA 0.I's Electric Tandem Cabin Motorcycle inherits a three-wide
     // Supercompact Tandem Car body, but its TWO motorbike wheels share the
     // same centerline. Do not treat its rear wheel as a side car wheel.
@@ -315,6 +316,9 @@ shell_profile build_shell( const vehicle_view &v )
     const part_view *paint_source = nullptr;
     int paint_priority = -1;
     for( const part_view &part : v.parts ) {
+        if( part.id == "foot_pedals" || part.id.find( "wheel_bicycle" ) != std::string::npos ) {
+            profile.pedal_cycle = true;
+        }
         if( part.kind == role::wheel ) {
             // Native centreline bicycle/motorbike wheels must not be
             // reinterpreted as left/right wheels of a four-wheeled sedan.
@@ -397,6 +401,16 @@ shell_profile build_shell( const vehicle_view &v )
     // cabin opening, and stays in the open-frame rendering path.
     profile.enclosed = frame_count >= 5 && edge_count >= 3 &&
                        ( roof_count >= 1 || ( doors >= 2 && windows >= 1 ) );
+    // Pedals installed in a wide custom vehicle do not make it a bicycle.
+    if( profile.pedal_cycle ) {
+        const auto frame = std::find_if( v.parts.begin(), v.parts.end(), []( const part_view &p ) {
+            return p.kind == role::frame;
+        } );
+        profile.pedal_cycle = !profile.enclosed && frame != v.parts.end() &&
+                             std::all_of( v.parts.begin(), v.parts.end(), [&]( const part_view &p ) {
+            return p.kind != role::frame || p.mount_y == frame->mount_y;
+        } );
+    }
     // Detect inherited special compact-bike assemblies from their
     // ACTUAL current mounted parts. Works after swapping batteries, doors,
     // model names or translations; stripped/modified wheel layouts fall
@@ -1327,8 +1341,142 @@ void cabin_controls( const vehicle_view &v, const part_view &part )
     }
 }
 
+// Bicycle tyres have open centres and spokes, unlike the solid car wheel.
+void bicycle_wheel( float x, float z, bool broken )
+{
+    const float radius = broken ? .29f : .35f;
+    const float y = radius + .012f;
+    glDisable( GL_TEXTURE_2D );
+    for( int i = 0; i < 32; ++i ) {
+        const float a = 2.f * pi * i / 32.f;
+        const float b = 2.f * pi * ( i + 1 ) / 32.f;
+        glBegin( GL_QUADS );
+        for( int layer = 0; layer < 3; ++layer ) {
+            glColor3f( layer == 0 ? .08f : .57f, layer == 0 ? .09f : .60f,
+                       layer == 0 ? .09f : .63f );
+            if( layer == 0 ) {
+                glNormal3f( std::cos( .5f * ( a + b ) ), std::sin( .5f * ( a + b ) ), 0 );
+            } else {
+                glNormal3f( 0, 0, layer == 1 ? -1.f : 1.f );
+            }
+            for( int j = 0; j < 4; ++j ) {
+                const float angle = j == 0 || j == 3 ? a : b;
+                const float r = layer == 0 || j < 2 ? radius : radius - .035f;
+                const float side = layer == 0 ? ( j < 2 ? -.025f : .025f ) :
+                                   ( layer == 1 ? -.025f : .025f );
+                glVertex3f( x + r * std::cos( angle ), y + r * std::sin( angle ), z + side );
+            }
+        }
+        glEnd();
+    }
+    const color3 steel{ .57f, .60f, .63f };
+    for( int i = 0; i < 12; ++i ) {
+        const float a = 2.f * pi * i / 12.f;
+        cabin_frame_beam( {x, y, z},
+                          {x + ( radius - .035f ) * std::cos( a ),
+                           y + ( radius - .035f ) * std::sin( a ), z}, .009f, steel );
+    }
+    cuboid( x, z, .065f, .10f, y - .035f, y + .035f, steel );
+}
+
+bool bicycle_part( const vehicle_view &v, const part_view &part )
+{
+    const float x = float( part.mount_x - v.pivot_x );
+    const float z = float( part.mount_y - v.pivot_y );
+    const color3 paint = part.broken ? color3{ .24f, .23f, .22f } :
+                         color3{ .22f, .39f, .50f };
+    const color3 steel{ .57f, .60f, .63f };
+    const color3 rubber{ .10f, .11f, .12f };
+    if( part.kind == role::wheel && part.id.find( "bicycle" ) != std::string::npos ) {
+        bicycle_wheel( x, z, part.broken );
+        return true;
+    }
+    if( part.kind == role::frame ) {
+        // Join only adjacent surviving native frame mounts, so removing a
+        // frame cannot leave an invented complete bicycle behind.
+        const point3 crank{ x, .40f, z };
+        const point3 seat{ x - .18f, .98f, z };
+        const point3 head{ x + .65f, .99f, z };
+        const auto has = [&]( int offset, const char *id ) {
+            return std::any_of( v.parts.begin(), v.parts.end(), [&]( const part_view &p ) {
+                return p.mount_x == part.mount_x + offset && p.mount_y == part.mount_y &&
+                       p.id == id;
+            } );
+        };
+        if( has( 0, "foot_pedals" ) ) {
+            cabin_frame_beam( crank, seat, .045f, paint );
+            if( has( 1, "xlframe" ) || has( 1, "frame" ) ) {
+                cabin_frame_beam( seat, head, .045f, paint );
+                cabin_frame_beam( crank, head, .045f, paint );
+            }
+            if( has( -1, "xlframe" ) || has( -1, "frame" ) ) {
+                for( float side : { -.045f, .045f } ) {
+                    const point3 axle{ x - 1.f, .362f, z + side };
+                    cabin_frame_beam( axle, seat, .027f, paint );
+                    cabin_frame_beam( axle, crank, .027f, paint );
+                }
+            }
+        } else if( has( -1, "foot_pedals" ) ) {
+            const point3 neck{ x - .35f, .99f, z };
+            for( float side : { -.045f, .045f } ) {
+                cabin_frame_beam( {x, .362f, z + side}, neck, .028f, steel );
+            }
+            cabin_frame_beam( neck, {x - .32f, 1.16f, z}, .035f, steel );
+            cabin_frame_beam( {x - .32f, 1.16f, z - .27f},
+                              {x - .32f, 1.16f, z + .27f}, .032f, steel );
+            for( float side : { -.23f, .23f } ) {
+                cuboid( x - .32f, z + side, .055f, .12f, 1.135f, 1.185f, rubber );
+            }
+        }
+        return true;
+    }
+    if( part.id == "saddle" ) {
+        cabin_frame_beam( {x - .18f, .80f, z}, {x - .18f, 1.035f, z}, .032f, steel );
+        cuboid( x - .22f, z, .23f, .22f, 1.025f, 1.08f, rubber );
+        cuboid( x - .06f, z, .15f, .085f, 1.035f, 1.075f, rubber );
+        return true;
+    }
+    if( part.id == "foot_pedals" ) {
+        cabin_frame_beam( {x, .40f, z - .13f}, {x, .40f, z + .13f}, .04f, steel );
+        for( float side : { -1.f, 1.f } ) {
+            cabin_frame_beam( {x, .40f, z + side * .13f},
+                              {x + side * .13f, .34f, z + side * .13f}, .022f, steel );
+            cuboid( x + side * .13f, z + side * .19f, .11f, .13f, .32f, .36f, rubber );
+        }
+        return true;
+    }
+    if( part.id == "basketsm" || part.id == "basketsm_external" ) {
+        cuboid( x, z, .40f, .34f, .73f, .76f, steel );
+        for( int i = 0; i <= 4; ++i ) {
+            const float dx = -.20f + .10f * i;
+            const float dz = -.17f + .085f * i;
+            for( float side : { -1.f, 1.f } ) {
+                cabin_frame_beam( {x + dx, .76f, z + side * .17f},
+                                  {x + dx, .98f, z + side * .17f}, .012f, steel );
+                cabin_frame_beam( {x + side * .20f, .76f, z + dz},
+                                  {x + side * .20f, .98f, z + dz}, .012f, steel );
+            }
+        }
+        for( float y : { .85f, .98f } ) {
+            for( float side : { -1.f, 1.f } ) {
+                cabin_frame_beam( {x - .20f, y, z + side * .17f},
+                                  {x + .20f, y, z + side * .17f}, .012f, steel );
+                cabin_frame_beam( {x + side * .20f, y, z - .17f},
+                                  {x + side * .20f, y, z + .17f}, .012f, steel );
+            }
+        }
+        return true;
+    }
+    // Small brackets and controls must not become large opaque boxes.
+    return part.id.find( "wheel_mount" ) == 0 || part.id == "horn_bicycle" ||
+           part.id == "controls" || part.id == "controls_electronic";
+}
+
 void one_part( const vehicle_view &v, const part_view &part, const shell_profile &profile )
 {
+    if( profile.pedal_cycle && !profile.enclosed && bicycle_part( v, part ) ) {
+        return;
+    }
     const float x = float( part.mount_x - v.pivot_x );
     const float z = float( part.mount_y - v.pivot_y );
     const auto art = fp3d_materials::lookup( fp3d_materials::vehicle_key( part ) );
@@ -1338,6 +1486,21 @@ void one_part( const vehicle_view &v, const part_view &part, const shell_profile
     const std::array<float, 3> paint{ .40f * damage, .49f * damage, .57f * damage };
     const std::array<float, 3> glass_frame{ .34f * damage, .45f * damage, .50f * damage };
     const std::array<float, 3> interior{ .29f * damage, .27f * damage, .25f * damage };
+    if( part.id.find( "solar_panel" ) != std::string::npos ) {
+        // Conversion to a grid appliance uses a flat panel, never a generic
+        // engine/roof box. Ordinary vehicle-mounted panels sit on the roof.
+        const bool appliance = part.id.find( "ap_" ) == 0;
+        const float base = appliance ? .10f : profile.enclosed ? 1.44f : .65f;
+        cuboid( x, z, .96f, .90f, base, base + .055f, metal );
+        const color3 cells{ .055f * damage, .14f * damage, .29f * damage };
+        for( int row = 0; row < 4; ++row ) {
+            for( int col = 0; col < 6; ++col ) {
+                cuboid( x - .375f + col * .15f, z - .315f + row * .21f,
+                        .139f, .195f, base + .055f, base + .064f, cells );
+            }
+        }
+        return;
+    }
     switch( part.kind ) {
         case role::frame: {
             if( profile.enclosed ) {
@@ -1532,6 +1695,8 @@ void geometry( const vehicle_view &v )
                          part.id.find( "dashboard" ) != std::string::npos ) ) {
                 cabin_controls( v, part );
             } else if( part.kind == role::door && part.open ) {
+                one_part( v, part, profile );
+            } else if( part.id.find( "solar_panel" ) != std::string::npos ) {
                 one_part( v, part, profile );
             }
         }

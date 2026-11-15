@@ -1,5 +1,11 @@
 #include "character.h"
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+// Defined in sdltiles.cpp: the isolated title demonstration renders its private
+// world without fog, so its spectator sees everything that is loaded.
+bool menu_demo_spectator_visibility();
+#endif
+
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -11514,6 +11520,13 @@ npc_attitude Character::get_attitude() const
 
 bool Character::sees( const map &here, const tripoint_bub_ms &t, bool, int ) const
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    // The demonstration spectator is a camera, not a survivor: it sees the whole
+    // loaded map so the title backdrop never shows unexplored black squares.
+    if( is_avatar() && menu_demo_spectator_visibility() && here.inbounds( t ) ) {
+        return true;
+    }
+#endif
     const int wanted_range = rl_dist( pos_bub( here ), t );
     bool can_see = this->is_avatar() ? here.pl_sees( t, std::min( sight_max, wanted_range ) ) :
                    Creature::sees( here, t );
@@ -11527,6 +11540,14 @@ bool Character::sees( const map &here, const tripoint_bub_ms &t, bool, int ) con
 
 bool Character::sees( const map &here, const Creature &critter ) const
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    // Camera spectacles of the title demonstration: creatures are drawn wherever
+    // they stand inside the loaded map, not only inside the survivor's cone.
+    if( is_avatar() && menu_demo_spectator_visibility() &&
+        here.inbounds( critter.pos_bub( here ) ) ) {
+        return true;
+    }
+#endif
     // This handles only the player/npc specific stuff (monsters don't have traits or bionics).
     const int dist = rl_dist( pos_abs(), critter.pos_abs() );
     if( std::abs( posz() - critter.posz() ) > fov_3d_z_range ) {

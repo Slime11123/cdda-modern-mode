@@ -32,23 +32,24 @@ Explore CDDA's world in a first-person 3D perspective, or switch back to classic
 
 *Actual development screenshots supplied by the developer. Graphics and performance depend on settings and hardware.*
 
-## What's new — Alpha 0.3.2
+## What's new — Alpha 0.4.0
 
-**November 9, 2026.** This update integrates modern inventory and map improvements, vehicle V12 frame topology, and isolated QA-only research for Photon-style normal/ORM material data. See [the Alpha 0.3.2 changelog](docs/RELEASE_NOTES_alpha0.3.2.md).
+This release collects changes since Alpha 0.3.2. See [the full Alpha 0.4.0 changelog](docs/RELEASE_NOTES_alpha0.4.0.md).
 
-- **Modern inventory:** improved equipment and nested pocket tree controls, with persisted expansion state. The original developer-supplied inventory screenshot appears above.
-- **Overmap & compass:** mouse-drag map panning, right-click context actions, native overmap notes with colored X markers, and nearby bearings on the top compass.
-- **3D vehicle V12:** shape body panels, roof and glass around actual intact frame rows, falling back to modular rendering where the structure is damaged or discontinuous.
-- **Experimental materials:** normal/ORM auxiliary maps, GPU atlases, and a wall/floor surface framebuffer are **gated QA prototypes only**, not default gameplay PBR. Complete Minecraft Photon/Iris multi-pass shader execution remains unsupported.
-- **Alpha 0.3.1 improvements remain:** reduced redundant scene preparation, conditional reflection work, and more legible first-run Windows defaults.
+- **F6 overhead view:** orbit, zoom, camera-relative movement, pointer actions and room roof cuts. F5 opens settings; F6 keeps its settings behavior in 2D.
+- **3D world:** independent loaded-map terrain capture fixes missing walls and ground; expanded furniture models, ground fields, sprite proportions, cabinet contents and native overlays. Items, creatures and actions retain native rules.
+- **Menus:** isolated live title background, staged loading screen, redesigned world creation and a searchable save browser with available previews.
+- **Lighting:** native powered/portable local lights and optional Ultra PBR detail, off by default. Complete Minecraft Photon/Iris execution remains unsupported.
+- **Performance:** reuse terrain and shadow geometry and batch wall/floor drawing. Two development samples on an RTX 4080 SUPER at 1080p with Photon Ultra averaged 58.44 / 58.43 FPS in one city scene; this is not a general FPS guarantee.
 
-*This is an experimental Alpha build; full cross-GPU, tileset, map-note, vehicle, gameplay and legacy-save validation is still ongoing.*
+*Experimental prerelease. Full GPU, tileset, building, vehicle, gameplay and legacy-save validation is ongoing; known regression failures remain.*
+
 ## Download and install (Windows x64)
 
 1. Open [GitHub Releases](https://github.com/Slime11123/cdda-modern-mode/releases) and download the newest **Windows-x64 ZIP**. GitHub's automatic **Source code** ZIP is not a playable game package.
 2. **Extract the complete ZIP** to a new writable folder. Keep the included DLLs and `data/`, `gfx/`, `lang/` and `config/` directories together.
 3. **Double-click `cataclysm-tiles.exe`**. It is the only game EXE; no CMD, second launcher or special environment variables are needed.
-4. Press **F5 / F6** to change 2D/3D, graphics, controls and HUD. Back up your `user/` saves and settings before upgrading.
+4. Press **F5** (or **F6** in 2D) to change 2D/3D, graphics, controls and HUD. In the 3D world **F6** switches between first person and the 3D god view (overhead). Back up your `user/` saves and settings before upgrading.
 
 A fresh install uses a larger, readable Windows 3D UI. Your already-saved font, terminal-size and scaling preferences are not forcibly reset.
 
@@ -62,13 +63,16 @@ A fresh install uses a larger, readable Windows 3D UI. Your already-saved font, 
 | **Q** | Quick action wheel |
 | **Tab** | Open or close the integrated survival menu |
 | **Z (3D)** | Crouch |
-| **F5 / F6** | Unified display and control settings |
+| **F5** | Unified display and control settings |
+| **F6 (3D world)** | Switch between first person and the god view (overhead); **2D keeps F6 as settings** |
+| **Wheel / middle drag (god view)** | Zoom the overhead camera / turn its azimuth around the player |
+| **Right click (god view)** | Open the same dropdown the modern 2D mode uses on the tile under the cursor |
 
 Game logic and many complex actions still use native CDDA validation and menus. Key bindings may be customized.
 
 ## Optional visuals — downloads not included
 
-**Photon Shaders (recommended for lighting and atmosphere):** [Download from the author's Modrinth page](https://modrinth.com/shader/photon-shader/versions) · [Photon source](https://github.com/sixthsurge/photon). You can put a separately downloaded shader ZIP in `shaderpacks/` and select it using the F5/F6 shaderpack menu. **This project does not provide or redistribute Photon.** The current graphics bridge provides *Photon-style visual adaptation*, **not** complete Minecraft Iris/OptiFine multi-pass rendering; some shaderpack features may not work.
+**Photon Shaders (recommended for lighting and atmosphere):** [Download from the author's Modrinth page](https://modrinth.com/shader/photon-shader/versions) · [Photon source](https://github.com/sixthsurge/photon). You can put a separately downloaded shader ZIP in `shaderpacks/` and select it using the F5 shaderpack settings. **This project does not provide or redistribute Photon.** The current graphics bridge provides *Photon-style visual adaptation*, **not** complete Minecraft Iris/OptiFine multi-pass rendering; some shaderpack features may not work.
 
 **UndeadPeople tileset (recommended for detailed sprite artwork):** [Xenikos/UndeadPeopleTileset](https://github.com/Xenikos/UndeadPeopleTileset). Install it separately under `gfx/` and select it in the game's graphics options. **This project does not include or redistribute UndeadPeople.** Compatibility varies with tileset versions.
 
@@ -78,7 +82,7 @@ Third-party authors retain their own rights and license conditions. Neither Phot
 
 **Alpha — work in progress.** Real-world gameplay, FPS on diverse GPUs, shaderpack versions, vehicle interiors, complex buildings, mods and old save migration have not all been exhaustively verified.
 
-- [Alpha 0.3.2 release notes](docs/RELEASE_NOTES_alpha0.3.2.md) · [Alpha 0.3.1 release notes](docs/RELEASE_NOTES_alpha0.3.1.md) · [Shaderpack compatibility](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D progress](docs/FP3D_PROGRESS.md)
+- [Alpha 0.4.0 release notes](docs/RELEASE_NOTES_alpha0.4.0.md) · [Alpha 0.3.2 release notes](docs/RELEASE_NOTES_alpha0.3.2.md) · [Alpha 0.3.1 release notes](docs/RELEASE_NOTES_alpha0.3.1.md) · [Shaderpack compatibility](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D progress](docs/FP3D_PROGRESS.md)
 - [Development status](docs/DEVELOPMENT_STATUS.md) · [Modern controls](docs/FP3D_0I1_MODERN_CONTROLS.md) · [Attribution](docs/ATTRIBUTION.md)
 - Developers: Windows, CMake, SDL2 Tiles, OpenGL; enable `TILES=ON` and `ENABLE_FP3D=ON`. See [CMake compiling guide](doc/c++/COMPILING-CMAKE.md).
 

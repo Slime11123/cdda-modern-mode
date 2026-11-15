@@ -56,6 +56,27 @@ struct frame_sample_state {
     std::vector<double> distant_costs;
     std::vector<double> perception_costs;
     std::vector<double> cell_costs;
+    std::vector<double> prepare_totals;
+    std::vector<double> prepare_player;
+    std::vector<double> prepare_extra;
+    std::vector<double> prepare_visibility;
+    std::vector<double> full_captures;
+    std::vector<double> capture_tails;
+    std::vector<double> material_costs;
+    std::vector<double> scene_cpu;
+    // Whole-step accounting: how much synchronous work one presented frame pays.
+    unsigned long presents = 0;
+    unsigned long prepare_calls = 0;
+    unsigned long prepare_extra_calls = 0;
+    unsigned long capture_calls = 0;
+    unsigned long publish_calls = 0;
+    unsigned long material_calls = 0;
+    unsigned long scene_draws = 0;
+    unsigned long indexed_cells = 0;
+    unsigned long scene_chunks = 0;
+    unsigned long scene_rebuilt = 0;
+    unsigned long landscape_chunks = 0;
+    unsigned long landscape_rebuilt = 0;
     std::map<std::string, std::vector<double>> stage_costs;
 };
 frame_sample_state frame_samples;
@@ -178,6 +199,7 @@ void snapshot_captured( double milliseconds )
 {
     if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
         frame_samples.captures.push_back( milliseconds );
+        ++frame_samples.capture_calls;
         const auto position = get_avatar().pos_abs();
         if( position != frame_samples.position ) {
             frame_samples.position = position;
@@ -189,6 +211,51 @@ void snapshot_captured( double milliseconds )
             }
             frame_samples.last_move_ms = elapsed;
         }
+    }
+}
+void snapshot_full_capture( double full_ms, double tail_ms )
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        frame_samples.full_captures.push_back( full_ms );
+        frame_samples.capture_tails.push_back( tail_ms );
+    }
+}
+void prepare_costs( double total_ms, double player_layer_ms, double extra_layers_ms,
+                    double visibility_ms, int extra_layer_calls )
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        frame_samples.prepare_totals.push_back( total_ms );
+        frame_samples.prepare_player.push_back( player_layer_ms );
+        frame_samples.prepare_extra.push_back( extra_layers_ms );
+        frame_samples.prepare_visibility.push_back( visibility_ms );
+        ++frame_samples.prepare_calls;
+        frame_samples.prepare_extra_calls += static_cast<unsigned long>( extra_layer_calls );
+    }
+}
+void publish_called()
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        ++frame_samples.publish_calls;
+    }
+}
+void material_prepare( double milliseconds )
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        frame_samples.material_costs.push_back( milliseconds );
+        ++frame_samples.material_calls;
+    }
+}
+void scene_draw( double cpu_ms, int indexed_cells, int chunks, int rebuilt, int landscape_chunks,
+                 int landscape_rebuilt )
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        frame_samples.scene_cpu.push_back( cpu_ms );
+        ++frame_samples.scene_draws;
+        frame_samples.indexed_cells += static_cast<unsigned long>( indexed_cells );
+        frame_samples.scene_chunks += static_cast<unsigned long>( chunks );
+        frame_samples.scene_rebuilt += static_cast<unsigned long>( rebuilt );
+        frame_samples.landscape_chunks += static_cast<unsigned long>( landscape_chunks );
+        frame_samples.landscape_rebuilt += static_cast<unsigned long>( landscape_rebuilt );
     }
 }
 void presented( SDL_Renderer *renderer )
@@ -244,6 +311,7 @@ void presented( SDL_Renderer *renderer )
     }
     const double interval = ( now - state.previous ) * 1000.0 / frequency;
     state.intervals.push_back( interval );
+    ++state.presents;
     if( interval >= 50 ) {
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST slow_present, ms=" << interval
                                    << ", index=" << state.intervals.size() << ", turn=" << to_turn<int>( calendar::turn )
@@ -272,6 +340,26 @@ void presented( SDL_Renderer *renderer )
     log_frame_distribution( "snapshot_distant", state.distant_costs );
     log_frame_distribution( "snapshot_perception", state.perception_costs );
     log_frame_distribution( "snapshot_cells", state.cell_costs );
+    log_frame_distribution( "snapshot_full", state.full_captures );
+    log_frame_distribution( "snapshot_tail", state.capture_tails );
+    log_frame_distribution( "prepare_total", state.prepare_totals );
+    log_frame_distribution( "prepare_player_layer", state.prepare_player );
+    log_frame_distribution( "prepare_extra_layers", state.prepare_extra );
+    log_frame_distribution( "prepare_visibility", state.prepare_visibility );
+    log_frame_distribution( "materials_prepare", state.material_costs );
+    log_frame_distribution( "scene_draw", state.scene_cpu );
+    DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST step_accounting, presents=" << state.presents
+                               << ", prepare_calls=" << state.prepare_calls
+                               << ", prepare_extra_layer_calls=" << state.prepare_extra_calls
+                               << ", capture_calls=" << state.capture_calls
+                               << ", publish_calls=" << state.publish_calls
+                               << ", material_calls=" << state.material_calls
+                               << ", scene_draws=" << state.scene_draws
+                               << ", indexed_cells=" << state.indexed_cells
+                               << ", scene_chunks=" << state.scene_chunks
+                               << ", scene_rebuilt=" << state.scene_rebuilt
+                               << ", landscape_chunks=" << state.landscape_chunks
+                               << ", landscape_rebuilt=" << state.landscape_rebuilt;
     for( const auto &entry : state.stage_costs ) {
         log_frame_distribution( ( "stage_" + entry.first ).c_str(), entry.second );
     }
@@ -289,6 +377,14 @@ void presented( SDL_Renderer *renderer )
         write_samples( "snapshot_distant", state.distant_costs );
         write_samples( "snapshot_perception", state.perception_costs );
         write_samples( "snapshot_cells", state.cell_costs );
+        write_samples( "snapshot_full", state.full_captures );
+        write_samples( "snapshot_tail", state.capture_tails );
+        write_samples( "prepare_total", state.prepare_totals );
+        write_samples( "prepare_player_layer", state.prepare_player );
+        write_samples( "prepare_extra_layers", state.prepare_extra );
+        write_samples( "prepare_visibility", state.prepare_visibility );
+        write_samples( "materials_prepare", state.material_costs );
+        write_samples( "scene_draw", state.scene_cpu );
         for( const auto &entry : state.stage_costs ) {
             write_samples( ( "stage_" + entry.first ).c_str(), entry.second );
         }

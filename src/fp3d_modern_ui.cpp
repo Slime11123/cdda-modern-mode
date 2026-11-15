@@ -9,6 +9,7 @@
 #include "avatar.h"
 #include "bionics.h"
 #include "cata_imgui.h"
+#include "cata_tiles.h"
 #include "character_martial_arts.h"
 #include "fp3d_compositor.h"
 #include "fp3d_crafting.h"
@@ -56,6 +57,22 @@ constexpr int mutations_page = 9;
 constexpr int bionics_page = 10;
 constexpr int styles_page = 11;
 constexpr int bestiary_page_index = 12;
+
+bool yellow_button( const char *label, const ImVec2 &size = ImVec2( 0, 0 ) )
+{
+    ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, .86f, .18f, 1 ) );
+    const bool pressed = ImGui::Button( label, size );
+    ImGui::PopStyleColor();
+    return pressed;
+}
+
+bool yellow_small_button( const char *label )
+{
+    ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, .86f, .18f, 1 ) );
+    const bool pressed = ImGui::SmallButton( label );
+    ImGui::PopStyleColor();
+    return pressed;
+}
 
 using fp3d_abilities::ability_request;
 using fp3d_abilities::bionic_control;
@@ -124,11 +141,11 @@ class panel : public cataimgui::window
         std::string gear_part;
         bool map_loaded = false;
         fp3d_map::model map_view;
-        std::map<std::string, SDL_Texture_Ptr> overmap_icons;
+        SDL_Texture_Ptr overmap_image;
         unsigned overmap_icons_revision = 0;
         tripoint_abs_omt map_center;
         std::optional<tripoint_abs_omt> map_selection;
-        int map_radius = 12;
+        int map_radius = 32;
         bool show_map_route = true;
         std::optional<tripoint_abs_omt> pending_travel;
         std::optional<tripoint_abs_omt> note_edit_position;
@@ -697,7 +714,7 @@ class panel : public cataimgui::window
                 for( size_t i = 0; i < indices.size(); ++i ) {
                     item_card( indices[i], 0, true, false, i + 1 < indices.size(), i > 0 );
                 }
-                if( nearby && !indices.empty() && ImGui::SmallButton( "拿取本组全部物品" ) ) {
+                if( nearby && !indices.empty() && yellow_small_button( "拿取本组全部物品" ) ) {
                     fp3d_inventory::operation action;
                     action.kind = fp3d_inventory::operation_kind::pickup;
                     for( size_t id : indices ) {
@@ -747,7 +764,7 @@ class panel : public cataimgui::window
                         ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .22f, .4f, .45f, 1 ) );
                     }
                     const bool selected = gear_part == part.first;
-                    if( ImGui::Button( part.second, ImVec2( width, 30 * scale ) ) ) {
+                    if( yellow_button( part.second, ImVec2( width, 30 * scale ) ) ) {
                         gear_part = part.first;
                     }
                     if( selected ) {
@@ -784,7 +801,7 @@ class panel : public cataimgui::window
         void gear() {
             if( side_page != 1 ) {
                 ImGui::TextUnformatted( "主手 / 双手" );
-                ImGui::Button( "拖到这里持握", ImVec2( -1, 38 * scale ) );
+                yellow_button( "拖到这里持握", ImVec2( -1, 38 * scale ) );
                 target( fp3d_inventory::operation_kind::wield );
                 for( size_t i = 0; i < view.entries.size(); ++i ) {
                     const auto &entry = view.entries[i];
@@ -795,7 +812,7 @@ class panel : public cataimgui::window
             }
             ImGui::TextUnformatted( "衣物与穿戴层" );
             body_equipment();
-            ImGui::Button( "拖到这里穿戴", ImVec2( -1, 38 * scale ) );
+            yellow_button( "拖到这里穿戴", ImVec2( -1, 38 * scale ) );
             target( fp3d_inventory::operation_kind::wear );
             bool any = false;
             for( size_t i = 0; i < view.entries.size(); ++i ) {
@@ -858,24 +875,24 @@ class panel : public cataimgui::window
                 ImGui::SameLine();
                 ImGui::TextUnformatted( "标记会显示在地图和罗盘上" );
                 ImGui::BeginDisabled( note_draft.empty() );
-                if( ImGui::Button( "保存标记" ) ) {
+                if( yellow_button( "保存标记" ) ) {
                     pending_note = std::make_pair( selected->position,
                                                    fp3d_map::format_marker( note_draft, note_color_choice ) );
                     confirm_note_delete = false;
                 }
                 ImGui::EndDisabled();
                 ImGui::BeginDisabled( selected->note_text.empty() );
-                if( ImGui::Button( "删除标记" ) ) {
+                if( yellow_button( "删除标记" ) ) {
                     confirm_note_delete = true;
                 }
                 ImGui::EndDisabled();
                 if( confirm_note_delete ) {
                     ImGui::TextWrapped( "删除此位置的标记？" );
-                    if( ImGui::Button( "确认删除" ) ) {
+                    if( yellow_button( "确认删除" ) ) {
                         pending_note = std::make_pair( selected->position, std::string() );
                         confirm_note_delete = false;
                     }
-                    if( ImGui::Button( "保留标记" ) ) { confirm_note_delete = false; }
+                    if( yellow_button( "保留标记" ) ) { confirm_note_delete = false; }
                 }
                 ImGui::EndDisabled();
                 if( !selected->editable ) {
@@ -887,7 +904,7 @@ class panel : public cataimgui::window
                 const bool can_travel = selected->known && selected->position.z() == you.posz() &&
                                         selected->position != map_view.player;
                 ImGui::BeginDisabled( !can_travel );
-                if( ImGui::Button( fp3d_input::vehicle_controls() ? "驾车前往此处…" : "步行前往此处…" ) ) {
+                if( yellow_button( fp3d_input::vehicle_controls() ? "驾车前往此处…" : "步行前往此处…" ) ) {
                     pending_travel = selected->position;
                 }
                 ImGui::EndDisabled();
@@ -898,7 +915,7 @@ class panel : public cataimgui::window
             if( map_view.objective ) {
                 const auto &p = *map_view.objective;
                 ImGui::TextWrapped( "%d, %d / 层 %d", p.x(), p.y(), p.z() );
-                if( ImGui::Button( "定位目的地" ) ) {
+                if( yellow_button( "定位目的地" ) ) {
                     map_center = p;
                     map_selection = p;
                     map_loaded = false;
@@ -915,7 +932,8 @@ class panel : public cataimgui::window
         }
         void map_page() {
             if( overmap_icons_revision != fp3d_materials::revision() ) {
-                overmap_icons.clear();
+                overmap_image.reset();
+                map_loaded = false;
                 overmap_icons_revision = fp3d_materials::revision();
             }
             if( !map_loaded ) {
@@ -924,8 +942,9 @@ class panel : public cataimgui::window
                     map_selection = map_center;
                 }
                 map_view = fp3d_map::capture( you, map_center, map_radius );
-                // Keep cached terrain icons when panning: they only need clearing
-                // when the selected tileset revision changes.
+                overmap_image = overmap_tilecontext ?
+                                overmap_tilecontext->overmap_texture( map_view.center, map_view.radius ) :
+                                SDL_Texture_Ptr();
                 map_center = map_view.center;
                 map_loaded = true;
             }
@@ -936,14 +955,14 @@ class panel : public cataimgui::window
             ImGui::BeginChild( "地图标记", ImVec2( side, height ), true );
             ImGui::TextUnformatted( "地图范围" );
             ImGui::SetNextItemWidth( -1 );
-            const char *ranges[] = { "附近 17×17", "周边 25×25", "远处 37×37" };
-            const int radii[] = { 8, 12, 18 };
-            int zoom = map_radius == 8 ? 0 : map_radius == 18 ? 2 : 1;
-            if( ImGui::Combo( "##地图范围", &zoom, ranges, 3 ) ) {
+            const char *ranges[] = { "附近 17×17", "周边 25×25", "远处 37×37", "全景 65×65" };
+            const int radii[] = { 8, 12, 18, 32 };
+            int zoom = map_radius == 32 ? 3 : map_radius == 8 ? 0 : map_radius == 18 ? 2 : 1;
+            if( ImGui::Combo( "##地图范围", &zoom, ranges, 4 ) ) {
                 map_radius = radii[zoom];
                 map_loaded = false;
             }
-            if( ImGui::Button( "回到玩家" ) ) {
+            if( yellow_button( "回到玩家" ) ) {
                 map_center = you.pos_abs_omt();
                 map_selection = map_center;
                 map_loaded = false;
@@ -953,24 +972,24 @@ class panel : public cataimgui::window
                 map_selection = map_center;
                 map_loaded = false;
             };
-            if( ImGui::SmallButton( "北" ) ) {
+            if( yellow_small_button( "北" ) ) {
                 pan( 0, -map_radius, 0 );
             }
-            if( ImGui::SmallButton( "西" ) ) {
+            if( yellow_small_button( "西" ) ) {
                 pan( -map_radius, 0, 0 );
             }
             ImGui::SameLine();
-            if( ImGui::SmallButton( "东" ) ) {
+            if( yellow_small_button( "东" ) ) {
                 pan( map_radius, 0, 0 );
             }
-            if( ImGui::SmallButton( "南" ) ) {
+            if( yellow_small_button( "南" ) ) {
                 pan( 0, map_radius, 0 );
             }
-            if( ImGui::SmallButton( "上层" ) ) {
+            if( yellow_small_button( "上层" ) ) {
                 pan( 0, 0, 1 );
             }
             ImGui::SameLine();
-            if( ImGui::SmallButton( "下层" ) ) {
+            if( yellow_small_button( "下层" ) ) {
                 pan( 0, 0, -1 );
             }
             ImGui::Checkbox( "显示路线", &show_map_route );
@@ -1112,47 +1131,41 @@ class panel : public cataimgui::window
                     ImGui::EndCombo();
                 }
                 ImGui::BeginDisabled( note_draft.empty() || !map_context_position );
-                if( ImGui::Button( "保存 X 标记" ) && map_context_position ) {
+                if( yellow_button( "保存 X 标记" ) && map_context_position ) {
                     pending_note = std::make_pair( *map_context_position,
                                       fp3d_map::format_marker( note_draft, note_color_choice ) );
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndDisabled();
                 ImGui::SameLine();
-                if( ImGui::Button( "取消" ) ) {
+                if( yellow_button( "取消" ) ) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
             }
             auto *draw = ImGui::GetWindowDrawList();
+            if( overmap_image ) {
+                draw->AddImage( ( ImTextureID )( intptr_t )overmap_image.get(), origin,
+                                ImVec2( origin.x + extent, origin.y + extent ) );
+            }
             for( size_t i = 0; i < map_view.cells.size(); ++i ) {
                 const auto &row = map_view.cells[i];
                 const ImVec2 start( origin.x + ( i % diameter ) * tile, origin.y + ( i / diameter ) * tile );
-                const ImVec2 end( start.x + tile - 1, start.y + tile - 1 );
+                const ImVec2 end( start.x + tile, start.y + tile );
                 const ImVec2 middle( start.x + tile * .5f, start.y + tile * .5f );
                 const auto &pair = cata_cursesport::colorpairs[row.color.to_color_pair_index()];
                 const auto &rgb = windowsPalette[static_cast<int>( pair.FG ) + ( row.color.is_bold() ? 8 : 0 )];
                 const ImVec4 foreground( rgb.r / 255.0f, rgb.g / 255.0f, rgb.b / 255.0f, 1 );
-                draw->AddRectFilled( start, end, row.known ? ImGui::ColorConvertFloat4ToU32(
+                if( !overmap_image ) {
+                    draw->AddRectFilled( start, end, row.known ? ImGui::ColorConvertFloat4ToU32(
                                          ImVec4( foreground.x * .3f, foreground.y * .3f, foreground.z * .3f, 1 ) ) :
                                      IM_COL32( 15, 20, 26, 255 ) );
-                bool native_tile_drawn = false;
-                if( row.known && !row.tileset_id.empty() ) {
-                    auto found = overmap_icons.find( row.tileset_id );
-                    if( found == overmap_icons.end() ) {
-                        found = overmap_icons.emplace( row.tileset_id,
-                                                       fp3d_materials::tileset_icon( row.tileset_id ) ).first;
+                    if( !row.symbol.empty() && tile >= ImGui::GetFontSize() * .8f &&
+                        ImGui::GetFont()->FindGlyphNoFallback( static_cast<ImWchar>( UTF8_getch( row.symbol ) ) ) ) {
+                        const auto size = ImGui::CalcTextSize( row.symbol.c_str() );
+                        draw->AddText( ImVec2( middle.x - size.x * .5f, middle.y - size.y * .5f ),
+                                       ImGui::ColorConvertFloat4ToU32( foreground ), row.symbol.c_str() );
                     }
-                    if( found->second ) {
-                        draw->AddImage( ( ImTextureID )( intptr_t )found->second.get(), start, end );
-                        native_tile_drawn = true;
-                    }
-                }
-                if( !native_tile_drawn && !row.symbol.empty() && tile >= ImGui::GetFontSize() * .8f &&
-                    ImGui::GetFont()->FindGlyphNoFallback( static_cast<ImWchar>( UTF8_getch( row.symbol ) ) ) ) {
-                    const auto size = ImGui::CalcTextSize( row.symbol.c_str() );
-                    draw->AddText( ImVec2( middle.x - size.x * .5f, middle.y - size.y * .5f ),
-                                   ImGui::ColorConvertFloat4ToU32( foreground ), row.symbol.c_str() );
                 }
                 if( show_map_route && row.route ) {
                     draw->AddRectFilled( ImVec2( middle.x - 2, middle.y - 2 ),
@@ -1179,6 +1192,17 @@ class panel : public cataimgui::window
                                    IM_COL32( 255, 255, 255, 255 ), 0, 0, 2 );
                 }
             }
+            draw->PushClipRect( origin, ImVec2( origin.x + extent, origin.y + extent ), true );
+            for( const auto &city : map_view.cities ) {
+                const auto size = ImGui::CalcTextSize( city.name.c_str() );
+                const ImVec2 pos( origin.x + ( city.position.x() - map_view.center.x() +
+                                              map_view.radius + .5f ) * tile - size.x * .5f,
+                                  origin.y + ( city.position.y() - map_view.center.y() +
+                                              map_view.radius + .5f ) * tile - size.y * .5f );
+                draw->AddRectFilled( pos, ImVec2( pos.x + size.x, pos.y + size.y ), IM_COL32( 0, 0, 0, 255 ) );
+                draw->AddText( pos, IM_COL32( 255, 255, 0, 255 ), city.name.c_str() );
+            }
+            draw->PopClipRect();
             ImGui::EndChild();
             if( !compact ) {
                 ImGui::SameLine();
@@ -1282,7 +1306,7 @@ class panel : public cataimgui::window
                 const auto &entry = projects[selected_project];
                 ImGui::TextWrapped( "%s / %s", entry.name.c_str(), entry.category.c_str() );
                 ImGui::TextWrapped( "位置、材料、技能、光照及所属势力沿用原版检查。" );
-                if( ImGui::Button( "选择位置并预览" ) ) {
+                if( yellow_button( "选择位置并预览" ) ) {
                     fp3d_inventory::operation request;
                     request.kind = fp3d_inventory::operation_kind::native;
                     request.native_action = ACTION_CONSTRUCT;
@@ -1308,7 +1332,7 @@ class panel : public cataimgui::window
                 ImGui::BeginChild( "可见人物", ImVec2( width * .29f, height ), true );
                 ImGui::SetNextItemWidth( -1 );
                 ImGui::InputTextWithHint( "##人物搜索", "搜索可见人物", &people_search );
-                if( ImGui::Button( "刷新人物列表" ) ) { journal_loaded = false; }
+                if( yellow_button( "刷新人物列表" ) ) { journal_loaded = false; }
                 std::vector<const fp3d_journal::person_entry *> filtered;
                 const fp3d_journal::person_entry *person = nullptr;
                 for( const auto &entry : journal.people ) {
@@ -1348,7 +1372,7 @@ class panel : public cataimgui::window
                         return;
                     }
                     ImGui::BeginDisabled( person->distance > 1 );
-                    if( ImGui::Button( "与此人物交谈…" ) ) {
+                    if( yellow_button( "与此人物交谈…" ) ) {
                         if( fp3d_journal::dialogue_target( you, here, person->id, person->position ) ) {
                             fp3d_inventory::operation request;
                             request.kind = fp3d_inventory::operation_kind::native;
@@ -1370,7 +1394,7 @@ class panel : public cataimgui::window
                              npc_orders::kind::guard, npc_orders::kind::follow
                          } ) {
                         ImGui::BeginDisabled( order == npc_orders::kind::guard ? !person->can_guard : !person->can_follow );
-                        if( ImGui::Button( order == npc_orders::kind::guard ? "原地守卫" : "继续跟随" ) ) {
+                        if( yellow_button( order == npc_orders::kind::guard ? "原地守卫" : "继续跟随" ) ) {
                             fp3d_inventory::operation request;
                             request.kind = fp3d_inventory::operation_kind::follower_order;
                             request.talking_npc_id = person->id;
@@ -1416,7 +1440,7 @@ class panel : public cataimgui::window
             ImGui::Combo( "##任务状态", &mission_state, "进行中\0已完成\0失败\0" );
             ImGui::SetNextItemWidth( -1 );
             ImGui::InputTextWithHint( "##任务搜索", "搜索任务", &mission_search );
-            if( ImGui::Button( "刷新任务列表" ) ) { journal_loaded = false; }
+            if( yellow_button( "刷新任务列表" ) ) { journal_loaded = false; }
             std::vector<const fp3d_journal::mission_entry *> filtered;
             const fp3d_journal::mission_entry *mission = nullptr;
             for( const auto &entry : journal.missions ) {
@@ -1458,7 +1482,7 @@ class panel : public cataimgui::window
                     ImGui::TextWrapped( "正在追踪此任务。" );
                 } else if( mission->state != 0 ) {
                     ImGui::TextWrapped( "仅进行中的任务可以设为追踪目标。" );
-                } else if( ImGui::Button( "追踪此任务" ) ) {
+                } else if( yellow_button( "追踪此任务" ) ) {
                     fp3d_inventory::operation request;
                     request.kind = fp3d_inventory::operation_kind::native;
                     request.native_action = ACTION_MISSIONS;
@@ -1651,7 +1675,7 @@ class panel : public cataimgui::window
                 const auto &entry = recipes[selected_recipe];
                 ImGui::TextWrapped( "%s", entry.name.c_str() );
                 const bool favorite = fp3d_crafting::is_favorite( entry.id );
-                if( ImGui::Button( favorite ? "取消配方收藏" : "收藏配方" ) ) {
+                if( yellow_button( favorite ? "取消配方收藏" : "收藏配方" ) ) {
                     pending_recipe_favorite = std::pair{ entry.id, !favorite };
                 }
                 ImGui::TextWrapped( "主技能：%s / 难度 %d", entry.skill.c_str(), entry.difficulty );
@@ -1661,7 +1685,7 @@ class panel : public cataimgui::window
                     crafting_batch = std::clamp( crafting_batch, 1, 50 );
                     recipe_details = fp3d_crafting::details( entry.id, you, crafting_batch );
                 }
-                if( ImGui::Button( "制作所选批量" ) ) {
+                if( yellow_button( "制作所选批量" ) ) {
                     fp3d_inventory::operation request;
                     request.kind = fp3d_inventory::operation_kind::craft;
                     request.crafting_recipe = entry.id;
@@ -1671,7 +1695,7 @@ class panel : public cataimgui::window
                 }
                 if( !crafting_position ) {
                     ImGui::TextWrapped( "材料替代与特殊确认仍由原版处理；选择其他制作人请用下方完整菜单。" );
-                    if( ImGui::Button( "在原版确认制作" ) ) {
+                    if( yellow_button( "在原版确认制作" ) ) {
                         fp3d_inventory::operation request;
                         request.kind = fp3d_inventory::operation_kind::native;
                         request.native_action = ACTION_CRAFT;
@@ -1771,7 +1795,7 @@ class panel : public cataimgui::window
                     if( id->activated ) {
                         const bool ready = fp3d_abilities::mutation_ready( you, id );
                         ImGui::BeginDisabled( !ready );
-                        if( ImGui::Button( active ? "停用" : "启用" ) ) {
+                        if( yellow_button( active ? "停用" : "启用" ) ) {
                             pending_ability = id;
                         }
                         ImGui::EndDisabled();
@@ -1810,7 +1834,7 @@ class panel : public cataimgui::window
                             }
                         }
                         ImGui::BeginDisabled( blocked != nullptr );
-                        if( ImGui::Button( bio.powered ? "停用" : "启用" ) ) {
+                        if( yellow_button( bio.powered ? "停用" : "启用" ) ) {
                             pending_ability = bionic_request{ bio.get_uid(), bionic_control::power };
                         }
                         ImGui::EndDisabled();
@@ -1820,7 +1844,7 @@ class panel : public cataimgui::window
                         }
                     }
                     if( bio.can_install_weapon() && !bio.powered &&
-                        ImGui::Button( bio.has_weapon() ? "卸下武器" : "安装武器" ) ) {
+                        yellow_button( bio.has_weapon() ? "卸下武器" : "安装武器" ) ) {
                         pending_ability = bionic_request{ bio.get_uid(), bionic_control::weapon };
                     }
                     if( !info.fuel_opts.empty() || info.is_remote_fueled ) {
@@ -1829,7 +1853,7 @@ class panel : public cataimgui::window
                         } else {
                             ImGui::TextUnformatted( "节能模式：关闭" );
                         }
-                        if( ImGui::Button( "切换节能模式" ) ) {
+                        if( yellow_button( "切换节能模式" ) ) {
                             pending_ability = bionic_request{ bio.get_uid(), bionic_control::fuel };
                         }
                     }
@@ -1854,7 +1878,7 @@ class panel : public cataimgui::window
                     ImGui::TextWrapped( "%s", id->name.translated().c_str() );
                     const bool current = id == martial.selected_style();
                     ImGui::BeginDisabled( current );
-                    if( ImGui::Button( current ? "当前使用" : "切换到此武术" ) ) {
+                    if( yellow_button( current ? "当前使用" : "切换到此武术" ) ) {
                         pending_ability = id;
                     }
                     ImGui::EndDisabled();
@@ -1904,10 +1928,10 @@ class panel : public cataimgui::window
                 }
             }
             ImGui::Separator();
-            if( ImGui::Button( "人物与技能" ) ) {
+            if( yellow_button( "人物与技能" ) ) {
                 remembered_page = 1;
             }
-            if( ImGui::Button( "任务与追踪" ) ) {
+            if( yellow_button( "任务与追踪" ) ) {
                 remembered_page = 5;
             }
             ImGui::EndChild();
@@ -2010,7 +2034,7 @@ class panel : public cataimgui::window
                     if( ImGui::SliderInt( "##3D长按时间", &hold_delay, 100, 1000, "%d 毫秒" ) ) {
                         gestures.set_hold_delay( hold_delay );
                     }
-                    if( ImGui::Button( "恢复250毫秒" ) ) {
+                    if( yellow_button( "恢复250毫秒" ) ) {
                         gestures.set_hold_delay( 250 );
                     }
                     ImGui::TextWrapped( "本次启动期间有效；只调整互动和拾取的长按识别。" );
@@ -2200,7 +2224,7 @@ class panel : public cataimgui::window
             ImGui::EndChild();
         }
         void compatible( action_id action, const char *label ) {
-            if( ImGui::Button( label ) ) {
+            if( yellow_button( label ) ) {
                 if( direct_action_completed ) {
                     action_message = "请先关闭面板并结算已完成的放置操作。";
                     return;
@@ -2242,7 +2266,7 @@ class panel : public cataimgui::window
                 }
             }
             ImGui::SameLine( ImGui::GetWindowWidth() - 42 * scale );
-            if( ImGui::Button( "X", ImVec2( 26 * scale, 0 ) ) ) {
+            if( yellow_button( "X", ImVec2( 26 * scale, 0 ) ) ) {
                 is_open = false;
             }
             ImGui::Separator();
@@ -2321,7 +2345,7 @@ class panel : public cataimgui::window
                     groups( true );
                     ImGui::EndChild();
                 }
-                ImGui::Button( "拖到这里放到脚下", ImVec2( 0, 0 ) );
+                yellow_button( "拖到这里放到脚下", ImVec2( 0, 0 ) );
                 target( fp3d_inventory::operation_kind::drop );
             } else if( remembered_page == 1 ) {
                 health();
@@ -2357,7 +2381,7 @@ class panel : public cataimgui::window
                         const auto &option = item_uses[i];
                         ImGui::PushID( static_cast<int>( i ) );
                         ImGui::BeginDisabled( !option.enabled );
-                        if( ImGui::Button( option.name.c_str(), ImVec2( -1, 38 * scale ) ) ) {
+                        if( yellow_button( option.name.c_str(), ImVec2( -1, 38 * scale ) ) ) {
                             fp3d_inventory::operation action;
                             action.kind = fp3d_inventory::operation_kind::use;
                             action.items.emplace_back( use_item, 1 );
@@ -2373,7 +2397,7 @@ class panel : public cataimgui::window
                     }
                 } else { ImGui::TextWrapped( "物品已失效或已移走。" ); }
                 ImGui::Separator();
-                if( ImGui::Button( "返回" ) || ImGui::IsKeyPressed( ImGuiKey_Escape ) ) { ImGui::CloseCurrentPopup(); }
+                if( yellow_button( "返回" ) || ImGui::IsKeyPressed( ImGuiKey_Escape ) ) { ImGui::CloseCurrentPopup(); }
                 ImGui::EndPopup();
             }
             if( open_details ) {
@@ -2387,7 +2411,7 @@ class panel : public cataimgui::window
                 ImGui::BeginChild( "属性", ImVec2( 0, -40 * scale ) );
                 ImGui::TextWrapped( "%s", details_text.c_str() );
                 ImGui::EndChild();
-                if( ImGui::Button( "返回" ) || !details_open ) {
+                if( yellow_button( "返回" ) || !details_open ) {
                     details_open = false;
                     ImGui::CloseCurrentPopup();
                 }
@@ -2432,9 +2456,11 @@ class panel : public cataimgui::window
             ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( .38f, .29f, .16f, .9f ) );
             ImGui::PushStyleColor( ImGuiCol_CheckMark, ImVec4( .88f, .66f, .32f, 1 ) );
             ImGui::PushStyleColor( ImGuiCol_PlotHistogram, ImVec4( .48f, .68f, .40f, 1 ) );
+            ImGui::PushStyleVar( ImGuiStyleVar_DisabledAlpha, .75f );
             ImGui::BeginDisabled( activity_pending || native_prompt_open );
             cataimgui::window::draw();
             ImGui::EndDisabled();
+            ImGui::PopStyleVar();
             ImGui::PopStyleColor( 18 );
         }
         void refresh_character() {

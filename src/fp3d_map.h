@@ -28,11 +28,16 @@ struct cell {
     bool objective = false;
 };
 struct model {
+    struct city_label {
+        tripoint_abs_omt position;
+        std::string name;
+    };
     tripoint_abs_omt player;
     tripoint_abs_omt center;
     int radius = 12;
     std::optional<tripoint_abs_omt> objective;
     std::vector<cell> cells;
+    std::vector<city_label> cities;
 };
 // Existing overmaps and native vision levels only; never reveal or generate terrain.
 model capture( const avatar &you, const tripoint_abs_omt &center, int radius );

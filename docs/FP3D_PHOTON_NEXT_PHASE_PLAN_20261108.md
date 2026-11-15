@@ -213,3 +213,32 @@ P6 性能与发行验收。
 **重要限制**：该实现仅在显式 QA 环境变量下运行。当前 GPU→CPU 整张图读回、方向统计的原型路径实测 15–68ms CPU/驱动同步耗时，不可作为默认游戏 PBR 渲染。P5-C 仍需去掉正式路径 readback、量测 GPU Pass 耗时、实现独立可关闭的 BRDF/法线受光，并继续推进墙外其他复杂几何。没有玩家 EXE 更新或 GitHub push。
 
 完整源码、测试证据、性能限制及下轮工单见 [FP3D_PHOTON_P5_SURFACE_PASS_EXECUTION_20261109.md](FP3D_PHOTON_P5_SURFACE_PASS_EXECUTION_20261109.md)。
+
+
+## 2026-11-09 第四轮执行：P5-C 实验性 GGX/PBR 光照已可启用
+
+已在真实游戏 3D 世界中接入可关闭的 PBR 法线/粗糙度/金属度光照原型：新建 src/fp3d_pbr_lighting.h/.cpp，Surface Pass 增加纯 GPU 模式（普通帧不做整张 glReadPixels），墙/地面的 world-space TBN 法线通过粗糙度+金属度打包的 RGBA8 辅助 FBO，参与真实太阳微表面受光、受限 GGX/Schlick 高光；随后继续沿用原 Photon/MC 后处理、SSR、双级阴影。为了保留已经调好的暖色与墙面阴影，增加的是有限而克制的材质光照贡献，并非完整前向 PBR 引擎或 Iris/Photon 全套渲染 Pass。
+
+F6 光影设置新增「实验性 PBR 法线与材质高光（Ultra）」开关（**默认关**）及可保存的 0–200%「PBR 细节强度」滑块。默认不增加额外 GPU atlas；启用后每帧最多从当前**原版可见的墙/地面**按距离优先生成 2 张 64×64 辅助图。旧版 P5-A/B 的 QA 调试预览独立保留。
+
+本轮 Windows ENABLE_FP3D=ON 构建成功；P5-C 25/25、P5-A 10/10、GPU atlas 13/13、Surface Pass 17/17 共 65 项源码约束全部通过，C++ 材质单测通过。Photon Ultra 的 PBR Off/On、Medium 自动降级、Shader Off 和雨天 SSR 都经过隔离测试程序实景验证；雨天反射 mask Off/On 均为 619,376 像素，近远太阳阴影正常。效果目前偏细腻，**不能承诺大幅画质提升或 1080p60**。首次 shader/FBO 创建开销会显著高于热态；真实 GPU per-pass time 与长期帧率仍未测量。
+
+可通过 C:\Users\StickySlime\Documents\Codex\Projects\cdda3dproject\启动PBR实验版.cmd 在**独立测试存档**里体验；主运行 EXE 尚未覆盖、没有自动 GitHub 推送。本轮详细源码、对照截图、测试脚本、局限及下一步见 [FP3D_PHOTON_P5C_EXPERIMENTAL_LIGHTING_20261109.md](FP3D_PHOTON_P5C_EXPERIMENTAL_LIGHTING_20261109.md)。
+
+**剩余主工单**：P5-C 真正逐材质线性 PBR/复杂建筑及车辆覆盖；P4 SSR 动态稳定/时域；P6 完整游戏 GPU/CPU 帧耗、显存、压测和跨图块包 QA。不得把本轮定为 P5/P6 完成。
+
+
+## 2026-11-09 阶段性追加：原版电网/手机/手电筒动态光源
+
+已经新增 src/fp3d_local_lights.h/.cpp：由 fp3d_snapshot::scene_snapshot 保存实际来源的可见光源，电网/车辆灯必须满足启用、可用、确实为灯部件且连接网络的电池有电；手电筒和手机使用原版 Character::active_light() 与开灯状态。最多选 8 个邻近光源，利用原本的 HDR/Depth 后处理在 Photon 视觉桥中投射可衰减暖/冷色局部光、光晕和跟随鼠标的手机/手电筒光束，并在色调映射前组合，避免墙面发白。F6 有独立可保存的动态灯光开关；默认开启。
+
+Windows 完整构建、28 项真实来源源码约束和 Photon 六场景 GPU 画面对照已通过；墙前暖灯 RGB 差 (74.112,57.598,30.967)，墙后 (4.972,3.768,1.928)，手机光 (39.307,43.162,49.327)，关灯时变化接近 0。P5-C 法线/PBR 开关、Medium/Shader Off 回退复验通过。
+
+**仍待验证**：实际连接电网的真实游戏存档里通电/断电/重启发电机的端到端测试；现有 ShaderDaylightLab 存档没有实际灯源，截图比较用的是仅在隔离 QA 下启用的渲染线程模拟光源。逐灯精确 Shadow Map、体积/多层灯光、8 灯 GPU 帧耗未完成，不能宣称完整 Minecraft Photon/Iris 动态灯光。详见 [FP3D_NATIVE_DYNAMIC_LIGHTS_EXECUTION_20261109.md](FP3D_NATIVE_DYNAMIC_LIGHTS_EXECUTION_20261109.md)。可双击外层目录的「启动动态灯光实验版.cmd」，无需改动正式游戏启动器。
+
+
+### 2026-11-09 真实电网存档里程碑
+
+完成实际 CDDA 原版已接电立式灯到 Photon 点光照的首个端到端验证：在用户常用 3D EXE 及其常用存档目录中创建独立光影电网测试世界，电网实际有电、灯部件开启、场景采集 native_light_sources=1，F6 动态光照打开提交给 Photon 的光源数 1，关闭后 0，真实截图 RGB 差明显。电池 50000 电量；同电网关闭灯和无电灯分别作为对照；手电筒预装 56 电量、手机 50 电量。原四个存档不变。详情见 FP3D_NATIVE_DYNAMIC_LIGHTS_EXECUTION_20261109.md 的最新补充。
+
+下一步仍是逐灯阴影/灯罩发光、多层可见性、断电/开关/耗电跨存档测试、性能测量。用户的 FP3D_VIEW=2d 设定在 QA 后恢复，并没有擅自永久切换 3D。

@@ -13,20 +13,53 @@
 
 #include "sdl_wrappers.h"
 #include "coordinates.h"
+#include "point.h"
 
 // Windows/SDL2/OpenGL phase-1 probe, called only from the existing game thread.
 namespace fp3d_snapshot
 {
 struct scene_snapshot;
 }
+class avatar;
+class map;
 namespace fp3d_compositor
 {
+// Native transient map feedback, copied before the covered 2D pass clears it.
+struct map_overlay {
+    tripoint_abs_ms position;
+    std::string id;
+    int rotation = 0;
+    std::string text;
+    int color = 0;
+};
+void clear_map_overlays();
+void add_map_overlay( map_overlay overlay );
+const std::vector<map_overlay> &map_overlays();
 bool requested();
 bool view_3d();
 void apply_modes( bool three_d, bool modern );
 // Exercise the legacy three presets in renderer regression checks.
 void cycle_mode();
 fp3d_input::mode controls();
+// The 3D camera type is its own axis, independent of "3D rendering is on".
+// F6 flips it inside the 3D world; nothing here is a 2D mode.
+bool overhead();
+void toggle_camera();
+// Modern movement follows the active camera heading, including overhead orbit.
+float movement_heading();
+// Read-only presentation state of the overhead camera (HUD and regression
+// tests). Never a perception input.
+float overhead_azimuth();
+float overhead_distance();
+// The native tile under the mouse cursor inside the 3D world viewport. Only
+// natively visible, non-facade cells on the avatar's own storey qualify.
+std::optional<tripoint_abs_ms> pointer_tile();
+// Overhead right-click: the 3D profile binds the right button to aiming, so the
+// native secondary-select binding can never arrive. The compositor owns the
+// click and hands the world dispatcher one plain "SEC_SELECT" request instead,
+// which then opens the ordinary modern 2D dropdown on the picked tile.
+bool take_secondary_select( point *mouse = nullptr );
+std::optional<tripoint_abs_ms> take_secondary_select_target();
 bool modern_2d_input();
 bool modern_2d_world();
 bool modern_2d_overlay_open();
@@ -61,6 +94,7 @@ std::optional<tripoint_abs_ms> firing_target( int range );
 void set_viewport( int x, int y, int width, int height, int display_width, int display_height );
 void set_input_context( const std::string &category );
 void publish( fp3d_snapshot::scene_snapshot scene );
+void publish_camera( avatar &you, const map &here, bool cut_overhead );
 void begin_action();
 void melee_swing();
 struct hit_feedback {

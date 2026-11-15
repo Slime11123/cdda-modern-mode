@@ -6,9 +6,14 @@
 #include <vector>
 #include "cata_catch.h"
 #include "cata_scope_helpers.h"
+#include "cata_tiles.h"
+#include "omdata.h"
+#include "overmap.h"
+#include "overmapbuffer.h"
 #include "fp3d_snapshot.h"
 #include "options_helpers.h"
 #include "sdl_wrappers.h"
+#include "sdl_geometry.h"
 #include "avatar.h"
 #include "calendar.h"
 #include "cata_imgui.h"
@@ -31,6 +36,111 @@
 #include "item.h"
 #include "trade_ui.h"
 #include <cmath>
+
+TEST_CASE( "survival_map_uses_native_overmap_tiles_without_changing_renderer_or_world",
+           "[.survival_map_render]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Overmap regression", SDL_WINDOWPOS_UNDEFINED,
+                           SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_HIDDEN ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope restore_tiles( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    cata_tiles tiles( renderer, geometry, cache );
+    const char *pack = std::getenv( "CDDA_OVERMAP_QA_TILESET" );
+    tiles.load_tileset( pack ? pack : "Larwick Overmap", false, false, false, true );
+    clear_avatar();
+    const auto center = get_avatar().pos_abs_omt();
+    struct saved_cell {
+        tripoint_abs_omt position;
+        oter_id terrain;
+        om_vision_level vision;
+    };
+    std::vector<saved_cell> original;
+    on_out_of_scope restore_world( [&]() {
+        for( const auto &cell : original ) {
+            overmap_buffer.ter_set( cell.position, cell.terrain );
+            const auto om = overmap_buffer.get_existing_om_global( cell.position );
+            om.om->set_seen( om.local, cell.vision, true );
+        }
+    } );
+    for( int y = -9; y <= 9; ++y ) {
+        for( int x = -9; x <= 9; ++x ) {
+            const auto pos = center + point( x, y );
+            original.push_back( { pos, overmap_buffer.ter( pos ), overmap_buffer.seen( pos ) } );
+            overmap_buffer.ter_set( pos, oter_str_id( y == 0 ? "road_ew" : x == 0 ? "road_ns" :
+                                    y < -3 ? "forest_thick" : "field" ).id() );
+            overmap_buffer.set_seen( pos, om_vision_level::full );
+        }
+    }
+    const auto before_rng = rng_get_engine();
+    const auto before_time = calendar::turn;
+    const auto before_moves = get_avatar().get_moves();
+    SDL_Texture_Ptr target( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
+                            SDL_TEXTUREACCESS_TARGET, 640, 480 ) );
+    REQUIRE( target );
+    REQUIRE( SDL_SetRenderTarget( renderer.get(), target.get() ) == 0 );
+    SDL_Rect viewport{ 7, 11, 300, 240 };
+    const SDL_Rect clip{ 2, 3, 170, 130 };
+    SDL_RenderSetViewport( renderer.get(), &viewport );
+    SDL_RenderSetScale( renderer.get(), 1.5f, 1.5f );
+    SDL_RenderSetClipRect( renderer.get(), &clip );
+    SDL_RenderGetViewport( renderer.get(), &viewport );
+    SDL_SetRenderDrawColor( renderer.get(), 12, 34, 56, 78 );
+    auto image = tiles.overmap_texture( center, 8 );
+    REQUIRE( image );
+    CHECK( SDL_GetRenderTarget( renderer.get() ) == target.get() );
+    SDL_Rect actual;
+    SDL_RenderGetViewport( renderer.get(), &actual );
+    CHECK( SDL_RectEquals( &actual, &viewport ) );
+    SDL_RenderGetClipRect( renderer.get(), &actual );
+    CHECK( SDL_RectEquals( &actual, &clip ) );
+    float sx, sy;
+    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    CHECK( sx == 1.5f );
+    CHECK( sy == 1.5f );
+    Uint8 r, green, b, a;
+    SDL_GetRenderDrawColor( renderer.get(), &r, &green, &b, &a );
+    CHECK( r == 12 );
+    CHECK( green == 34 );
+    CHECK( b == 56 );
+    CHECK( a == 78 );
+    int width, height;
+    REQUIRE( SDL_QueryTexture( image.get(), nullptr, nullptr, &width, &height ) == 0 );
+    CHECK( width == 17 * tiles.get_tile_width() );
+    CHECK( height == 17 * tiles.get_tile_height() );
+    SDL_SetRenderTarget( renderer.get(), image.get() );
+    SDL_RenderSetViewport( renderer.get(), nullptr );
+    SDL_RenderSetScale( renderer.get(), 1, 1 );
+    SDL_RenderSetClipRect( renderer.get(), nullptr );
+    std::vector<Uint32> pixels( width * height );
+    REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                  pixels.data(), width * 4 ) == 0 );
+    CHECK( std::count_if( pixels.begin(), pixels.end(), []( Uint32 pixel ) {
+        return ( pixel >> 8 ) != 0;
+    } ) > width * height * .1 );
+    if( const char *directory = std::getenv( "CDDA_2D_PANEL_QA_DIR" ) ) {
+        SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), width, height,
+                                 32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+        REQUIRE( surface );
+        REQUIRE( SDL_SaveBMP( surface.get(), ( std::filesystem::path( directory ) /
+                             "native-overmap.bmp" ).string().c_str() ) == 0 );
+    }
+    const tripoint_abs_omt remote( 2000000, 2000000, 0 );
+    REQUIRE_FALSE( static_cast<bool>( overmap_buffer.get_existing_om_global( remote ) ) );
+    REQUIRE( tiles.overmap_texture( remote, 32 ) );
+    CHECK_FALSE( static_cast<bool>( overmap_buffer.get_existing_om_global( remote ) ) );
+    CHECK( rng_get_engine() == before_rng );
+    CHECK( calendar::turn == before_time );
+    CHECK( get_avatar().get_moves() == before_moves );
+    SDL_SetRenderTarget( renderer.get(), nullptr );
+}
 
 TEST_CASE( "fp3d_ui_style_is_independent_of_view_and_controls", "[.fp3d_ui_style]" )
 {
@@ -169,6 +279,8 @@ TEST_CASE( "modern_2d_edge_pan_uses_scaled_renderer_coordinates", "[.modern_2d_e
 
 TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_panel]" )
 {
+    override_option view_mode( "FP3D_VIEW", "2d" );
+    override_option control_mode( "FP3D_CONTROLS", "classic" );
     REQUIRE( fp3d_compositor::requested() );
     REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
     on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
@@ -179,6 +291,14 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
                                SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
     REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope restore_tiles( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    restore_on_out_of_scope restore_overmap( std::move( overmap_tilecontext ) );
+    overmap_tilecontext = std::make_unique<cata_tiles>( renderer, geometry, cache );
+    const char *pack = std::getenv( "CDDA_OVERMAP_QA_TILESET" );
+    overmap_tilecontext->load_tileset( pack ? pack : "Larwick Overmap", false, false, false, true );
     on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );
     fp3d_compositor::attach( renderer.get(), window.get() );
     fp3d_compositor::set_input_context( "DEFAULTMODE" );

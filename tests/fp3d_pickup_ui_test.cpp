@@ -28,7 +28,12 @@ TEST_CASE( "fp3d_E_single_item_uses_native_automatic_pockets_and_keeps_charges",
     here.add_item_or_charges( p, object );
     fp3d_snapshot::prepare_view( you, here );
     const auto scene = fp3d_snapshot::capture( you, here );
-    REQUIRE( scene.sprites.size() == 1 );
+    // The avatar's own tile sprite is published for the overhead camera only;
+    // world content here is exactly the one ground item.
+    REQUIRE( std::count_if( scene.sprites.begin(), scene.sprites.end(),
+    []( const auto & sprite ) {
+        return !sprite.is_avatar;
+    } ) == 1 );
     CHECK_FALSE( scene.sprites.front().multiple_items );
     const auto target = fp3d_targeting::ray( scene, 0, 55 );
     REQUIRE( target );

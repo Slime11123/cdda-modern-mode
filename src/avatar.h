@@ -36,6 +36,7 @@ class advanced_inventory_pane;
 class cata_path;
 class diary;
 class map_memory;
+struct mm_submap;
 class memorized_tile;
 class mission;
 class monster;
@@ -140,6 +141,12 @@ class avatar : public Character
         bool should_show_map_memory() const;
         void prepare_map_memory_region( const tripoint_abs_ms &p1, const tripoint_abs_ms &p2 );
         const memorized_tile &get_memorized_tile( const tripoint_abs_ms &p ) const;
+        // The memorized submap that holds `sm`. Reading a region tile by tile
+        // otherwise repeats a submap lookup and the timed-event check per cell;
+        // the 3D capture walks 121x121 cells per prepared storey. Returns
+        // nullptr when map memory is currently hidden, mirroring
+        // get_memorized_tile()'s default-tile answer.
+        const mm_submap *get_memorized_submap( const tripoint_abs_sm &sm ) const;
         void memorize_terrain( const tripoint_abs_ms &p, std::string_view id,
                                int subtile, int rotation );
         void memorize_decoration( const tripoint_abs_ms &p, std::string_view id,

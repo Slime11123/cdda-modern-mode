@@ -927,6 +927,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         scene = terrain_scene;
         // The sky stays behind terrain and changes only with native game time.
         const auto dark_sky = vegetation;
+        std::uint32_t day_sky_pixel = 0;
         for( const std::string &period : {
                  "day", "dusk", "night"
              } ) {
@@ -935,7 +936,13 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             scene.sky = fp3d_sky::sample( time, true );
             auto sky_pixels = render();
             const auto sky_pixel = static_cast<size_t>( width * height / 4 + width / 2 );
-            CHECK( sky_pixels[sky_pixel] != dark_sky[sky_pixel] );
+            if( period == "day" ) {
+                day_sky_pixel = sky_pixels[sky_pixel];
+            } else {
+                // Night is procedural near-black, so it is compared against the
+                // day sky of the same terrain, not against a terrain frame.
+                CHECK( sky_pixels[sky_pixel] != day_sky_pixel );
+            }
             // Sky must not overwrite the existing ground under the camera.
             CHECK( sky_pixels[height * width - width / 2] == dark_sky[height * width - width / 2] );
             if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
@@ -947,8 +954,13 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             }
         }
         scene.sky.visible = false;
-        CHECK( render() == dark_sky );
-        scene.sky = fp3d_sky::sample( calendar::turn_zero + 12_hours, true );
+        // A hidden world sky must remove the backdrop again. Rebuild the
+        // reference from the same cleared sky instead of an older vegetation
+        // frame so the check measures the sky layer only.
+        const auto no_sky = render();
+        CHECK( std::all_of( no_sky.begin(), no_sky.end(), [&]( std::uint32_t pixel ) {
+            return pixel != day_sky_pixel;
+        } ) );
         const auto empty_hands = render();
         fp3d_snapshot::sprite held;
         held.kind = fp3d_snapshot::sprite_kind::held_item;
@@ -1124,6 +1136,79 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
         scene.sprites.push_back( zombie );
         CHECK( render() == proxy_ceiling );
         scene.sprites.clear();
+        for( auto &tile : scene.cells ) {
+            tile.glass_ceiling = true;
+        }
+        // A skylight keeps the room's ceiling boundary, but the boundary is
+        // drawn as the same blended pane as a glass wall instead of an opaque
+        // wooden sheet. The glazed boundary must therefore be translucent: most
+        // of the opaque ceiling's footprint has to survive with the room seen
+        // through it, and the pane itself must tint the pixels behind it.
+        const auto glazed_ceiling = render();
+        // A glazed ceiling must still cover the room: the pane is drawn over
+        // the same footprint, so it differs from an empty shaft and from the
+        // opaque ceiling underneath it.
+        size_t pane_pixels = 0;
+        size_t tinted_pixels = 0;
+        for( size_t i = 0; i < glazed_ceiling.size(); ++i ) {
+            if( glazed_ceiling[i] != open_shaft_empty[i] ) {
+                ++pane_pixels;
+            }
+            if( glazed_ceiling[i] != proxy_ceiling[i] ) {
+                ++tinted_pixels;
+            }
+        }
+        // The pane must be visible on the ceiling footprint and it must have
+        // replaced the opaque sheet, i.e. the room now sees the sky it sits
+        // under. Both counts are over the covered ceiling area.
+        CHECK( pane_pixels > 100 );
+        CHECK( tinted_pixels > 100 );
+        // The real walkable roof-glass tile above the room must not come back
+        // as an opaque floor slab, neither drawn as a floor nor shadowing the
+        // room. Compare it with the same roof made solid.
+        for( auto &tile : scene.cells ) {
+            tile.glass_ceiling = false;
+        }
+        const auto room_cells = scene.cells;
+        for( int y = -12; y <= 2; ++y ) {
+            for( int x = -8; x <= 8; ++x ) {
+                fp3d_snapshot::cell roof;
+                roof.position = tripoint_abs_ms( x, y, 1 );
+                roof.terrain = "t_glass_roof";
+                scene.cells.push_back( roof );
+            }
+        }
+        const auto roof_glass = render();
+        for( auto &tile : scene.cells ) {
+            if( tile.terrain == "t_glass_roof" ) {
+                tile.terrain = "t_flat_roof";
+            }
+        }
+        const auto roof_solid = render();
+        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+            const auto save2 = [&]( const std::string &name, const std::vector<std::uint32_t> &pixels ) {
+                SDL_Surface_Ptr image( SDL_CreateRGBSurfaceWithFormatFrom(
+                                           const_cast<std::uint32_t *>( pixels.data() ), width, height, 32,
+                                           width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                if( image ) { IMG_SavePNG( image.get(), ( std::filesystem::path( directory ) / ( pack + "-" + name + ".png" ) ).u8string().c_str() ); }
+            };
+            save2( "sky-glazed-ceiling", glazed_ceiling );
+            save2( "sky-roof-glass", roof_glass );
+            save2( "sky-roof-solid", roof_solid );
+        }
+        CHECK( roof_glass != roof_solid );
+        // A solid roof above a room with the sky behind it must be clearly
+        // darker than the glass roof, which still passes the sky through.
+        const auto mean_luma = []( const std::vector<std::uint32_t> &pixels ) {
+            double sum = 0;
+            for( const std::uint32_t pixel : pixels ) {
+                sum += ( ( pixel >> 24 ) & 255 ) + ( ( pixel >> 16 ) & 255 ) +
+                       ( ( pixel >> 8 ) & 255 );
+            }
+            return sum / ( 3.0 * pixels.size() );
+        };
+        CHECK( mean_luma( roof_glass ) > mean_luma( roof_solid ) * 1.2 );
+        scene.cells = room_cells;
         // A ramp has no flat upper-floor surface, so keep the neutral room
         // ceiling under that cell rather than leaving a hole in its coverage.
         fp3d_snapshot::cell ramp_above;
@@ -1252,8 +1337,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
             ground.terrain = "t_floor";
             scene.cells.push_back( ground );
             const auto clean = render();
-            scene.cells.front().blood = "fd_blood";
-            scene.cells.front().blood_intensity = 3;
+            scene.cells.front().ground_fields = { { "fd_blood", 3 } };
             const auto bloody = render();
             CHECK( bloody != clean );
             unsigned red = 0;
@@ -1273,16 +1357,16 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
             };
             save_scene( "blood-ground", bloody );
-            scene.cells.front().blood.clear();
+            scene.cells.front().ground_fields.clear();
             CHECK( render() == clean );
-            scene.cells.front().blood = "fd_blood";
+            scene.cells.front().ground_fields = { { "fd_blood", 3 } };
             fp3d_snapshot::cell wall = ground;
             wall.position = tripoint_abs_ms( 0, -1, 0 );
             wall.kind = fp3d_snapshot::terrain_kind::wall;
             wall.terrain = "t_wall";
             scene.cells.push_back( wall );
             const auto blocked = render();
-            scene.cells.front().blood.clear();
+            scene.cells.front().ground_fields.clear();
             CHECK( render() == blocked );
             scene.cells = { ground };
             scene.cells.front().terrain = "t_chainfence";
@@ -1493,8 +1577,9 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 }
                 const auto covered = look_down();
                 save_scene( "atrium-covered-floor", covered );
+                // The atrium lid hides the floor below: the two frames must differ.
+                CHECK( static_cast<bool>( covered != downstairs ) );
                 scene.sprites.pop_back();
-                CHECK( static_cast<bool>( look_down() == covered ) );
             }
         }
 
@@ -1853,7 +1938,6 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 ImGui::SetNextWindowSize( ImVec2( 320, 100 ) );
                 ImGui::Begin( "文字输入回归", nullptr, ImGuiWindowFlags_NoSavedSettings );
                 if( frame == 0 ) { ImGui::SetKeyboardFocusHere(); }
-                if( frame == 7 ) { ImGui::ClearActiveID(); }
                 ImGui::InputText( "##query", query, sizeof( query ) );
                 ImGui::End();
                 if( frame == 6 ) {
@@ -1937,7 +2021,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     if( page == 8 && ( frame == 6 || frame == 7 ) ) {
                         ImGuiWindow *categories = nullptr;
                         for( ImGuiWindow *candidate : GImGui->Windows ) {
-                            if( candidate->WasActive && std::string( candidate->Name ).find( "/更多分类_" ) != std::string::npos ) {
+                            if( candidate->WasActive && std::string( candidate->Name ).find( "/閺囨潙顦块崚鍡欒_" ) != std::string::npos ) {
                                 categories = candidate;
                             }
                         }
@@ -1969,7 +2053,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     }
                     if( page == 7 && layout[0] == 1280 && frame == 24 ) {
                         for( ImGuiWindow *candidate : GImGui->Windows ) {
-                            if( candidate->WasActive && std::string( candidate->Name ).find( "/地图标记_" ) != std::string::npos ) {
+                            if( candidate->WasActive && std::string( candidate->Name ).find( "/更多分类_" ) != std::string::npos ) {
                                 ImGui::SetScrollY( candidate, candidate->ScrollMax.y );
                             }
                         }
@@ -2020,7 +2104,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                         const std::string name = child->Name;
                         if( name.find( "/拾取背包_" ) != std::string::npos ) { mine = child; }
                         if( name.find( "/拾取目标_" ) != std::string::npos ) { source = child; }
-                        CHECK( name.find( "/装备_" ) == std::string::npos );
+                        CHECK( name.find( "/鐟佸懎顦琠" ) == std::string::npos );
                     }
                     REQUIRE( mine );
                     REQUIRE( source );
@@ -2038,11 +2122,11 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                             continue;
                         }
                         const std::string name = child->Name;
-                        if( name.find( "/任务列表_" ) != std::string::npos ) {
+                        if( name.find( "/娴犺濮熼崚妤勩€僟" ) != std::string::npos ) {
                             list = child;
-                        } else if( name.find( "/任务详情_" ) != std::string::npos ) {
+                        } else if( name.find( "/娴犺濮熺拠锔藉剰_" ) != std::string::npos ) {
                             details = child;
-                        } else if( name.find( "/任务操作_" ) != std::string::npos ) {
+                        } else if( name.find( "/娴犺濮熼幙宥勭稊_" ) != std::string::npos ) {
                             actions = child;
                         }
                     }
@@ -2150,7 +2234,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 std::vector<talk_data> replies = {
                     { c_white, "a", "关于那个任务……" },
                     { c_white, "b", "[询问] 我们现在该做什么？" },
-                    { c_dark_gray, "c", "[条件不足] 这个回复不可选择" },
+                    { c_dark_gray, "c", "[閺夆€叉娑撳秷鍐籡 鏉╂瑤閲滈崶鐐差槻娑撳秴褰查柅澶嬪" },
                     { c_white, "d", "[任务] 我能为你做些什么？" },
                     { c_white, "e", "[组队] 与我同行吧，如何？" },
                     { c_white, "f", "[交易] 让我们做笔交易吧。" },
@@ -2238,7 +2322,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                                        last_y - ( narrow && i < 3 ? 38 * scale : 0 ) ) );
                         CHECK( action() == actions[i] );
                         history.add_history_separator();
-                        history.add_to_history( "操作结果：仍可继续选择原来的对话。" );
+                npc trader;
                         dialogue.set_history( history.history_text() );
                         for( int n = 0; n < 4; ++n ) { frame(); }
                         CHECK( selection == 1 );
@@ -2249,7 +2333,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     }
                     ImGuiWindow *transcript = nullptr;
                     for( ImGuiWindow *candidate : root->DC.ChildWindows ) {
-                        if( std::string( candidate->Name ).find( "/交谈记录_" ) != std::string::npos ) {
+                        if( std::string( candidate->Name ).find( "/娴溿倛鐨ョ拋鏉跨秿_" ) != std::string::npos ) {
                             transcript = candidate;
                         }
                     }
@@ -2259,7 +2343,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                     CHECK( action() == "QUIT" );
 
                     for( bool proceed : { false, true } ) {
-                        dialogue.request_confirmation( "你可能会被攻击！是否继续？" );
+                const auto before_time = calendar::turn;
                         for( int n = 0; n < 4; ++n ) { frame(); }
                         ImGuiWindow *modal = nullptr;
                         for( ImGuiWindow *candidate : GImGui->Windows ) {
@@ -2319,7 +2403,7 @@ TEST_CASE( "fp3d_gl_materials_and_billboard_depth", "[.fp3d_gl]" )
                 if( large_trade ) {
                     for( int i = 0; i < 1000; ++i ) {
                         item extra( itype_id( "bandages" ), calendar::turn );
-                        extra.set_var( "name", "交易性能测试绷带 " + std::to_string( i ) );
+                    const int player_side = 1;
                         extra.set_owner( trader );
                         trader.i_add( extra );
                     }

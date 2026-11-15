@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 #if defined(EMSCRIPTEN)
 #include <emscripten.h>
@@ -33,11 +34,17 @@
 #include "enums.h"
 #include "filesystem.h"
 #include "fp3d_compositor.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_menu_startup.h"
+#include "fp3d_save_preview.h"
+#endif
 #include "game.h"
 #include "gamemode.h"
 #include "get_version.h"
 #include "help.h"
 #include "imgui_demo.h"
+#include "input.h"
+#include "loading_ui.h"
 #include "localized_comparator.h"
 #include "mapbuffer.h"
 #include "mapsharing.h"
@@ -51,6 +58,7 @@
 #include "safemode_ui.h"
 #include "scenario.h"
 #include "sdlsound.h"
+#include "sdltiles.h"
 #include "sounds.h"
 #include "string_formatter.h"
 #include "text_snippets.h"
@@ -196,6 +204,9 @@ std::vector<int> main_menu::print_menu_items( const catacurses::window &w_in,
 void main_menu::display_sub_menu( int sel, const point &bottom_left, int sel_line )
 {
     main_menu_sub_button_map.clear();
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( sel == getopt( main_menu_opts::LOADCHAR ) ) { return; }
+#endif
     std::vector<std::string> sub_opts;
     int xlen = 0;
     main_menu_opts sel_o = static_cast<main_menu_opts>( sel );
@@ -660,6 +671,11 @@ void main_menu::load_char_templates()
     std::sort( templates.begin(), templates.end(), localized_compare );
 }
 
+bool main_menu::start_native_demo_game( game &session )
+{
+    return session.start_game();
+}
+
 bool main_menu::opening_screen()
 {
     // set holiday based on local system time
@@ -674,12 +690,95 @@ bool main_menu::opening_screen()
     world_generator->set_active_world( nullptr );
 #if defined(TILES) && defined(ENABLE_FP3D)
     fp3d_compositor::set_input_context( "MAIN_MENU" );
+    // Separate native CDDA world, controlled by its own sandbox process.
+    // Only the streamed original 2D tile image is drawn behind the title UI.
+    // The worker is started first so building its sandbox world overlaps with
+    // the parent's own menu data loading.
+    const bool new_demo_session = start_native_menu_demo();
+    on_out_of_scope restore_menu_demo( []() {
+        set_main_menu_demo_active( false );
+        stop_native_menu_demo();
+    } );
+    // Only the very first title screen of this process waits behind the startup
+    // layer; a rebuild after a played game waits too (otherwise the menu would
+    // pop up over an empty backdrop), but the settings screen and a direct save
+    // load never do.
+    const bool wait_for_backdrop = new_demo_session && queued_world_to_load.empty();
 #endif
+
+    loading_ui::set_stage( _( "Reading the menu data" ) );
     world_generator->init();
 
+    loading_ui::set_stage( _( "Loading the game data" ) );
     init_strings();
 
+    loading_ui::set_stage( _( "Reading the character templates" ) );
     load_char_templates();
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+    bool static_backdrop_only = false;
+    bool backdrop_skipped = false;
+    if( wait_for_backdrop ) {
+        if( !loading_ui::startup_active() ) {
+            // The demo process was rebuilt (returned from a played game): bring
+            // the loading layer back for this wait only.
+            loading_ui::begin_startup();
+        }
+        // Hold the menu back until the background is really usable: an existing
+        // process, a mapped section or a texture pointer alone prove nothing.
+        loading_ui::set_stage( _( "Preparing the background scene" ) );
+        loading_ui::set_skip_hint( true );
+        while( true ) {
+            update_native_menu_demo();
+            if( loading_ui::update_and_check_skip() ) {
+                // The player does not want to wait: show the menu right away on the
+                // plain background this build always used, i.e. no picture at all.
+                // The loading artwork must never become the title backdrop.
+                fp3d_menu::timeline_mark( "backdrop_wait_skipped" );
+                backdrop_skipped = true;
+                break;
+            }
+            const native_menu_demo_report status = native_menu_demo_status();
+            if( status.state == fp3d_menu::demo_state::ready ) {
+                fp3d_menu::timeline_mark( "backdrop_ready" );
+                break;
+            }
+            if( status.state == fp3d_menu::demo_state::failed ||
+                status.state == fp3d_menu::demo_state::unsupported ) {
+                fp3d_menu::timeline_mark( "backdrop_unavailable" );
+                // Degrade to the vanilla still image instead of waiting forever.
+                // It travels through the same frame channel the title screen is
+                // already waiting on, so menu and backdrop appear in one go.
+                static_backdrop_only = true;
+                set_main_menu_static_backdrop(
+                    ( PATH_INFO::gfxdir() / "cdda.png" ).get_unrelative_path().u8string() );
+                break;
+            }
+            loading_ui::set_stage( status.frames == 0 ? _( "Preparing the background scene" ) :
+                                   _( "Receiving the background picture" ) );
+        }
+        loading_ui::set_skip_hint( false );
+    }
+    loading_ui::end_startup();
+    if( wait_for_backdrop ) {
+        // Everything typed or clicked while loading is dropped: it must not
+        // activate a title screen entry the player never saw.
+        inp_mngr.pump_events();
+        if( backdrop_skipped ) {
+            // Swallow the rest of the skip press and any keyboard auto-repeat;
+            // otherwise a lingering Esc would be read as "quit" by the menu.
+            std::this_thread::sleep_for( std::chrono::milliseconds( 400 ) );
+            inp_mngr.pump_events();
+        }
+        fp3d_menu::timeline_mark( "menu_shown" );
+    }
+    set_main_menu_demo_active( true );
+    if( static_backdrop_only ) {
+        // Only the failure path says something: a deliberate skip is the player's
+        // own choice, and it keeps the plain background they asked for.
+        vdaytip = _( "The animated background scene is unavailable; the menu is fully usable." );
+    }
+#endif
 
     ctxt.register_cardinal();
     ctxt.register_action( "NEXT_TAB" );
@@ -745,8 +844,20 @@ bool main_menu::opening_screen()
 #endif
 
     while( !start ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        // Only redraw continuously when authentic captured frames are playing.
+        if( is_main_menu_demo_active() ) {
+            ui.invalidate_ui();
+        }
+#endif
         ui_manager::redraw();
+#if defined(TILES) && defined(ENABLE_FP3D)
+        // Leave the title idle when no recorded 2D frames are available.
+        std::string action = is_main_menu_demo_active() ?
+                             ctxt.handle_input( 33 ) : ctxt.handle_input();
+#else
         std::string action = ctxt.handle_input();
+#endif
         input_event sInput = ctxt.get_raw_input();
 #if defined(TILES) && defined(ENABLE_FP3D)
         if( fp3d_compositor::requested() && fp3d_input::is_mode_settings_key( sInput ) ) {
@@ -813,6 +924,7 @@ bool main_menu::opening_screen()
                     }
                     if( action == "SELECT" &&
                         ( sel1 == getopt( main_menu_opts::HELP ) || sel1 == getopt( main_menu_opts::QUIT ) ||
+                          ( vertical_main_menu() && sel1 == getopt( main_menu_opts::LOADCHAR ) ) ||
                           ( vertical_main_menu() && sel1 == getopt( main_menu_opts::TUTORIAL ) ) ) ) {
                         action = "CONFIRM";
                     }
@@ -914,6 +1026,12 @@ bool main_menu::opening_screen()
                 on_move();
             }
         } else if( action == "CONFIRM" ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+            // Sub-screens (settings, world selection, character creation) are opaque
+            // and cover the backdrop, but the demo must keep running behind them: it is
+            // only switched off when the player actually enters the game, which happens
+            // when opening_screen() returns (see the scope guard above).
+#endif
             switch( static_cast<main_menu_opts>( sel1 ) ) {
                 case main_menu_opts::HELP:
                     get_help().display_help();
@@ -983,6 +1101,12 @@ bool main_menu::opening_screen()
                     world_tab( sel2 > 0 ? world_generator->get_world_name( sel2 - 1 ) : "" );
                     break;
                 case main_menu_opts::LOADCHAR:
+#if defined(TILES) && defined(ENABLE_FP3D)
+                    if( auto chosen = fp3d_save_preview::browse() ) {
+                        start = main_menu::load_game( chosen->first, chosen->second );
+                        load_game = start;
+                    }
+#else
                     if( static_cast<std::size_t>( sel2 ) < world_generator->get_all_worlds().size() ) {
                         start = load_character_tab( world_generator->get_world_name( sel2 ) );
                         if( start ) {
@@ -991,6 +1115,7 @@ bool main_menu::opening_screen()
                     } else {
                         popup( _( "No world to load." ) );
                     }
+#endif
                     break;
                 case main_menu_opts::NEWCHAR:
                     start = new_character_tab();
@@ -1181,6 +1306,7 @@ bool main_menu::load_game( std::string const &worldname, save_t const &savegame 
     return false;
 }
 
+#if !defined(TILES) || !defined(ENABLE_FP3D)
 static std::optional<std::chrono::seconds> get_playtime_from_save( const WORLD *world,
         const save_t &save )
 {
@@ -1199,9 +1325,16 @@ static std::optional<std::chrono::seconds> get_playtime_from_save( const WORLD *
     }
     return pt_seconds;
 }
+#endif
 
 bool main_menu::load_character_tab( const std::string &worldname )
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( auto chosen = fp3d_save_preview::browse( worldname ) ) {
+        return main_menu::load_game( chosen->first, chosen->second );
+    }
+    return false;
+#else
     WORLD *cur_world = world_generator->get_world( worldname );
     savegames = cur_world->world_saves;
     if( MAP_SHARING::isSharing() ) {
@@ -1245,6 +1378,7 @@ bool main_menu::load_character_tab( const std::string &worldname )
     }
 
     return main_menu::load_game( worldname, savegames[opt_val] );
+#endif
 }
 
 void main_menu::world_tab( const std::string &worldname )

@@ -35,6 +35,25 @@ bool frustum::contains( float x, float y, float z, float radius ) const
            std::abs( up ) <= depth * tan_vertical + radius * vertical_margin;
 }
 
+std::optional<std::array<float, 3>> project( const pose &camera, float aspect,
+        float x, float height, float z )
+{
+    const float cy = std::cos( camera.yaw * radians );
+    const float sy = std::sin( camera.yaw * radians );
+    const float cp = std::cos( camera.pitch * radians );
+    const float sp = std::sin( camera.pitch * radians );
+    x -= camera.eye.x;
+    height -= camera.eye.height;
+    z -= camera.eye.y;
+    const float forward = sy * x - cy * z;
+    const float depth = cp * forward - sp * height;
+    if( depth < near_clip || depth > far_clip || aspect <= 0 ) {
+        return std::nullopt;
+    }
+    return std::array<float, 3>{ ( cy * x + sy * z ) / ( depth * horizontal_tangent() ),
+           ( cp * height + sp * forward ) * aspect / ( depth * horizontal_tangent() ), depth };
+}
+
 tripoint_rel_ms movement( float yaw, int forward, int right )
 {
     if( forward == 0 && right == 0 ) {
@@ -51,6 +70,26 @@ tripoint_rel_ms movement( float yaw, int forward, int right )
         tripoint_rel_ms( -1, 0, 0 ), tripoint_rel_ms( -1, -1, 0 )
     };
     return directions[sector];
+}
+
+pose orbit_pose( const orbit &view, float pivot_x, float pivot_y )
+{
+    pose result;
+    // Keep the stored angle stable but hand out a normalised azimuth so the
+    // renderer and the pointer ray can never disagree by a full turn.
+    result.yaw = static_cast<float>( std::remainder( view.azimuth, 360.0f ) );
+    result.pitch = std::clamp( view.elevation, 5.0f, 89.0f );
+    const float distance = std::clamp( view.distance, orbit_min_distance, orbit_max_distance );
+    const float cp = std::cos( result.pitch * radians );
+    const float sp = std::sin( result.pitch * radians );
+    const float sy = std::sin( result.yaw * radians );
+    const float cy = std::cos( result.yaw * radians );
+    // forward = ( cp * sy, -sp, -cp * cy ) in (east, height, south); the eye sits
+    // one distance behind the pivot along that direction.
+    result.eye.x = pivot_x - cp * sy * distance;
+    result.eye.y = pivot_y + cp * cy * distance;
+    result.eye.height = orbit_pivot_height + sp * distance;
+    return result;
 }
 
 void swing::start( unsigned now )

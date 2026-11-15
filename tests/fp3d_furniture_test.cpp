@@ -125,7 +125,9 @@ TEST_CASE( "fp3d_furniture_capture_items_and_revalidation_follow_native_visibili
         you.memorize_terrain( here.get_abs( p ), "t_floor", 0, 0 );
         here.invalidate_visibility_cache();
         const auto hidden = fp3d_snapshot::capture( you, here );
-        CHECK( hidden.sprites.empty() );
+        CHECK( std::none_of( hidden.sprites.begin(), hidden.sprites.end(), []( const auto & sprite ) {
+            return !sprite.is_avatar;
+        } ) );
         CHECK( std::none_of( hidden.cells.begin(), hidden.cells.end(), []( const auto & entry ) {
             return entry.furniture.has_value();
         } ) );

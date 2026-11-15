@@ -3,6 +3,8 @@
 #define CATA_SRC_FP3D_CAMERA_H
 
 #include "coordinates.h"
+#include <array>
+#include <optional>
 #include "map_scale_constants.h"
 
 namespace fp3d_camera
@@ -28,6 +30,15 @@ class frustum
         float right_z() const {
             return sin_yaw;
         }
+        float up_x() const {
+            return sin_pitch * sin_yaw;
+        }
+        float up_y() const {
+            return cos_pitch;
+        }
+        float up_z() const {
+            return -sin_pitch * cos_yaw;
+        }
     private:
         float cos_yaw;
         float sin_yaw;
@@ -47,6 +58,46 @@ struct offset {
     float y = 0;
     float height = eye_height; // camera and reticle must have the same eye
 };
+
+// The 3D overhead ("god view") camera. Presentation only: the raised eye never
+// becomes a perception source, so this code never reads or changes the native
+// visibility/lighting caches. Rotation and zoom must not reveal anything the
+// avatar's own native 2D perception does not already know.
+// The downward angle is fixed in the first version; middle-drag only turns the
+// azimuth and the wheel only changes the distance.
+constexpr float orbit_elevation_degrees = 60;
+constexpr float orbit_min_distance = 6;
+constexpr float orbit_max_distance = 48;
+constexpr float orbit_default_distance = 18;
+// Pivot height above the avatar's own floor. The look-at point is the centre of
+// the tile the avatar stands on, so the screen centre is always that tile and
+// rotating/zooming can never slide the player out of frame.
+constexpr float orbit_pivot_height = 0;
+
+struct orbit {
+    float azimuth = 0;                          // degrees; 0 looks north
+    float elevation = orbit_elevation_degrees;  // degrees below the horizon
+    float distance = orbit_default_distance;    // tiles from eye to pivot
+};
+
+// One camera pose for the world FBO, the pointer ray and the reticle.
+// pitch follows the engine convention: positive looks down.
+struct pose {
+    float yaw = 0;
+    float pitch = 0;
+    offset eye;
+};
+
+// Eye = pivot - forward * distance with the same forward convention as the
+// first-person camera and fp3d_targeting::ray:
+// ( cos(pitch) * sin(yaw), -sin(pitch), -cos(pitch) * cos(yaw) ).
+// Horizontal coordinates use one renderer unit per tile; the vertical axis uses
+// the same unit (floor_height per storey). Pivot is scene-relative, so the
+// caller keeps using confirmed avatar positions.
+pose orbit_pose( const orbit &view, float pivot_x, float pivot_y );
+// NDC x/y and forward depth, using the world's exact perspective convention.
+std::optional<std::array<float, 3>> project( const pose &camera, float aspect,
+        float x, float height, float z );
 
 // Game-thread-owned native vehicle pose; never retains vehicle/part pointers.
 struct rider_pose {

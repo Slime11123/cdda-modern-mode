@@ -465,6 +465,9 @@ class map
          * @param cache Currently cached visibility parameters
          */
         lit_level apparent_light_at( const tripoint_bub_ms &p, const visibility_variables &cache ) const;
+    // Unfiltered lighting result; the public wrapper above applies the isolated
+    // title-demonstration rules (see lightmap.cpp).
+    lit_level apparent_light_at_raw( const tripoint_bub_ms &p, const visibility_variables &cache ) const;
         visibility_type get_visibility( lit_level ll,
                                         const visibility_variables &cache ) const;
 
@@ -2187,7 +2190,12 @@ class map
         void update_pathfinding_cache( const tripoint_bub_ms &p ) const;
         void update_pathfinding_cache( int zlev ) const;
 
-        void update_visibility_cache( int zlev );
+        // update_lower_levels keeps the native behaviour of also refreshing the
+        // visibility cache of every storey within fov_3d_z_range below zlev.
+        // Only the 2D isometric renderer reads those caches; the 3D path skips
+        // the native map draw, so it passes false and pays one level instead of
+        // fov_3d_z_range of them.
+        void update_visibility_cache( int zlev, bool update_lower_levels = true );
         void invalidate_visibility_cache();
         const visibility_variables &get_visibility_variables_cache() const;
 

@@ -174,6 +174,60 @@ TEST_CASE( "fp3d_camera_wide_view_culling_follows_pitch_and_yaw", "[fp3d][camera
     CHECK_FALSE( wide.contains( 0, 10, -10, .01f ) );
 }
 
+TEST_CASE( "fp3d_overhead_camera_orbits_the_pivot_and_looks_down", "[fp3d][camera][overhead]" )
+{
+    // Azimuth 0 looks north, so the eye must stand south of, and above, the pivot.
+    fp3d_camera::orbit view;
+    view.azimuth = 0;
+    view.distance = 18;
+    const fp3d_camera::pose north = fp3d_camera::orbit_pose( view, 0, 0 );
+    CHECK( north.yaw == 0 );
+    CHECK( north.pitch == fp3d_camera::orbit_elevation_degrees );
+    CHECK( north.eye.x == Approx( 0 ).margin( .001 ) );
+    CHECK( north.eye.y == Approx( 18 * std::cos( 60.f * 3.14159265f / 180 ) ).margin( .01 ) );
+    CHECK( north.eye.height ==
+           Approx( fp3d_camera::orbit_pivot_height + 18 * std::sin( 60.f * 3.14159265f / 180 ) ).margin( .01 ) );
+    CHECK( north.eye.height > fp3d_camera::eye_height );
+    // The eye keeps exactly the requested distance from the pivot, at every
+    // azimuth and zoom, so the player can never drift out of frame.
+    for( const float azimuth : {
+             0.f, 45.f, 90.f, 179.f, 270.f, 359.f, 720.f
+         } ) {
+        for( const float distance : {
+                 6.f, 12.f, 18.f, 48.f, 2.f, 400.f
+             } ) {
+            CAPTURE( azimuth, distance );
+            view.azimuth = azimuth;
+            view.distance = distance;
+            const fp3d_camera::pose pose = fp3d_camera::orbit_pose( view, 3.5f, -2.25f );
+            const float clamped = std::clamp( distance, fp3d_camera::orbit_min_distance,
+                                              fp3d_camera::orbit_max_distance );
+            const float dx = pose.eye.x - 3.5f;
+            const float dy = pose.eye.y - ( -2.25f );
+            const float dz = pose.eye.height - fp3d_camera::orbit_pivot_height;
+            CHECK( std::sqrt( dx * dx + dy * dy + dz * dz ) == Approx( clamped ).margin( .01 ) );
+            // Looking down means a negative height component in the shared
+            // forward convention: ( cos(p)*sin(y), -cos(p)*cos(y), -sin(p) ).
+            CHECK( dz > 0 );
+            CHECK( pose.pitch > 0 );
+            CHECK( std::remainder( pose.yaw, 360.f ) == Approx( std::remainder( azimuth, 360.f ) ) );
+        }
+    }
+    // Turning the azimuth moves the eye around the pivot in the horizontal plane
+    // and never changes its height.
+    view.distance = 18;
+    view.azimuth = 90;
+    const fp3d_camera::pose east = fp3d_camera::orbit_pose( view, 0, 0 );
+    CHECK( east.eye.x == Approx( -18 * std::cos( 60.f * 3.14159265f / 180 ) ).margin( .01 ) );
+    CHECK( east.eye.y == Approx( 0 ).margin( .01 ) );
+    CHECK( east.eye.height == Approx( north.eye.height ).margin( .01 ) );
+    // A fixed downward angle: the first version never lets the player rotate it.
+    view.elevation = 2;
+    CHECK( fp3d_camera::orbit_pose( view, 0, 0 ).pitch >= 5 );
+    view.elevation = 120;
+    CHECK( fp3d_camera::orbit_pose( view, 0, 0 ).pitch <= 89 );
+}
+
 TEST_CASE( "fp3d_camera_follows_only_confirmed_positions", "[fp3d][camera]" )
 {
     fp3d_camera::follower camera;
@@ -238,6 +292,28 @@ TEST_CASE( "fp3d_camera_does_not_advance_blocked_avatar_or_game_time", "[fp3d][c
     CHECK( you.pos_abs() == start + tripoint_rel_ms::east );
     CHECK( you.get_moves() < moves );
 }
+TEST_CASE( "fp3d_overhead_billboard_axes_preserve_projected_size", "[fp3d][overhead][camera]" )
+{
+    constexpr float radians = 3.14159265358979323846f / 180;
+    for( float yaw : { 0.f, 45.f, 90.f, 180.f, 270.f } ) {
+        for( float pitch : { 0.f, 60.f, 89.f } ) {
+            CAPTURE( yaw, pitch );
+            const fp3d_camera::frustum view( yaw, pitch, 1 );
+            const float sy = std::sin( yaw * radians );
+            const float cy = std::cos( yaw * radians );
+            const float sp = std::sin( pitch * radians );
+            const float cp = std::cos( pitch * radians );
+            // A full sprite-height step must project entirely onto screen up,
+            // with no sideways drift or depth change, even near top-down.
+            const float forward = sy * view.up_x() - cy * view.up_z();
+            CHECK( cp * view.up_y() + sp * forward == Approx( 1 ).margin( .00001 ) );
+            CHECK( cp * forward - sp * view.up_y() == Approx( 0 ).margin( .00001 ) );
+            CHECK( view.right_x() * view.up_x() + view.right_z() * view.up_z() ==
+                   Approx( 0 ).margin( .00001 ) );
+        }
+    }
+}
+
 TEST_CASE( "fp3d_held_swing_uses_only_presentation_time", "[fp3d][combat][camera]" )
 {
     fp3d_camera::swing swing;

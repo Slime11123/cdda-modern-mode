@@ -194,3 +194,14 @@ QA 图片截断曾来自 SDL 遗留的 GL_PACK_ROW_LENGTH；现在仅在截图�
 ## 2026-11-09 P5-B Surface 属性通道实机验证
 
 已新增只用于隔离 QA 的世界空间法线/粗糙度输出 FBO，通过可见墙面和地面的原场景深度遮挡、图块 UV、GPU Normal/ORM atlas 与 GLSL 1.20 采样生成。真实 Photon v1.4 Ultra 测试通过，但含全帧 GPU→CPU 读回时每次 15–68ms，**尚未进入正式玩家 PBR 光照路径**。具体见 [FP3D_PHOTON_P5_SURFACE_PASS_EXECUTION_20261109.md](FP3D_PHOTON_P5_SURFACE_PASS_EXECUTION_20261109.md)。
+
+## 2026-11-09 P5-C 实验性法线/PBR 光照
+
+已新增可从 F6 光影菜单主动启用的 Ultra-only GGX/Schlick 法线/roughness/metallic 光照实验、独立 GPU Surface Pass（无正式帧 GPU→CPU 全帧读回）、可保存的 0–200% 细节强度滑块，以及用于隔离游戏的 PBR 测试启动器。默认关闭，关闭/中画质时回到原渲染；Photon 双级阴影与雨天 SSR 对照通过，但主游戏 60FPS/多场景尚未验收。具体详见 [FP3D_PHOTON_P5C_EXPERIMENTAL_LIGHTING_20261109.md](FP3D_PHOTON_P5C_EXPERIMENTAL_LIGHTING_20261109.md)。
+
+
+## 2026-11-09 原版供电/便携灯动态局部光照
+
+已把 CDDA 原版活动灯源接入 Photon/内置视觉桥（不修改外部 Photon ZIP）。可见的启用灯具还需连通电池有电，手电筒/手机根据角色当前原版实际发光量。最多 8 个局部光源，支持暖/冷色衰减、近距离光晕和随视角旋转的手持光束；在 Photon 色调映射前叠加，GLSL1.20/GL2.1 适配。F6「动态灯光（电网 / 手电筒 / 手机）」可关闭并保存。
+
+已通过 Windows 构建和 Photon 六组独立实景画面 A/B，以及 P5-C 原 PBR/阴影兼容回归。**真实电网存档通断电端到端测试仍待完成**；QA 模拟灯只验证 GPU 投射和隔墙对照。逐灯真实阴影尚不支持。参考 [FP3D_NATIVE_DYNAMIC_LIGHTS_EXECUTION_20261109.md](FP3D_NATIVE_DYNAMIC_LIGHTS_EXECUTION_20261109.md)。

@@ -18,6 +18,7 @@ struct tile_type;
 namespace fp3d_snapshot
 {
 struct cell;
+struct ground_field;
 struct scene_snapshot;
 struct sprite;
 }
@@ -41,6 +42,7 @@ const tile_type *resolve_sprite( const tileset &set, const fp3d_snapshot::sprite
                                  season_type season );
 const tile_type *resolve_overlay( const tileset &set, bool male, const std::string &overlay,
                                   const std::string &variant );
+std::string terrain_key( const fp3d_snapshot::cell &tile );
 std::string sprite_key( const fp3d_snapshot::sprite &image );
 // Treetop terrain is a separate z-level from its parent tree. Map its
 // visual-only crown to a native tree sprite of the selected tileset.
@@ -59,6 +61,7 @@ inline std::string treetop_plant_key( const std::string &terrain )
 }
 // Native vpart_id plus cosmetic variant; independent of world orientation.
 std::string vehicle_key( const fp3d_vehicle::part_view &part );
+std::string ground_field_key( const fp3d_snapshot::ground_field &field );
 // Dominant paint tint sampled from the currently selected tileset's
 // real bodywork image, never a hard-coded UndeadPeople-only color.
 std::optional<std::array<float, 3>> vehicle_body_color( const std::string &key );
@@ -90,6 +93,10 @@ const fp3d_material_aux::maps *auxiliary( const std::string &id );
 // Pixel generation must happen on the SDL side, before SDL_RenderFlush.
 // Runs at most 'budget' 64x64 tile readbacks; result is CPU-only.
 unsigned prefetch_auxiliary( unsigned budget );
+// Prefer native-visible surface artwork near the avatar, not arbitrary slots.
+// Bounded SDL-side readback; call before SDL_RenderFlush, not inside GL pass.
+unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
+                                     unsigned budget );
 struct auxiliary_tile {
     unsigned slot = 0;
     const fp3d_material_aux::maps *data = nullptr;

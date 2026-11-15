@@ -35,6 +35,16 @@ bool wet_ssr_enabled();
 void set_wet_ssr_enabled( bool enabled );
 bool shadow_volume_enabled();
 void set_shadow_volume_enabled( bool enabled );
+// Dynamic native electric/portable lights. On for compatible shader bridges;
+// unsupported direct final.fsh remains unchanged.
+bool local_lights_enabled();
+void set_local_lights_enabled( bool enabled );
+bool local_lights_compiled();
+// Opt-in, Ultra-only normal/roughness/metalness lighting prototype; default Off.
+bool pbr_enabled();
+void set_pbr_enabled( bool enabled );
+int pbr_strength_percent();
+void set_pbr_strength_percent( int percent );
 // Compile the selected pack before world rendering so daylight/shadows work
 // on the first native gameplay frame rather than one turn later.
 bool prepare();
@@ -70,6 +80,10 @@ struct environment {
     // Material classification FBO; optional when the driver has no extra FBO.
     GLuint reflection_mask = 0;
     bool sky_visible = false; // sky seen through openings, not avatar exposure
+    int native_local_count = 0;
+    float native_local_position[8][4] = {};
+    float native_local_color[8][4] = {};
+    float native_local_beam[8] = {};
 };
 int quality();
 void set_quality( int level );

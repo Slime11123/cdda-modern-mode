@@ -71,7 +71,7 @@ float flash( const state &weather, std::uint64_t milliseconds )
     return 1 - ( milliseconds - started ) / 360.0f;
 }
 
-void begin_atmosphere( const state &weather, float daylight, float lightning )
+void begin_atmosphere( const state &weather, float daylight, float lightning, float far_scale )
 {
     glDisable( GL_FOG );
     // Do not globally toggle GL_FOG based on where the player stands:
@@ -80,10 +80,11 @@ void begin_atmosphere( const state &weather, float daylight, float lightning )
     if( weather.fog_end <= 0 ) { return; }
     const float light = .055f + daylight * .48f + lightning * .3f;
     const GLfloat color[] = { light * .91f, light * .97f, light, 1 };
+    const float scale = far_scale > .05f ? far_scale : 1.0f;
     glFogfv( GL_FOG_COLOR, color );
     glFogi( GL_FOG_MODE, GL_LINEAR );
-    glFogf( GL_FOG_START, 8 );
-    glFogf( GL_FOG_END, weather.fog_end );
+    glFogf( GL_FOG_START, 8 * scale );
+    glFogf( GL_FOG_END, weather.fog_end * scale );
     glEnable( GL_FOG );
 }
 

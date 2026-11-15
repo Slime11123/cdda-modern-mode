@@ -23,5 +23,17 @@ void action_boundary();
 void presented( SDL_Renderer *renderer );
 void snapshot_captured( double milliseconds );
 void snapshot_costs( double detail_ms, double distant_ms, double perception_ms, double cells_ms );
+// Full capture cost including connect_stairs() and the weather column sort, and
+// that tail alone. snapshot_costs() stays the inner breakdown.
+void snapshot_full_capture( double full_ms, double tail_ms );
+// Whole prepare_view(): its phases, and how many extra storeys it prepared.
+void prepare_costs( double total_ms, double player_layer_ms, double extra_layers_ms,
+                    double visibility_ms, int extra_layer_calls );
+// One published snapshot generation, and the per-generation materials pass.
+void publish_called();
+void material_prepare( double milliseconds );
+// One scene::draw() pass: its CPU time and the incremental work it had to do.
+void scene_draw( double cpu_ms, int indexed_cells, int chunks, int rebuilt, int landscape_chunks,
+                 int landscape_rebuilt );
 }
 #endif

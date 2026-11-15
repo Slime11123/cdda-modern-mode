@@ -32,23 +32,24 @@
 
 *以上均为开发者提供的真实游戏截图；画面效果、帧数与所选图块包和电脑硬件有关。*
 
-## Alpha 0.3.2：现代生存菜单、地图与车辆改进
+## Alpha 0.4.0：上帝视角、界面、光照与性能
 
-**2026 年 11 月 9 日更新**。本版整合现代菜单与地图交互、车辆 V12 车架轮廓，以及 Photon 风格法线/材质研究的隔离测试模块。详见 [Alpha 0.3.2 更新日志](docs/RELEASE_NOTES_alpha0.3.2.md)。
+本版整合 Alpha 0.3.2 以来尚未发布的改动。详见 [Alpha 0.4.0 完整更新日志](docs/RELEASE_NOTES_alpha0.4.0.md)。
 
-- **现代背包界面：** 改进装备、真实口袋与容器树的展开操作及状态保留；上方实机截图展示了当前背包布局。
-- **地图与罗盘：** 地图支持鼠标拖拽平移、右键操作；使用原版地图备注实现彩色 X 标记，并在顶部罗盘提示附近标记方向。
-- **3D 车辆 V12：** 车壳、车顶与玻璃沿实际完整车架逐排轮廓构造；破损、不连贯车架回退到模块式车体，减少凭空补壳。
-- **实验性光影研发：** 新增法线/ORM 材质数据、GPU 材质图集与地面/墙面属性 FBO 的 **QA 专用验证链路**。普通玩家模式不默认开启这些额外 Pass，也尚未实现完整 PBR 或 Minecraft Photon/Iris 多阶段渲染。
-- **延续 Alpha 0.3.1：** 保留已发布的场景准备优化、反射开销减少和 Windows 初始文字/界面缩放调整。
+- **F6 上帝视角：** 旋转、缩放、跟随镜头的移动、鼠标目标操作与房间切顶。F5 打开设置，2D 中 F6 仍打开设置。
+- **3D 世界：** 独立采集已加载地图的真实地形，修复墙壁和地面缺失；扩充家具模型、地面覆盖物、角色贴图比例、柜内物品和原版提示。物品、生物与行动仍采用原版规则。
+- **菜单：** 独立沙箱的实时主菜单背景、分阶段加载页、新建世界界面和可搜索的存档预览浏览器。
+- **光照：** 接入原版供电/便携灯光，新增默认关闭的 Ultra 实验性 PBR 细节；仍不支持完整 Minecraft Photon/Iris 多阶段执行。
+- **性能：** 复用地形和阴影几何，合并墙/地板绘制。本机 RTX 4080 SUPER、1080p、Photon Ultra 的指定城市开发版样本平均 58.44 / 58.43 FPS，不保证所有场景和硬件帧率。
 
-*此版本仍为 Alpha：不同 GPU、复杂车辆与建筑、地图标记、图块包和长时间游戏尚需更广泛测试。未验证的功能不宣传为稳定版。*
+*此版本仍为预发布测试版。不同 GPU、图块包、复杂建筑与车辆、长期游玩和旧存档迁移尚未全面验证，完整回归集仍有已知失败。*
+
 ## Windows x64 下载与安装
 
 1. 前往 [GitHub Releases 下载页面](https://github.com/Slime11123/cdda-modern-mode/releases)，选择最新版带 **Windows-x64** 名称的 ZIP。GitHub 自动生成的 **Source code** 压缩包不是可直接游玩的游戏。
 2. 将 ZIP **完整解压**到可写入的新文件夹，保留全部 DLL 以及 `data/`、`gfx/`、`lang/`、`config/` 目录。
 3. **直接双击 `cataclysm-tiles.exe`**，无需 CMD、第二个启动器或特殊环境变量。
-4. 按 **F5/F6** 更改 2D/3D、控制方式、HUD 和光影质量。升级前备份旧版 `user/` 存档与设置。
+4. 按 **F5**（2D 中也可按 F6）更改 2D/3D、控制方式、HUD 和光影质量。3D 世界中 **F6** 切换第一人称与上帝视角。升级前备份旧版 `user/` 存档与设置。
 
 全新安装会采用更清楚的 Windows 3D 字体大小；已有玩家自行保存的字体、终端尺寸和缩放设置不会被强制清除。
 
@@ -62,13 +63,16 @@
 | **Q** | 快捷行动轮盘 |
 | **Tab** | 打开／关闭综合生存菜单 |
 | **Z（3D 模式）** | 蹲伏 |
-| **F5 / F6** | 统一画面、操作与 HUD 设置 |
+| **F5** | 统一画面、操作与 HUD 设置 |
+| **F6（3D 世界）** | 第一人称与上帝视角切换；2D 中仍打开设置 |
+| **滚轮 / 中键拖动（上帝视角）** | 缩放 / 绕玩家旋转镜头 |
+| **右键（上帝视角）** | 在鼠标所指地块打开现代下拉菜单 |
 
 所有重要行动仍遵循原版 CDDA 的行动点、技能和规则；复杂操作可能沿用原版对话框。
 
 ## 推荐第三方资源（本项目均不提供）
 
-**Photon 光影包 — 推荐搭配使用：** [Photon 官方 Modrinth 下载](https://modrinth.com/shader/photon-shader/versions) · [作者 GitHub 仓库](https://github.com/sixthsurge/photon)。玩家可自行把下载的 ZIP 放入 `shaderpacks/`，在 F5/F6 光影菜单扫描选择。**本仓库及发行包不提供、不捆绑、不重新分发 Photon。** 当前采用的是 CDDA 自身的 **Photon 风格视觉适配**，不是完整运行 Minecraft Iris/OptiFine 的原版多 Pass 光影。
+**Photon 光影包 — 推荐搭配使用：** [Photon 官方 Modrinth 下载](https://modrinth.com/shader/photon-shader/versions) · [作者 GitHub 仓库](https://github.com/sixthsurge/photon)。玩家可自行把下载的 ZIP 放入 `shaderpacks/`，在 F5 光影设置扫描选择。**本仓库及发行包不提供、不捆绑、不重新分发 Photon。** 当前采用的是 CDDA 自身的 **Photon 风格视觉适配**，不是完整运行 Minecraft Iris/OptiFine 的原版多 Pass 光影。
 
 **UndeadPeople（不死人）图块包 — 推荐搭配使用：** [维护者 GitHub 仓库](https://github.com/Xenikos/UndeadPeopleTileset)。请自行下载安装到 `gfx/` 并在游戏选项中选择。**本项目不提供、不捆绑、不重新分发不死人图块包。** 不同图块版本可能存在兼容问题。
 
@@ -78,7 +82,7 @@
 
 本项目仍是 **Alpha 实验版**，复杂车辆、跨层建筑、不同光影包、硬件兼容、长时间生存和旧存档迁移等方面尚未完成全面验收。
 
-- [Alpha 0.3.2 更新日志](docs/RELEASE_NOTES_alpha0.3.2.md) · [Alpha 0.3.1 更新日志](docs/RELEASE_NOTES_alpha0.3.1.md) · [光影兼容性说明](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D 开发进度](docs/FP3D_PROGRESS.md)
+- [Alpha 0.4.0 更新日志](docs/RELEASE_NOTES_alpha0.4.0.md) · [Alpha 0.3.2 更新日志](docs/RELEASE_NOTES_alpha0.3.2.md) · [Alpha 0.3.1 更新日志](docs/RELEASE_NOTES_alpha0.3.1.md) · [光影兼容性说明](docs/MC_SHADERPACK_COMPATIBILITY.md) · [3D 开发进度](docs/FP3D_PROGRESS.md)
 - [开发状态](docs/DEVELOPMENT_STATUS.md) · [现代化操作](docs/FP3D_0I1_MODERN_CONTROLS.md) · [版权署名](docs/ATTRIBUTION.md)
 - 开发构建：Windows / CMake / SDL2 Tiles / OpenGL，配置 `TILES=ON` 与 `ENABLE_FP3D=ON`，参考 [CMake 编译指南](doc/c++/COMPILING-CMAKE.md)。
 

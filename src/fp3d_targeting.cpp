@@ -68,31 +68,68 @@ std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
 }
 
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
-                           fp3d_camera::offset offset, float max_reach )
+                           fp3d_camera::offset offset, float max_reach,
+                           float screen_x, float screen_y, float aspect )
 {
     if( !std::isfinite( yaw ) || !std::isfinite( pitch ) ||
         !std::isfinite( offset.x ) || !std::isfinite( offset.y ) ||
-        !std::isfinite( offset.height ) ) {
+        !std::isfinite( offset.height ) ||
+        !std::isfinite( screen_x ) || !std::isfinite( screen_y ) ) {
         return std::nullopt;
     }
-    const float reach = std::clamp( max_reach, 1.0f, 64.0f );
+    // The overhead camera stands tens of tiles from its pivot, so the bound has
+    // to cover the whole distance the caller may legitimately pick through.
+    const float reach = std::clamp( max_reach, 1.0f, 160.0f );
     constexpr float radians = 3.14159265358979323846f / 180;
     const float sy = std::sin( yaw * radians );
     const float cy = std::cos( yaw * radians );
     const float cp = std::cos( pitch * radians );
+    const float sp = std::sin( pitch * radians );
     // x/y are native horizontal coordinates; z is height in render units.
     const vector3 eye{ offset.x, offset.y, offset.height };
-    const vector3 direction{ sy * cp, -cy * cp, -std::sin( pitch * radians ) };
+    // Centre ray, exactly the camera direction the renderer uses.
+    const vector3 forward{ sy * cp, -cy * cp, -sp };
+    // Off-centre rays reuse the same camera basis as the projection: a plain
+    // rotation of the view direction by the frustum tangents.
+    const float tangent = fp3d_camera::horizontal_tangent();
+    const float safe_aspect = aspect > .000001f ? aspect : 1.0f;
+    const float tan_h = screen_x * tangent;
+    const float tan_v = screen_y * tangent / safe_aspect;
+    // right = ( cos(yaw), sin(yaw), 0 ), up = ( sp*sin(yaw), -sp*cos(yaw), cp ).
+    vector3 direction{
+        forward[0] + cy * tan_h + sp * sy * tan_v,
+        forward[1] + sy * tan_h - sp * cy * tan_v,
+        forward[2] + cp * tan_v
+    };
+    const float length = std::sqrt( direction[0] * direction[0] + direction[1] * direction[1] +
+                                    direction[2] * direction[2] );
+    if( length < .000001f ) {
+        return std::nullopt;
+    }
+    direction[0] /= length;
+    direction[1] /= length;
+    direction[2] /= length;
     float nearest = reach + .001f;
     float nearest_opaque = nearest;
     std::vector<std::pair<tripoint_abs_ms, float>> storage_hits;
     std::optional<target> result;
     std::vector<const fp3d_snapshot::cell *> local;
+    // Swept box of the tested ray: it keeps the cell scan proportional to the
+    // segment instead of the whole snapshot, and it also works when the eye is
+    // far outside the visible square (the overhead camera).
+    const vector3 far{ eye[0] + direction[0] * reach, eye[1] + direction[1] * reach,
+                       eye[2] + direction[2] * reach };
+    const float low_x = std::min( eye[0], far[0] ) - 1.5f;
+    const float high_x = std::max( eye[0], far[0] ) + 1.5f;
+    const float low_y = std::min( eye[1], far[1] ) - 1.5f;
+    const float high_y = std::max( eye[1], far[1] ) + 1.5f;
+    const float low_z = std::min( eye[2], far[2] ) - fp3d_camera::floor_height;
+    const float high_z = std::max( eye[2], far[2] ) + fp3d_camera::floor_height;
     for( const auto &tile : scene.cells ) {
         const auto p = tile.position - scene.origin;
-        if( std::abs( p.x() - offset.x ) <= reach + 1 &&
-            std::abs( p.y() - offset.y ) <= reach + 1 &&
-            std::abs( p.z() * fp3d_camera::floor_height - eye[2] ) <= reach + fp3d_camera::floor_height ) {
+        const float height = p.z() * fp3d_camera::floor_height;
+        if( p.x() >= low_x && p.x() <= high_x && p.y() >= low_y && p.y() <= high_y &&
+            height + fp3d_camera::floor_height >= low_z && height <= high_z ) {
             local.push_back( &tile );
         }
     }
@@ -443,6 +480,11 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         if( image.kind == fp3d_snapshot::sprite_kind::held_item ) {
             continue;
         }
+        // The overhead avatar sprite is the pointer target's own tile, never a
+        // creature to attack or examine through itself.
+        if( image.is_avatar ) {
+            continue;
+        }
         const auto p = image.position - scene.origin;
         const auto *on = cell_at( image.position );
         const bool lying_bedding = image.kind == fp3d_snapshot::sprite_kind::item && on &&
@@ -478,14 +520,19 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             result = target{ scene.origin, image.position, kind::item, image.id };
             continue;
         }
-        // The sprite quad is upright and camera-facing, as in fp3d_scene.
-        const float forward = sy * ( p.x() - eye[0] ) - cy * ( p.y() - eye[1] );
-        if( cp <= .000001f ) {
+        // The sprite quad is upright and camera-facing. Intersect the (possibly
+        // off-centre) ray with its own vertical plane, then compare in the
+        // camera's own screen axes so the overhead pointer stays exact.
+        const vector3 normal{ -forward[0], -forward[1], 0 };
+        const float denominator = direction[0] * normal[0] + direction[1] * normal[1];
+        if( std::abs( denominator ) < .000001f ) {
             continue;
         }
-        const float distance = forward / cp;
-        const float side = cy * ( eye[0] + distance * direction[0] - p.x() ) +
-                           sy * ( eye[1] + distance * direction[1] - p.y() );
+        const float distance = ( ( p.x() - eye[0] ) * normal[0] +
+                                 ( p.y() - eye[1] ) * normal[1] ) / denominator;
+        const float hit_x = eye[0] + distance * direction[0];
+        const float hit_y = eye[1] + distance * direction[1];
+        const float side = cy * ( hit_x - p.x() ) + sy * ( hit_y - p.y() );
         const float height = eye[2] + distance * direction[2] -
                              p.z() * fp3d_camera::floor_height - image.elevation;
         if( distance < fp3d_camera::near_clip || distance > reach || distance >= nearest_sprite ||
