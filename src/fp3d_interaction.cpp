@@ -470,7 +470,14 @@ bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p, bool target
 std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p,
         const avatar &you, const map &here )
 {
-    if( you.is_dead_state() || you.is_blind() || !here.inbounds( p ) || p.z() != you.posz() || !you.sees( here, p ) ) {
+    // The overhead renderer deliberately uses geometric 3D perception rather
+    // than the 2D light/preview mask. Rechecking that mask here discarded menus
+    // for tiles already visible and picked in the actual overhead frame.
+    const bool visible = fp3d_compositor::overhead() ?
+                         fp3d_compositor::overhead_tile_visible( here.get_abs( p ) ) :
+                         you.sees( here, p );
+    if( you.is_dead_state() || you.is_blind() || !here.inbounds( p ) ||
+        p.z() != you.posz() || !visible ) {
         return {};
     }
     const bool self = p == you.pos_bub( here );

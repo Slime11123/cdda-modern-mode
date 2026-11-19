@@ -15,6 +15,8 @@ struct selected {
     std::array<float, 4> position = {}; // snapshot-relative metres xyz + radius
     std::array<float, 4> color = {};    // RGB radiance + strength
     float beam = 0.0f;
+    bool held_beam = false;
+    bool fixture = false;
 };
 std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
                               fp3d_camera::offset camera );

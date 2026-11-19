@@ -1,6 +1,7 @@
 #include "ranged.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -87,6 +88,15 @@
 #include "vehicle.h"
 #include "vpart_position.h"
 #include "weakpoint.h"
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "cata_imgui.h"
+#include "fp3d_aiming.h"
+#include "fp3d_compositor.h"
+#include "fp3d_materials.h"
+#include "fp3d_simple_ui.h"
+#include "fp3d_snapshot.h"
+#endif
 
 static const ammo_effect_str_id ammo_effect_ACT_ON_RANGED_HIT( "ACT_ON_RANGED_HIT" );
 static const ammo_effect_str_id ammo_effect_BLACKPOWDER( "BLACKPOWDER" );
@@ -301,6 +311,13 @@ class target_ui
         // Input context
         input_context ctxt;
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+        bool modern_aim = false;
+        std::string aim_button_action;
+        SDL_Texture_Ptr weapon_icon;
+        void draw_modern_aim();
+#endif
+
         /* These members are relevant for TargetMode::Fire */
         // Weapon sight dispersion
         int sight_dispersion = 0;
@@ -456,6 +473,9 @@ class target_ui
         // text_y - first free line counting from the top
         void draw_controls_list( int text_y );
 
+        std::vector<std::string> cursor_info();
+        std::array<std::string, 2> gun_info() const;
+        std::string recoil_info() const;
         void panel_cursor_info( int &text_y );
         void panel_gun_info( int &text_y );
         void panel_recoil( int &text_y );
@@ -1974,8 +1994,7 @@ static void print_confidence_ratings( const catacurses::window &w,
     line_number++;
 }
 
-static void print_confidence_rating_bar( const catacurses::window &w,
-        aim_type_prediction prediction, int &line_number, int width, nc_color col )
+static std::string confidence_bar( const aim_type_prediction &prediction, int width )
 {
     RatingVector confidence_ratings;
     std::transform( prediction.ratings.begin(), prediction.ratings.end(),
@@ -1984,10 +2003,14 @@ static void print_confidence_rating_bar( const catacurses::window &w,
         return std::make_tuple( config.aim_level, config.symbol, config.color );
     } );
 
-    const std::string &confidence_bar = get_colored_bar( prediction.confidence, width, "",
-                                        confidence_ratings.begin(), confidence_ratings.end() );
+    return get_colored_bar( prediction.confidence, width, "",
+                            confidence_ratings.begin(), confidence_ratings.end() );
+}
 
-    print_colored_text( w, point( 1, line_number++ ), col, col, confidence_bar );
+static void print_confidence_rating_bar( const catacurses::window &w,
+        const aim_type_prediction &prediction, int &line_number, int width, nc_color col )
+{
+    print_colored_text( w, point( 1, line_number++ ), col, col, confidence_bar( prediction, width ) );
 }
 
 static int print_ranged_chance( const catacurses::window &w, int line_number,
@@ -2136,9 +2159,9 @@ static bool pl_sees( const optional_vpart_position &ovp )
     return u.sees( here,  ovp.value().pos_bub( here ) );
 }
 
-static int print_aim( const target_ui &ui, Character &you, const catacurses::window &w,
-                      int line_number, input_context &ctxt, const item &weapon, const tripoint_bub_ms &pos,
-                      item_location &load_loc )
+static std::vector<aim_type_prediction> predict_gun_aim( const target_ui &ui, Character &you,
+        const input_context &ctxt, const item &weapon, const tripoint_bub_ms &pos,
+        const item_location &load_loc )
 {
     // This is absolute accuracy for the player.
     // TODO: push the calculations duplicated from Creature::deal_projectile_attack() and
@@ -2156,13 +2179,9 @@ static int print_aim( const target_ui &ui, Character &you, const catacurses::win
         }
     };
 
-    const std::vector<aim_type_prediction> aim_chances = calculate_ranged_chances( ui, you,
+    return calculate_ranged_chances( ui, you,
             target_ui::TargetMode::Fire, ctxt, weapon, dispersion, confidence_config,
             Target_attributes( you.pos_bub(), pos ), pos, load_loc );
-
-    int time = RAS_time( you, load_loc );
-
-    return print_ranged_chance( w, line_number, aim_chances, time );
 }
 
 static void draw_throw_aim( const target_ui &ui, const Character &you, const catacurses::window &w,
@@ -2702,15 +2721,48 @@ target_handler::trajectory target_ui::run()
     g->add_draw_callback( target_ui_cb );
 
     ui_adaptor ui;
-    ui.on_screen_resize( [&]( ui_adaptor & ui ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    modern_aim = mode == TargetMode::Fire && fp3d_compositor::survival_menu_available() &&
+                 ( fp3d_compositor::overhead() || fp3d_compositor::modern_2d_world() );
+    on_out_of_scope end_modern_aim( [this]() {
+        if( modern_aim ) {
+            fp3d_compositor::aiming::set_active( false );
+            g->invalidate_main_ui_adaptor();
+        }
+    } );
+    if( modern_aim ) {
         init_window_and_input();
-        ui.position_from_window( w_target );
-    } );
-    ui.mark_resize();
+        fp3d_snapshot::sprite sprite;
+        sprite.kind = fp3d_snapshot::sprite_kind::held_item;
+        sprite.id = relevant->typeId().str();
+        if( relevant->has_itype_variant() ) {
+            sprite.variant = relevant->itype_variant().id;
+        }
+        weapon_icon = fp3d_materials::item_icon( sprite );
+        fp3d_compositor::aiming::set_active( true );
+        ui.is_imgui = true;
+    } else
+#endif
+    {
+        ui.on_screen_resize( [&]( ui_adaptor & ui ) {
+            init_window_and_input();
+            ui.position_from_window( w_target );
+        } );
+        ui.mark_resize();
 
-    ui.on_redraw( [&]( const ui_adaptor & ) {
-        draw_ui_window();
-    } );
+        ui.on_redraw( [&]( const ui_adaptor & ) {
+            draw_ui_window();
+        } );
+    }
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( modern_aim ) {
+        ui.on_redraw( [&]( const ui_adaptor &current ) {
+            if( current.is_on_top ) {
+                draw_modern_aim();
+            }
+        } );
+    }
+#endif
 
     // Handle multi-turn aiming
     std::string action;
@@ -2803,17 +2855,57 @@ target_handler::trajectory target_ui::run()
     std::string timed_out_action;
     bool skip_redraw = false;
     for( ;; action.clear() ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( modern_aim && !fp3d_compositor::aiming::active() ) {
+            fp3d_compositor::set_input_context( "TARGET" );
+        }
+#endif
         if( !skip_redraw ) {
             g->invalidate_main_ui_adaptor();
             ui_manager::redraw();
         }
+#if defined(TILES) && defined(ENABLE_FP3D)
+        else if( modern_aim ) {
+            ui_manager::redraw_invalidated();
+        }
+#endif
         skip_redraw = false;
 
         // Wait for user input (or use value retrieved from activity)
         if( action.empty() ) {
             int timeout = get_option<int>( "EDGE_SCROLL" );
-            action = ctxt.handle_input( timeout );
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( modern_aim ) {
+                if( !aim_button_action.empty() ) {
+                    action = std::exchange( aim_button_action, std::string() );
+                } else {
+                    action = ctxt.handle_input( timeout > 0 ? std::min( timeout, 32 ) : 32 );
+                    const input_event raw = ctxt.get_raw_input();
+                    if( raw.type == input_event_t::mouse && ImGui::GetIO().WantCaptureMouse ) {
+                        skip_redraw = true;
+                        continue;
+                    }
+                    if( action == "ERROR" && ( raw.type == input_event_t::keyboard_char ||
+                                               raw.type == input_event_t::keyboard_code ) &&
+                        raw.modifiers.empty() && raw.get_first_input() == 'r' ) {
+                        action = "SWITCH_AMMO";
+                    }
+                }
+            } else
+#endif
+            {
+                action = ctxt.handle_input( timeout );
+            }
         }
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+        if( action == "CLOSEST_TARGET" ) {
+            if( !targets.empty() ) {
+                set_cursor_pos( targets.front() );
+            }
+            continue;
+        }
+#endif
 
         // If an aiming mode is selected, use "*_SHOT" instead of "FIRE"
         if( mode == TargetMode::Fire && action == "FIRE" && aim_mode->has_threshold ) {
@@ -2955,6 +3047,10 @@ target_handler::trajectory target_ui::run()
 
 void target_ui::init_window_and_input()
 {
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( !modern_aim )
+#endif
+    {
     int top = 0;
     int width = panel_manager::get_manager().get_current_layout().panels().begin()->get_width();
     int height;
@@ -2983,6 +3079,7 @@ void target_ui::init_window_and_input()
     }
 
     w_target = catacurses::newwin( height, width, point( TERMX - width, top ) );
+    }
 
     ctxt = input_context( "TARGET" );
     ctxt.set_iso( true );
@@ -3065,6 +3162,12 @@ bool target_ui::handle_cursor_movement( const std::string &action, bool &skip_re
     } else if( const std::optional<tripoint_rel_ms> delta = ctxt.get_direction_rel_ms( action ) ) {
         // Shift view/cursor with directional keys
         shift_view_or_cursor( delta.value() );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    } else if( action == "SELECT" && modern_aim && fp3d_compositor::overhead() ) {
+        if( const auto p = fp3d_compositor::aiming::pick( ctxt.get_raw_input().mouse_pos ) ) {
+            set_cursor_pos( get_map().get_bub( *p ) );
+        }
+#endif
     } else if( action == "SELECT" &&
                ( mouse_pos = ctxt.get_coordinates( g->w_terrain, g->ter_view_p.raw().xy() ) ) ) {
         // Set pos by clicking with mouse
@@ -3251,6 +3354,14 @@ bool target_ui::set_cursor_pos( const tripoint_bub_ms &new_pos )
     // Update UI controls & colors
     update_status();
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( modern_aim && fp3d_compositor::overhead() ) {
+        fp3d_compositor::aiming::set_target( dst_critter && you->sees( here, *dst_critter ) ?
+                                           std::optional<tripoint_abs_ms>( here.get_abs( dst ) ) :
+                                           std::nullopt );
+    }
+#endif
+
     return true;
 }
 
@@ -3262,8 +3373,8 @@ void target_ui::on_range_ammo_changed()
 
 void target_ui::update_target_list()
 {
+    targets.clear();
     if( range == 0 ) {
-        targets.clear();
         return;
     }
 
@@ -3637,7 +3748,11 @@ bool target_ui::action_switch_mode()
     const std::pair<int, int> aim_modes_range = std::make_pair( 0, 100 );
     const std::pair<int, int> firing_modes_range = std::make_pair( 100, 200 );
 
-    if( !aim_types.empty() ) {
+    if( !aim_types.empty()
+#if defined(TILES) && defined(ENABLE_FP3D)
+        && !modern_aim
+#endif
+      ) {
         menu.addentry( -1, false, 0, "  " + std::string( _( "Default aiming mode" ) ) );
         menu.entries.back().force_color = true;
         menu.entries.back().text_color = c_cyan;
@@ -3894,6 +4009,167 @@ void target_ui::draw_terrain_overlay()
     }
 }
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+void target_ui::draw_modern_aim()
+{
+    const fp3d_simple_ui::scoped_theme theme;
+    const ImGuiViewport &view = *ImGui::GetMainViewport();
+    const float pad = 10.f;
+    const float panel_width = std::min( view.Size.x * .47f,
+                                       std::max( view.Size.x * .32f, ImGui::GetFontSize() * 22.f ) );
+    const float map_width = view.Size.x - panel_width;
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
+                                       ImGuiWindowFlags_NoFocusOnAppearing;
+    constexpr ImGuiWindowFlags autosize = flags | ImGuiWindowFlags_AlwaysAutoResize;
+    const auto button = [&]( const std::string &label, const char *action,
+                             const ImVec2 &size = ImVec2( 0, 0 ) ) {
+        if( ImGui::Button( label.c_str(), size ) ) {
+            aim_button_action = action;
+        }
+    };
+    const auto info = []( const std::string &line, const nc_color &color = c_light_gray ) {
+        cataimgui::draw_colored_text( line, color, ImGui::GetContentRegionAvail().x );
+    };
+    const auto aim_name = []( const aim_type &type ) {
+        return string_format( _( "%s %s" ), type.has_threshold ? type.name : _( "Current" ), _( "Aim" ) );
+    };
+
+    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + pad, view.Pos.y + pad ) );
+    if( ImGui::Begin( "##aiming_exit", nullptr, autosize | ImGuiWindowFlags_NoBackground ) ) {
+        button( string_format( "%s  Esc", _( "Exit" ) ), "QUIT" );
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width * .56f, view.Pos.y + pad ),
+                             ImGuiCond_Always, ImVec2( .5f, 0 ) );
+    ImGui::SetNextWindowSizeConstraints( ImVec2( 0, 0 ), ImVec2( map_width * .62f, view.Size.y ) );
+    if( ImGui::Begin( "##aiming_target", nullptr, autosize | ImGuiWindowFlags_NoInputs ) ) {
+        const std::string name = dst_critter ? dst_critter->get_name() :
+                                 dst_veh ? dst_veh->name : _( "None" );
+        info( string_format( _( "Aiming at: %s" ), name ), c_white );
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width, view.Pos.y + pad ) );
+    ImGui::SetNextWindowSize( ImVec2( panel_width - pad, view.Size.y * .87f - pad ) );
+    if( ImGui::Begin( "##aiming_weapon", nullptr, flags ) ) {
+        const float icon_size = ImGui::GetFontSize() * 3.6f;
+        if( ImGui::BeginTable( "##weapon_summary", 2 ) ) {
+            ImGui::TableSetupColumn( "##stats", ImGuiTableColumnFlags_WidthStretch );
+            ImGui::TableSetupColumn( "##icon", ImGuiTableColumnFlags_WidthFixed, icon_size );
+            ImGui::TableNextColumn();
+            info( uitext_title(), c_red );
+            for( const std::string &line : cursor_info() ) {
+                info( line );
+            }
+            ImGui::Spacing();
+            for( const std::string &line : gun_info() ) {
+                if( !line.empty() ) {
+                    info( line );
+                }
+            }
+            info( recoil_info() );
+            ImGui::TableNextColumn();
+            if( weapon_icon ) {
+                ImGui::Image( reinterpret_cast<ImTextureID>( weapon_icon.get() ),
+                              ImVec2( icon_size, icon_size ) );
+            } else {
+                info( relevant->symbol(), relevant->color() );
+            }
+            ImGui::EndTable();
+        }
+
+        const bool can_fire = status == Status::Good;
+        const auto predictions = can_fire ? predict_gun_aim( *this, *you, ctxt,
+                                 *relevant->gun_current_mode(), dst, activity->reload_loc ) :
+                                 std::vector<aim_type_prediction>();
+        ImGui::Spacing();
+        if( can_fire ) {
+            // The default prediction already accounts for the selected aim threshold.
+            const aim_type_prediction &selected = predictions.front();
+            ImGui::PushStyleColor( ImGuiCol_PlotHistogram, ImGui::GetStyleColorVec4( ImGuiCol_CheckMark ) );
+            ImGui::ProgressBar( selected.steadiness, ImVec2( -1, 0 ), _( "Steadiness" ) );
+            ImGui::PopStyleColor();
+            if( get_option<std::string>( "ACCURACY_DISPLAY" ) == "numbers" ) {
+                for( const auto &chance : selected.chances ) {
+                    info( string_format( "%s: <color_%s>%d%%</color>",
+                                         pgettext( "aim_confidence", chance.label.c_str() ),
+                                         chance.color, chance.chance ) );
+                }
+            } else {
+                std::vector<std::string> symbols;
+                for( const auto &rating : selected.ratings ) {
+                    symbols.push_back( string_format( "<color_%s>%s</color> = %s", rating.color,
+                                                       rating.symbol,
+                                                       pgettext( "aim_confidence", rating.label.c_str() ) ) );
+                }
+                info( enumerate_as_string( symbols, []( const std::string &symbol ) {
+                    return symbol;
+                }, enumeration_conjunction::none ) );
+                info( confidence_bar( selected, 20 ) );
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        info( _( "Aiming method" ) );
+        ImGui::SetNextItemWidth( -1 );
+        if( ImGui::BeginCombo( "##aiming_method", aim_name( *aim_mode ).c_str() ) ) {
+            for( auto it = aim_types.begin(); it != aim_types.end(); ++it ) {
+                if( ImGui::Selectable( aim_name( *it ).c_str(), it == aim_mode ) ) {
+                    aim_mode = it;
+                    you->preferred_aiming_mode = aim_mode->action;
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        const std::string moves = can_fire ? colorize( std::to_string( predictions.front().moves ),
+                                  c_light_blue ) : "-";
+        ImGui::Spacing();
+        info( string_format( "%s: %s", _( "Moves to fire" ), moves ) );
+        ImGui::Spacing();
+        ImGui::BeginDisabled( !can_fire );
+        const ImVec2 action_size( -1, ImGui::GetFrameHeight() * 1.25f );
+        button( _( "Continue aiming" ), "AIM", action_size );
+        button( pgettext( "verb", "Fire" ), "FIRE", action_size );
+        ImGui::EndDisabled();
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width * .5f, view.Pos.y + view.Size.y - pad ),
+                             ImGuiCond_Always, ImVec2( .5f, 1 ) );
+    if( ImGui::Begin( "##aiming_actions", nullptr, autosize | ImGuiWindowFlags_NoBackground ) ) {
+        const std::array<std::string, 4> labels = {
+            _( "Select nearest target" ), _( "Next target" ), string_format( "%s  R", _( "Reload" ) ),
+            _( "Switch firing mode" )
+        };
+        const std::array<const char *, 4> actions = {
+            "CLOSEST_TARGET", "NEXT_TARGET", "SWITCH_AMMO", "SWITCH_MODE"
+        };
+        const ImGuiStyle &style = ImGui::GetStyle();
+        float button_width = 0;
+        for( const std::string &label : labels ) {
+            button_width = std::max( button_width, ImGui::CalcTextSize( label.c_str() ).x );
+        }
+        button_width += 2 * style.FramePadding.x;
+        const float space = map_width - 2 * style.WindowPadding.x - 2 * pad;
+        const size_t columns = 4 * button_width + 3 * style.ItemSpacing.x <= space ? 4 : 2;
+        for( size_t i = 0; i < labels.size(); ++i ) {
+            if( i % columns != 0 ) {
+                ImGui::SameLine();
+            }
+            ImGui::BeginDisabled( i < 2 && targets.empty() );
+            button( labels[i], actions[i], ImVec2( button_width, ImGui::GetFrameHeight() * 1.25f ) );
+            ImGui::EndDisabled();
+        }
+    }
+    ImGui::End();
+}
+#endif
+
 void target_ui::draw_ui_window()
 {
     // Clear target window and make it non-transparent.
@@ -3928,9 +4204,10 @@ void target_ui::draw_ui_window()
     } else if( status == Status::Good ) {
         // TODO: these are old, consider refactoring
         if( mode == TargetMode::Fire ) {
-            item_location load_loc = activity->reload_loc;
-            text_y = print_aim( *this, *you, w_target, text_y, ctxt, *relevant->gun_current_mode(), dst,
-                                load_loc );
+            const item_location &load_loc = activity->reload_loc;
+            text_y = print_ranged_chance( w_target, text_y,
+                     predict_gun_aim( *this, *you, ctxt, *relevant->gun_current_mode(), dst, load_loc ),
+                     RAS_time( *you, load_loc ) );
         } else if( mode == TargetMode::Throw || mode == TargetMode::ThrowBlind ) {
             bool blind = mode == TargetMode::ThrowBlind;
             draw_throw_aim( *this, *you, w_target, text_y, ctxt, *relevant, dst, blind );
@@ -4127,7 +4404,7 @@ void target_ui::draw_controls_list( int text_y )
     }
 }
 
-void target_ui::panel_cursor_info( int &text_y )
+std::vector<std::string> target_ui::cursor_info()
 {
     std::string label_range;
     if( src == dst ) {
@@ -4147,11 +4424,15 @@ void target_ui::panel_cursor_info( int &text_y )
         labels.push_back( string_format( _( "Elevation: %d" ), dst.z() - src.z() ) );
     }
     labels.push_back( string_format( _( "Targets: %d" ), targets.size() ) );
+    return labels;
+}
 
+void target_ui::panel_cursor_info( int &text_y )
+{
     nc_color col = c_light_gray;
     int width = getmaxx( w_target );
     int text_x = 1;
-    for( const std::string &s : labels ) {
+    for( const std::string &s : cursor_info() ) {
         int x_left = width - text_x - 1;
         int len = utf8_width( s, true );
         if( len > x_left ) {
@@ -4164,7 +4445,7 @@ void target_ui::panel_cursor_info( int &text_y )
     text_y++;
 }
 
-void target_ui::panel_gun_info( int &text_y )
+std::array<std::string, 2> target_ui::gun_info() const
 {
     gun_mode m = relevant->gun_current_mode();
     std::string mode_name = m.tname();
@@ -4173,28 +4454,31 @@ void target_ui::panel_gun_info( int &text_y )
         // Gun mode comes from a gunmod, not base gun. Add gunmod's name
         gunmod_name = m->tname() + " ";
     }
-    std::string str = string_format( _( "Firing mode: <color_cyan>%s%s (%d)</color>" ),
-                                     gunmod_name, mode_name, m.qty
-                                   );
-    nc_color clr = c_light_gray;
-    print_colored_text( w_target, point( 1, text_y++ ), clr, clr, str );
+    std::array<std::string, 2> lines;
+    lines[0] = string_format( _( "Firing mode: <color_cyan>%s%s (%d)</color>" ),
+                              gunmod_name, mode_name, m.qty );
 
     if( status == Status::OutOfAmmo ) {
-        mvwprintz( w_target, point( 1, text_y++ ), c_red, _( "OUT OF AMMO" ) );
+        lines[1] = colorize( _( "OUT OF AMMO" ), c_red );
     } else if( ammo ) {
         bool is_favorite = relevant->is_ammo_container() && relevant->first_ammo().is_favorite;
-        str = string_format( m->ammo_remaining( ) ? _( "Ammo: %s%s (%d/%d)" ) : _( "Ammo: %s%s" ),
-                             colorize( ammo->nname( std::max( m->ammo_remaining( ), 1 ) ), ammo->color ),
-                             colorize( is_favorite ? " *" : "", ammo->color ), m->ammo_remaining( ),
-                             m->ammo_capacity( ammo->ammo->type ) );
-        print_colored_text( w_target, point( 1, text_y++ ), clr, clr, str );
-    } else {
-        // Weapon doesn't use ammunition
-        text_y++;
+        lines[1] = string_format( m->ammo_remaining() ? _( "Ammo: %s%s (%d/%d)" ) : _( "Ammo: %s%s" ),
+                                  colorize( ammo->nname( std::max( m->ammo_remaining(), 1 ) ), ammo->color ),
+                                  colorize( is_favorite ? " *" : "", ammo->color ), m->ammo_remaining(),
+                                  m->ammo_capacity( ammo->ammo->type ) );
+    }
+    return lines;
+}
+
+void target_ui::panel_gun_info( int &text_y )
+{
+    nc_color clr = c_light_gray;
+    for( const std::string &line : gun_info() ) {
+        print_colored_text( w_target, point( 1, text_y++ ), clr, clr, line );
     }
 }
 
-void target_ui::panel_recoil( int &text_y )
+std::string target_ui::recoil_info() const
 {
     const int val = you->recoil_total();
     const int min_recoil = relevant->sight_dispersion( *you ).second;
@@ -4209,9 +4493,13 @@ void target_ui::panel_recoil( int &text_y )
     } else {
         str = pgettext( "amount of backward momentum", "<color_cyan>None</color>" );
     }
-    str = string_format( _( "Recoil: %s" ), str );
+    return string_format( _( "Recoil: %s" ), str );
+}
+
+void target_ui::panel_recoil( int &text_y )
+{
     nc_color clr = c_light_gray;
-    print_colored_text( w_target, point( 1, text_y++ ), clr, clr, str );
+    print_colored_text( w_target, point( 1, text_y++ ), clr, clr, recoil_info() );
 }
 
 void target_ui::panel_spell_info( int &text_y )

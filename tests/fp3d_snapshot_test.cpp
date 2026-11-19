@@ -73,13 +73,13 @@ const fp3d_snapshot::cell *find_cell( const fp3d_snapshot::scene_snapshot &scene
     return it == scene.cells.end() ? nullptr : &*it;
 }
 
-// The avatar's own tile sprite is always published for the overhead camera. It
-// is not world content, so "nothing leaked" assertions must not count it.
+// Perception assertions for world actors and items omit the overhead avatar
+// and independently tested native map fields.
 size_t world_sprite_count( const fp3d_snapshot::scene_snapshot &scene )
 {
     return static_cast<size_t>( std::count_if( scene.sprites.begin(), scene.sprites.end(),
     []( const auto & sprite ) {
-        return !sprite.is_avatar;
+        return !sprite.is_avatar && sprite.kind != fp3d_snapshot::sprite_kind::field;
     } ) );
 }
 } // namespace
@@ -467,6 +467,8 @@ TEST_CASE( "fp3d_snapshot_respects_native_field_item_suppression", "[fp3d][visio
     const auto target = you.pos_bub( here ) + tripoint_rel_ms( 0, 2, 0 );
     here.add_item_or_charges( target, item( itype_id( "rock" ) ) );
     here.add_field( target, fd_fire, 1, 10_minutes );
+    const auto smoke_at = target + tripoint_rel_ms::east;
+    here.add_field( smoke_at, field_type_str_id( "fd_smoke" ), 2, 10_minutes );
     refresh_vision( here, target.z() );
     REQUIRE_FALSE( here.field_at( target ).displayed_field_type()->display_items );
     REQUIRE( here.sees_some_items( target, you ) );
@@ -475,12 +477,23 @@ TEST_CASE( "fp3d_snapshot_respects_native_field_item_suppression", "[fp3d][visio
     REQUIRE( ground );
     CHECK( ground->known == fp3d_snapshot::knowledge::visible );
     CHECK( world_sprite_count( fire ) == 0 );
+    const auto has_field = []( const fp3d_snapshot::scene_snapshot &scene, const tripoint_abs_ms &p,
+                               const std::string &id, int intensity ) {
+        return std::any_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto &image ) {
+            return image.kind == fp3d_snapshot::sprite_kind::field && image.position == p &&
+                   image.id == id && image.field_intensity == intensity;
+        } );
+    };
+    CHECK( has_field( fire, here.get_abs( target ), "fd_fire", 1 ) );
+    CHECK( has_field( fire, here.get_abs( smoke_at ), "fd_smoke", 2 ) );
     here.remove_field( target, fd_fire );
     refresh_vision( here, target.z() );
     // Native removal first sets intensity zero; its displayed field remains
     // until normal field cleanup. The snapshot must not perform that cleanup.
     CHECK_FALSE( here.field_at( target ).displayed_field_type()->display_items );
-    CHECK( world_sprite_count( fp3d_snapshot::capture( you, here ) ) == 0 );
+    const auto dead_fire = fp3d_snapshot::capture( you, here );
+    CHECK( world_sprite_count( dead_fire ) == 0 );
+    CHECK_FALSE( has_field( dead_fire, here.get_abs( target ), "fd_fire", 1 ) );
     here.delete_field( target, fd_fire );
     refresh_vision( here, target.z() );
     REQUIRE( here.field_at( target ).displayed_field_type()->display_items );
@@ -575,6 +588,51 @@ TEST_CASE( "fp3d_ground_fields_keep_mixed_coverings_and_native_intensity",
     CHECK( updated->ground_fields.size() == ids.size() - 1 );
     CHECK( std::none_of( updated->ground_fields.begin(), updated->ground_fields.end(),
     []( const auto &field ) { return field.id == "fd_acid"; } ) );
+}
+
+TEST_CASE( "fp3d_ground_coverings_connect_same_type_visible_neighbours", "[fp3d][ground_fields]" )
+{
+    const std::array<tripoint_rel_ms, 4> dirs{ tripoint_rel_ms::south,
+        tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
+    for( const std::string id : { "fd_blood", "fd_acid", "fd_slime", "fd_web", "fd_gibs_flesh" } ) {
+        for( int mask = 0; mask < 16; ++mask ) {
+            CAPTURE( id, mask );
+            fp3d_snapshot::scene_snapshot scene;
+            fp3d_snapshot::cell center;
+            center.position = tripoint_abs_ms::zero;
+            center.ground_fields = { { id, 3 } };
+            scene.cells.push_back( center );
+            for( unsigned i = 0; i < dirs.size(); ++i ) {
+                auto neighbour = center;
+                neighbour.position += dirs[i];
+                neighbour.ground_fields = { { mask & ( 1 << i ) ? id : "fd_bile", 1 } };
+                scene.cells.push_back( neighbour );
+            }
+            fp3d_snapshot::connect_ground_fields( scene );
+            CHECK( scene.cells.front().ground_fields.front().connections == mask );
+            scene.cells[1].known = fp3d_snapshot::knowledge::remembered;
+            fp3d_snapshot::connect_ground_fields( scene );
+            CHECK( scene.cells.front().ground_fields.front().connections == ( mask & ~1 ) );
+            scene.cells[2].ground_fields.clear();
+            fp3d_snapshot::connect_ground_fields( scene );
+            CHECK( scene.cells.front().ground_fields.front().connections == ( mask & ~3 ) );
+        }
+    }
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 0, 2, 0 );
+    here.add_field( p, fd_blood, 3 );
+    here.add_field( p + tripoint_rel_ms::east, fd_blood, 1 );
+    refresh_vision( here, p.z() );
+    auto previous = fp3d_snapshot::capture_camera( you, here );
+    REQUIRE( find_cell( previous, here.get_abs( p ) ) );
+    CHECK( find_cell( previous, here.get_abs( p ) )->ground_fields.front().connections == 2 );
+    here.delete_field( p + tripoint_rel_ms::east, fd_blood );
+    refresh_vision( here, p.z() );
+    const auto updated = fp3d_snapshot::capture_camera_reusing( you, here, &previous, 0, 0, false );
+    REQUIRE( find_cell( updated, here.get_abs( p ) ) );
+    CHECK( find_cell( updated, here.get_abs( p ) )->ground_fields.front().connections == 0 );
 }
 
 TEST_CASE( "fp3d_adjacent_stair_tiles_share_one_continuous_flight", "[fp3d][stairs]" )
@@ -1004,6 +1062,58 @@ TEST_CASE( "fp3d_radio_tower_upper_walkway_is_metal_from_ground",
     }
 }
 
+TEST_CASE( "fp3d_overhead_fades_the_structure_above_the_current_radio_tower_floor",
+           "[fp3d][camera_geometry][overhead][radio_tower]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto ground = you.pos_bub( here );
+    const auto first_deck = ground + tripoint_rel_ms::above;
+    const auto second_deck = first_deck + tripoint_rel_ms::above;
+    for( const auto &p : { first_deck, second_deck } ) {
+        REQUIRE( here.ter_set( p, ter_str_id( "t_metal_floor_no_roof" ) ) );
+        REQUIRE( here.ter_set( p + tripoint_rel_ms::west, ter_str_id( "t_radio_tower" ) ) );
+        REQUIRE( here.ter_set( p + tripoint_rel_ms::east, ter_str_id( "t_railing" ) ) );
+        REQUIRE( here.ter_set( p + tripoint_rel_ms::south, ter_str_id( "t_ladder_up_down" ) ) );
+    }
+    const auto detached = first_deck + tripoint_rel_ms( 3, 0, 0 );
+    REQUIRE( here.ter_set( detached, ter_str_id( "t_metal_floor_no_roof" ) ) );
+    const auto faded = [&]( const fp3d_snapshot::scene_snapshot &scene, const tripoint_bub_ms &p ) {
+        const auto *tile = find_cell( scene, here.get_abs( p ) );
+        REQUIRE( tile );
+        CHECK( tile->floor_present );
+        return tile->faded_tower;
+    };
+    auto scene = fp3d_snapshot::capture_camera( you, here, 2, 0, true );
+    CHECK_FALSE( faded( scene, ground ) );
+    CHECK( faded( scene, first_deck ) );
+    CHECK( faded( scene, second_deck ) );
+    CHECK( faded( scene, first_deck + tripoint_rel_ms::east ) );
+    CHECK( faded( scene, first_deck + tripoint_rel_ms::west ) );
+    CHECK( faded( scene, first_deck + tripoint_rel_ms::south ) );
+    CHECK_FALSE( faded( scene, detached ) );
+    CHECK_FALSE( faded( fp3d_snapshot::capture_camera( you, here, 2, 0 ), first_deck ) );
+
+    scene.render_generation = scene.geometry_generation = 1;
+    auto reused = fp3d_snapshot::capture_camera_reusing( you, here, &scene, 2, 0, true );
+    CHECK( reused.geometry_generation == 1 );
+    CHECK( faded( reused, first_deck ) );
+
+    you.setpos( here, first_deck );
+    const auto climbed = fp3d_snapshot::capture_camera_reusing( you, here, &reused, 2, 1, true );
+    CHECK_FALSE( faded( climbed, first_deck ) );
+    CHECK_FALSE( faded( climbed, first_deck + tripoint_rel_ms::west ) );
+    CHECK_FALSE( faded( climbed, first_deck + tripoint_rel_ms::east ) );
+    CHECK_FALSE( faded( climbed, first_deck + tripoint_rel_ms::south ) );
+    CHECK( faded( climbed, second_deck ) );
+
+    you.setpos( here, detached + tripoint_rel_ms::below );
+    const auto left = fp3d_snapshot::capture_camera( you, here, 2, 0, true );
+    CHECK_FALSE( faded( left, first_deck ) );
+    CHECK_FALSE( faded( left, detached ) );
+}
+
 TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilevel]" )
 {
     prepare_scene();
@@ -1112,6 +1222,45 @@ TEST_CASE( "fp3d_unknown_mask_contains_no_terrain_and_preserves_known_openings",
     for( size_t i = 0; i < before.unknown.size(); ++i ) {
         CHECK( before.unknown[i].position == after.unknown[i].position );
         CHECK( before.unknown[i].width == after.unknown[i].width );
+    }
+}
+
+TEST_CASE( "fp3d_flora_cards_cover_wildflowers_and_water_plants", "[fp3d][plants]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 0, -2, 0 );
+    for( const std::string id : {
+             "f_black_eyed_susan", "f_bluebell", "f_burdock", "f_chamomile", "f_chicory",
+             "f_dahlia", "f_dandelion", "f_datura", "f_flower_spurge", "f_flower_tulip",
+             "f_lily", "f_mustard", "f_mutpoppy", "f_sunflower", "f_brambles", "f_cattails",
+             "f_lotus", "f_algae_green", "f_algae_red", "f_bladderwrack", "f_kelp_sugar",
+             "f_sea_lettuce", "f_lilypad", "f_region_flower", "f_region_flower_decorative",
+             "f_region_water_plant", "f_region_weed"
+         } ) {
+        CAPTURE( id );
+        here.ter_set( p, ter_str_id( "t_water_sh" ) );
+        here.furn_set( p, furn_str_id( id ) );
+        refresh_vision( here, p.z() );
+        for( const bool camera : { false, true } ) {
+            CAPTURE( camera );
+            const auto scene = camera ? fp3d_snapshot::capture_camera( you, here, 1, 0 ) :
+                               fp3d_snapshot::capture( you, here );
+            const auto *tile = find_cell( scene, here.get_abs( p ) );
+            REQUIRE( tile );
+            CHECK_FALSE( tile->furniture );
+            if( id.compare( 0, 9, "f_region_" ) == 0 ) {
+                CHECK( tile->vegetation.empty() );
+            } else {
+                CHECK( tile->vegetation == id );
+                if( id == "f_lilypad" ) {
+                    CHECK( tile->vegetation_height == 0.f );
+                } else {
+                    CHECK( tile->vegetation_height > 0.f );
+                }
+            }
+        }
     }
 }
 
@@ -1256,10 +1405,61 @@ TEST_CASE( "fp3d_camera_geometry_cuts_only_the_current_room_roof",
     const auto *floor = find_cell( cut, here.get_abs( player ) );
     REQUIRE( floor );
     CHECK( floor->floor_present );
+    CHECK_FALSE( floor->ceiling_present );
+    CHECK( floor->cutaway_ceiling );
     const auto *wall = find_cell( cut, here.get_abs( player + tripoint_rel_ms( 3, 0, 0 ) ) );
     REQUIRE( wall );
     CHECK( wall->kind == fp3d_snapshot::terrain_kind::wall );
     CHECK( find_cell( cut, here.get_abs( player + tripoint_rel_ms( 5, 0, 1 ) ) ) );
+}
+
+TEST_CASE( "fp3d_overhead_hidden_roof_keeps_only_opaque_light_boundaries",
+           "[fp3d][snapshot][overhead]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int y = -2; y <= 2; ++y ) {
+        for( int x = -2; x <= 2; ++x ) {
+            const auto p = player + tripoint_rel_ms( x, y, 0 );
+            here.ter_set( p, ter_str_id( std::abs( x ) == 2 || std::abs( y ) == 2 ?
+                                       "t_wall" : "t_floor" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    // The adjacent solid roof keeps this an indoor region even with an opening.
+    const auto aperture = player + tripoint_rel_ms::east;
+    for( bool camera : { false, true } ) {
+        auto previous = fp3d_snapshot::scene_snapshot{};
+        for( const std::string roof : { "t_flat_roof", "t_glass_roof", "t_open_air", "t_flat_roof" } ) {
+            CAPTURE( camera, roof );
+            here.ter_set( aperture + tripoint_rel_ms::above, ter_str_id( roof ) );
+            fp3d_snapshot::prepare_view( you, here );
+            auto scene = camera ? fp3d_snapshot::capture_camera_reusing( you, here, &previous,
+                         fp3d_snapshot::render_above, fp3d_snapshot::render_below, true ) :
+                         fp3d_snapshot::capture( you, here, fp3d_snapshot::render_above,
+                                 fp3d_snapshot::render_below, true );
+            const auto *tile = find_cell( scene, here.get_abs( aperture ) );
+            REQUIRE( tile );
+            REQUIRE( tile->over_avatar_region );
+            CHECK_FALSE( tile->ceiling_present );
+            CHECK( tile->cutaway_ceiling == ( roof == "t_flat_roof" ) );
+            if( camera ) {
+                // Exercise the fast retained-cell path as well as roof edits.
+                previous = std::move( scene );
+                previous.render_generation = 1; // Simulate compositor publication.
+                previous.geometry_generation = previous.render_generation;
+                auto reused = fp3d_snapshot::capture_camera_reusing( you, here, &previous,
+                              fp3d_snapshot::render_above, fp3d_snapshot::render_below, true );
+                tile = find_cell( reused, here.get_abs( aperture ) );
+                REQUIRE( tile );
+                CHECK( tile->cutaway_ceiling == ( roof == "t_flat_roof" ) );
+                CHECK( reused.geometry_generation == 1 );
+                previous = std::move( reused );
+            }
+        }
+    }
 }
 
 TEST_CASE( "fp3d_multistorey_visibility_reaches_upper_floors_and_ground",
@@ -2300,6 +2500,10 @@ TEST_CASE( "fp3d_overhead_capture_lifts_only_the_avatar_room_ceiling",
     avatar &you = get_avatar();
     map &here = get_map();
     const auto origin = you.pos_bub( here );
+    // The closed room has no outdoor LOS; supply a remembered neighbour so
+    // the assertions below actually exercise geometry outside the cut region.
+    you.memorize_terrain( here.get_abs( origin + tripoint_rel_ms( 5, 0, 0 ) ),
+                          "t_pavement", 0, 0 );
     // One closed room around the avatar, with a real floor above it. The
     // overhead camera has to look into this room from above, so the capture is
     // asked to lift exactly this region's overhead boundary.
@@ -2330,6 +2534,7 @@ TEST_CASE( "fp3d_overhead_capture_lifts_only_the_avatar_room_ceiling",
     CHECK( cut_room->over_avatar_region );
     CHECK( cut_room->known == fp3d_snapshot::knowledge::visible );
     CHECK_FALSE( cut_room->ceiling_present );
+    CHECK( cut_room->cutaway_ceiling );
     // Floor and walls of the floor the avatar stands on are never removed; the
     // cut is not "delete everything above z", it is this region's boundary.
     CHECK( cut_room->kind == fp3d_snapshot::terrain_kind::floor );
@@ -2386,4 +2591,53 @@ TEST_CASE( "fp3d_overhead_capture_lifts_only_the_avatar_room_ceiling",
         return sprite.is_avatar;
     } ) == 1 );
 }
+
+TEST_CASE( "fp3d_natural_ground_connections_follow_captured_neighbours", "[fp3d][ground_terrain]" )
+{
+    const std::array<tripoint_rel_ms, 4> dirs{ tripoint_rel_ms::south,
+        tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
+    for( const std::string id : { "t_grass", "t_grass_long", "t_grass_dead", "t_dirt", "t_sand", "t_moss" } ) {
+        for( int mask = 0; mask < 16; ++mask ) {
+            CAPTURE( id, mask );
+            fp3d_snapshot::scene_snapshot scene;
+            fp3d_snapshot::cell tile;
+            tile.terrain = id;
+            tile.position = tripoint_abs_ms::zero;
+            scene.cells.push_back( tile );
+            for( int i = 0; i < 4; ++i ) {
+                if( mask & ( 1 << i ) ) {
+                    tile.position = tripoint_abs_ms::zero + dirs[i];
+                    tile.known = fp3d_snapshot::knowledge::remembered;
+                    scene.cells.push_back( tile );
+                }
+            }
+            fp3d_snapshot::connect_ground_terrain( scene );
+            CHECK( scene.cells.front().ground_connections == mask );
+            auto previous = scene;
+            const auto before = fp3d_materials::terrain_key( scene.cells.front() );
+            scene.cells.front().ground_connections ^= 1;
+            CHECK( fp3d_materials::terrain_key( scene.cells.front() ) != before );
+            previous.geometry_generation = 1234;
+            fp3d_snapshot::reuse_geometry( scene, &previous );
+            CHECK( scene.geometry_generation != 1234 );
+        }
+    }
+    fp3d_snapshot::scene_snapshot scene;
+    fp3d_snapshot::cell tile;
+    tile.terrain = "t_grass";
+    tile.position = tripoint_abs_ms::zero;
+    scene.cells.push_back( tile );
+    tile.position += tripoint_rel_ms::east;
+    tile.terrain = "t_grass_long";
+    scene.cells.push_back( tile );
+    tile.position = tripoint_abs_ms::zero + tripoint_rel_ms::above;
+    tile.terrain = "t_grass";
+    scene.cells.push_back( tile );
+    fp3d_snapshot::connect_ground_terrain( scene );
+    CHECK( scene.cells.front().ground_connections == 0 );
+    scene.cells.back().terrain = "t_floor";
+    fp3d_snapshot::connect_ground_terrain( scene );
+    CHECK( scene.cells.back().ground_connections == -1 );
+}
+
 #endif

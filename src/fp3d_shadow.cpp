@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include "fp3d_furniture.h"
+#include "fp3d_materials.h"
 #include "fp3d_camera.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_scene.h"
@@ -25,6 +26,22 @@ GLuint shadow_texture = 0;
 int target_size = 0;
 GLuint far_shadow_fbo = 0;
 GLuint far_shadow_texture = 0;
+struct local_target {
+    GLuint fbo = 0;
+    GLuint texture = 0;
+    GLuint occluders = 0;
+    unsigned geometry_generation = 0;
+    unsigned render_generation = 0;
+    tripoint_abs_ms origin;
+    tripoint_abs_ms geometry_origin;
+    std::array<float, 4> position = {};
+    float yaw = 0;
+    float pitch = 0;
+    bool failed = false;
+    bool had_vehicles = false;
+};
+local_target beam_target;
+local_target point_target;
 int far_target_size = 0;
 bool loaded = false;
 bool unavailable = false;
@@ -277,7 +294,8 @@ void furniture_shadow_part( const fp3d_furniture::part &part )
 }
 
 void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float radius,
-                           data &statistics, bool qa_suppress_props, bool qa_only_props )
+                           data &statistics, bool qa_suppress_props, bool qa_only_props,
+                           const std::array<float, 4> *emitter = nullptr )
 {
     // Door orientation follows the native scene's known wall neighbours.
     // Index once rather than scanning all tiles 4x for every damaged door.
@@ -303,6 +321,10 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
     };
     const auto known_wall = [&]( const tripoint_abs_ms &pos ) {
         return known_walls.find( pos ) != known_walls.end();
+    };
+    const auto water_above = [&]( const tripoint_abs_ms &pos ) {
+        const auto *above = known_cell( pos + tripoint_rel_ms::above );
+        return above && !above->is_ramp ? fp3d_scene::water_surface_offset( above->terrain ) : 0.f;
     };
     const auto table_at = [&]( const tripoint_abs_ms &pos ) {
         const auto *c = known_cell( pos );
@@ -387,13 +409,16 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
                 const auto back = along_x ? tripoint_rel_ms::west : tripoint_rel_ms::north;
                 const auto forward = along_x ? tripoint_rel_ms::east : tripoint_rel_ms::south;
                 auto start = cell.position;
+                const float surface_offset = water_above( cell.position );
                 while( castable_wall( start + back ) &&
+                       water_above( start + back ) == surface_offset &&
                        drawn_walls.find( start + back ) == drawn_walls.end() ) {
                     start += back;
                 }
                 int tiles = 0;
                 auto end = start;
-                while( castable_wall( end ) && drawn_walls.insert( end ).second ) {
+                while( castable_wall( end ) && water_above( end ) == surface_offset &&
+                       drawn_walls.insert( end ).second ) {
                     ++tiles;
                     end += forward;
                 }
@@ -409,7 +434,7 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
                     // shadows on adjacent wall tiles in oblique sunlight.
                     const float half_x = along_x ? tiles * .5f - .01f : .478f;
                     const float half_z = along_x ? .478f : tiles * .5f - .01f;
-                    wall_run( run_x, run_z, bottom, top, half_x, half_z );
+                    wall_run( run_x, run_z, bottom, top + surface_offset, half_x, half_z );
                 }
             }
         } else if( !qa_only_props &&
@@ -528,6 +553,21 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
                       i == 4 ) || parts[i].glass ) {
                     continue;
                 }
+                if( emitter ) {
+                    const float angle = furniture_facing( cell ) * 1.5707963268f;
+                    const float dx = ( *emitter )[0] - x, dz = ( *emitter )[2] - z;
+                    const float local_x = std::cos( angle ) * dx + std::sin( angle ) * dz;
+                    const float local_z = -std::sin( angle ) * dx + std::cos( angle ) * dz;
+                    const auto &part = parts[i];
+                    // Do not let an approximate lamp shell enclosing its own
+                    // native emitter extinguish every outgoing light ray.
+                    if( std::abs( local_x - part.x ) <= part.width * .5f + .02f &&
+                        std::abs( local_z - part.z ) <= part.depth * .5f + .02f &&
+                        ( *emitter )[1] >= bottom + part.bottom - .02f &&
+                        ( *emitter )[1] <= bottom + part.top + .02f ) {
+                        continue;
+                    }
+                }
                 furniture_shadow_part( parts[i] );
             }
             glPopMatrix();
@@ -537,7 +577,8 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
         // sheet above a car parked on a road. The shadow pass MUST use the
         // same mask, otherwise an invisible slab still casts dark footprints.
         // Do not invent occluding upper floors from unknown map cells.
-        if( !qa_only_props && cell.ceiling_present && !cell.open_air &&
+        // Hiding a room's roof for the camera never opens it to the light.
+        if( !qa_only_props && ( cell.ceiling_present || cell.cutaway_ceiling ) && !cell.open_air &&
             // Roof glass is a skylight: the sun must reach the room below
             // just as it reaches the street through a glass wall.
             !cell.glass_ceiling &&
@@ -550,11 +591,12 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
             !( cell.vegetation == cell.terrain && cell.vegetation_height >= 4.0f ) &&
             !fp3d_scene::vehicle_roof_sheet_suppressed( cell.position,
                     scene.render_generation ) ) {
+            const float ceiling_top = top + water_above( cell.position );
             glBegin( GL_QUADS );
-            glVertex3f( x - .5f, top, z - .5f );
-            glVertex3f( x - .5f, top, z + .5f );
-            glVertex3f( x + .5f, top, z + .5f );
-            glVertex3f( x + .5f, top, z - .5f );
+            glVertex3f( x - .5f, ceiling_top, z - .5f );
+            glVertex3f( x - .5f, ceiling_top, z + .5f );
+            glVertex3f( x + .5f, ceiling_top, z + .5f );
+            glVertex3f( x + .5f, ceiling_top, z - .5f );
             glEnd();
         }
     }
@@ -564,6 +606,57 @@ void draw_known_occluders( const fp3d_snapshot::scene_snapshot &scene, float rad
 // same opaque mesh is rasterized for both visible cars and their sun shadows.
 // Rebuilding separate per-part cuboids here would recreate roofs on wrecks,
 // fill open doors and misalign the true raised cab/body silhouette.
+
+void draw_creature_occluders( const fp3d_snapshot::scene_snapshot &scene,
+                              float right_x, float right_z, float radius,
+                              const std::array<float, 4> *emitter = nullptr, bool skip_avatar = false )
+{
+    // Dynamic, alpha-cut-out casters stay outside the static building lists.
+    // Face the light rather than the camera, so mouse-look cannot move shadows.
+    glPushAttrib( GL_ENABLE_BIT | GL_TEXTURE_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT );
+    if( fp3d_materials::bind() ) {
+        glEnable( GL_TEXTURE_2D );
+        glEnable( GL_ALPHA_TEST );
+        glAlphaFunc( GL_GREATER, .5f );
+        glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+        glColor4f( 1, 1, 1, 1 );
+        for( const auto &image : scene.sprites ) {
+            if( image.kind != fp3d_snapshot::sprite_kind::monster &&
+                image.kind != fp3d_snapshot::sprite_kind::character ) {
+                continue;
+            }
+            // A held light must not be blocked by its owner's billboard.
+            if( skip_avatar && image.is_avatar ) { continue; }
+            const auto offset = image.position - scene.origin;
+            if( std::hypot( offset.x(), offset.y() ) > radius + image.height ) { continue; }
+            auto uv = fp3d_materials::lookup( fp3d_materials::sprite_key( image ) );
+            if( !uv ) { continue; }
+            if( image.mirrored ) { std::swap( uv->left, uv->right ); }
+            float rx = right_x, rz = right_z;
+            if( emitter ) {
+                const float dx = ( *emitter )[0] - offset.x();
+                const float dz = ( *emitter )[2] - offset.y();
+                const float length = std::hypot( dx, dz );
+                rx = length > .005f ? dz / length : 1.f;
+                rz = length > .005f ? -dx / length : 0.f;
+            }
+            const float half_width = image.height * .5f;
+            const float bottom = offset.z() * fp3d_camera::floor_height + image.elevation + .04f;
+            const float top = bottom + image.height - .04f;
+            glBegin( GL_QUADS );
+            glTexCoord2f( uv->left, uv->bottom );
+            glVertex3f( offset.x() - rx * half_width, bottom, offset.y() - rz * half_width );
+            glTexCoord2f( uv->right, uv->bottom );
+            glVertex3f( offset.x() + rx * half_width, bottom, offset.y() + rz * half_width );
+            glTexCoord2f( uv->right, uv->top );
+            glVertex3f( offset.x() + rx * half_width, top, offset.y() + rz * half_width );
+            glTexCoord2f( uv->left, uv->top );
+            glVertex3f( offset.x() - rx * half_width, top, offset.y() - rz * half_width );
+            glEnd();
+        }
+    }
+    glPopAttrib();
+}
 
 } // namespace
 
@@ -697,6 +790,7 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
     };
     const auto draw_cascade = [&]( GLuint fbo, int size, float cast_radius,
                                    data &stats, bool outer ) -> bool {
+        fp3d_regression::gpu_probe timer( outer ? "shadow_far" : "shadow_near" );
         bind_framebuffer( GL_FRAMEBUFFER, fbo );
         glViewport( 0, 0, size, size );
         glDisable( GL_BLEND );
@@ -763,6 +857,10 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
             draw_known_occluders( scene, cast_radius, stats, qa_no_props, qa_only_props );
         }
         if( !qa_only_props ) { fp3d_vehicle::draw_shadow( scene, cast_radius ); }
+        if( !qa_only_props ) {
+            draw_creature_occluders( scene, right[0], right[2], cast_radius );
+        }
+        timer.finish();
         const bool ok = glGetError() == GL_NO_ERROR;
         if( ok ) { capture_depth( size, result, outer ); }
         return ok;
@@ -820,8 +918,195 @@ data render( const fp3d_snapshot::scene_snapshot &scene, int quality )
     return result;
 }
 
+namespace
+{
+GLuint render_local( const fp3d_snapshot::scene_snapshot &scene,
+                     const std::array<float, 4> &position, float yaw, float pitch,
+                     bool cube )
+{
+    local_target &target = cube ? point_target : beam_target;
+    if( position[3] <= .1f || target.failed || !load_procs() ) { return 0; }
+    if( target.texture && target.render_generation == scene.render_generation &&
+        target.origin == scene.origin && target.position == position &&
+        target.yaw == yaw && target.pitch == pitch ) { return target.texture; }
+
+    GLint old_fbo = 0, old_program = 0, old_mode = 0;
+    glGetIntegerv( GL_FRAMEBUFFER_BINDING, &old_fbo );
+    glGetIntegerv( GL_CURRENT_PROGRAM, &old_program );
+    glGetIntegerv( GL_MATRIX_MODE, &old_mode );
+    glPushAttrib( GL_ALL_ATTRIB_BITS );
+    glMatrixMode( GL_PROJECTION ); glPushMatrix();
+    glMatrixMode( GL_MODELVIEW ); glPushMatrix();
+    const int size = cube ? 512 : 1024;
+    const GLenum texture_type = cube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+    const int faces = cube ? 6 : 1;
+    if( !target.fbo ) {
+        gen_framebuffer( 1, &target.fbo );
+        bind_framebuffer( GL_FRAMEBUFFER, target.fbo );
+        glGenTextures( 1, &target.texture );
+        glBindTexture( texture_type, target.texture );
+        for( int face = 0; face < faces; ++face ) {
+            const GLenum image = cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D;
+            glTexImage2D( image, 0, GL_DEPTH_COMPONENT24, size, size, 0,
+                          GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr );
+        }
+        glTexParameteri( texture_type, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+        glTexParameteri( texture_type, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+        glTexParameteri( texture_type, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+        glTexParameteri( texture_type, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+        if( cube ) { glTexParameteri( texture_type, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE ); }
+        attach_texture( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                        cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X : GL_TEXTURE_2D, target.texture, 0 );
+        glDrawBuffer( GL_NONE );
+        glReadBuffer( GL_NONE );
+        target.failed = check_framebuffer( GL_FRAMEBUFFER ) != GL_FRAMEBUFFER_COMPLETE;
+    }
+    if( !target.failed ) {
+        bind_framebuffer( GL_FRAMEBUFFER, target.fbo );
+        glViewport( 0, 0, size, size );
+        use_program( 0 );
+        glDisable( GL_BLEND );
+        glDisable( GL_ALPHA_TEST );
+        glDisable( GL_LIGHTING );
+        glDisable( GL_FOG );
+        glDisable( GL_TEXTURE_2D );
+        glDisable( GL_SCISSOR_TEST );
+        glDisable( GL_CULL_FACE );
+        glEnable( GL_DEPTH_TEST );
+        glDepthFunc( GL_LESS );
+        glDepthMask( GL_TRUE );
+        glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( 1.0f, 1.0f );
+        glClearDepth( 1.0 );
+        // This cache is independent of sunlight, so it also updates at night
+        // and underground. Door/roof changes invalidate the snapshot generation.
+        const unsigned generation = scene.geometry_generation ?
+                                    scene.geometry_generation : scene.render_generation;
+        if( !target.occluders || !generation || target.geometry_generation != generation ||
+            ( cube && ( target.position != position || target.origin != scene.origin ) ) ||
+            ( target.had_vehicles && scene.vehicles.empty() ) ||
+            ( !scene.vehicles.empty() && target.render_generation != scene.render_generation ) ) {
+            if( !target.occluders ) { target.occluders = glGenLists( 1 ); }
+            if( target.occluders ) { glNewList( target.occluders, GL_COMPILE ); }
+            data ignored;
+            draw_known_occluders( scene, 1000000.f, ignored, false, false,
+                                  cube ? &position : nullptr );
+            // Solar casters need ceilings; local lights also
+            // need the actual known floor to stop light crossing storeys.
+            for( const auto &cell : scene.cells ) {
+                if( cell.known != fp3d_snapshot::knowledge::visible || cell.exterior_only ||
+                    !cell.floor_present || cell.open_air ) { continue; }
+                const auto rel = cell.position - scene.origin;
+                const float x = rel.x(), z = rel.y();
+                const float y = rel.z() * fp3d_camera::floor_height +
+                                fp3d_scene::water_surface_offset( cell.terrain );
+                glBegin( GL_QUADS );
+                glVertex3f( x-.5f, y, z-.5f ); glVertex3f( x+.5f, y, z-.5f );
+                glVertex3f( x+.5f, y, z+.5f ); glVertex3f( x-.5f, y, z+.5f );
+                glEnd();
+            }
+            if( target.occluders ) { glEndList(); }
+            target.geometry_generation = generation;
+            target.geometry_origin = scene.origin;
+            target.had_vehicles = !scene.vehicles.empty();
+        }
+        // Cubemap directions follow OpenGL's face orientation, including Y.
+        constexpr float right[6][3] = {
+            {0,0,-1}, {0,0,1}, {1,0,0}, {1,0,0}, {1,0,0}, {-1,0,0}
+        };
+        constexpr float up[6][3] = {
+            {0,-1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}, {0,-1,0}, {0,-1,0}
+        };
+        constexpr float back[6][3] = {
+            {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}
+        };
+        for( int face = 0; face < faces; ++face ) {
+            if( cube ) {
+                attach_texture( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, target.texture, 0 );
+            }
+            if( check_framebuffer( GL_FRAMEBUFFER ) != GL_FRAMEBUFFER_COMPLETE ) {
+                target.failed = true;
+                break;
+            }
+            glClear( GL_DEPTH_BUFFER_BIT );
+            glMatrixMode( GL_PROJECTION );
+            glLoadIdentity();
+            constexpr float near_plane = .05f;
+            const float edge = near_plane * ( cube ? 1.0f : 1.108f );
+            glFrustum( -edge, edge, -edge, edge, near_plane, position[3] );
+            const float cy = std::cos( yaw ), sy = std::sin( yaw );
+            const float cp = std::cos( pitch ), sp = std::sin( pitch );
+            GLfloat view[] = {
+                cy, sy*sp, -sy*cp, 0,
+                0, cp, sp, 0,
+                sy, -cy*sp, cy*cp, 0,
+                0, 0, 0, 1
+            };
+            if( cube ) {
+                for( int axis = 0; axis < 3; ++axis ) {
+                    view[axis*4] = right[face][axis];
+                    view[axis*4+1] = up[face][axis];
+                    view[axis*4+2] = back[face][axis];
+                }
+            }
+            glMatrixMode( GL_MODELVIEW );
+            glLoadMatrixf( view );
+            glTranslatef( -position[0], -position[1], -position[2] );
+            if( target.occluders ) {
+                const auto offset = target.geometry_origin - scene.origin;
+                glPushMatrix();
+                glTranslatef( offset.x(), offset.z() * fp3d_camera::floor_height, offset.y() );
+                glCallList( target.occluders );
+                glPopMatrix();
+            }
+            fp3d_vehicle::draw_shadow( scene, position[3] +
+                                      std::hypot( position[0], position[2] ) + 2.0f );
+            draw_creature_occluders( scene, 1, 0, position[3] +
+                                    std::hypot( position[0], position[2] ) + 2.0f, &position, !cube );
+        }
+        target.failed = target.failed || !target.occluders || glGetError() != GL_NO_ERROR;
+    }
+    bind_framebuffer( GL_FRAMEBUFFER, old_fbo );
+    glMatrixMode( GL_MODELVIEW ); glPopMatrix();
+    glMatrixMode( GL_PROJECTION ); glPopMatrix();
+    use_program( old_program );
+    glPopAttrib();
+    glMatrixMode( old_mode );
+    if( target.failed ) { return 0; }
+    target.render_generation = scene.render_generation;
+    target.origin = scene.origin;
+    target.position = position;
+    target.yaw = yaw;
+    target.pitch = pitch;
+    return target.texture;
+}
+
+} // namespace
+
+GLuint render_beam( const fp3d_snapshot::scene_snapshot &scene,
+                    const std::array<float, 4> &position, float yaw, float pitch )
+{
+    return render_local( scene, position, yaw, pitch, false );
+}
+
+GLuint render_point( const fp3d_snapshot::scene_snapshot &scene,
+                     const std::array<float, 4> &position )
+{
+    return render_local( scene, position, 0, 0, true );
+}
+
 void release()
 {
+    for( local_target *target : { &beam_target, &point_target } ) {
+        if( target->occluders ) { glDeleteLists( target->occluders, 1 ); }
+        if( loaded ) {
+            if( target->fbo ) { delete_framebuffer( 1, &target->fbo ); }
+            if( target->texture ) { glDeleteTextures( 1, &target->texture ); }
+        }
+        *target = {};
+    }
     if( occluder_list ) { glDeleteLists( occluder_list, 1 ); }
     occluder_list = 0;
     occluder_generation = 0;

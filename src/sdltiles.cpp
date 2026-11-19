@@ -7,6 +7,7 @@
 #if defined(TILES)
 
 #if defined(ENABLE_FP3D)
+#include "fp3d_body_figure.h"
 #include "fp3d_compositor.h"
 #include "fp3d_regression.h"
 #include "fp3d_input.h"
@@ -715,10 +716,22 @@ void refresh_display()
     display_probe.stage( "display_compose" );
     fp3d_compositor::compose();
     display_probe.stage( "display_hud" );
+    // QA: attribute the overlay slice to the HUD panels and the entry overlay,
+    // so a per-frame cost there is not reported as one unexplained number.
+    const Uint64 fp3d_hud_started = SDL_GetPerformanceCounter();
     draw_fp3d_hud();
+    const Uint64 fp3d_hud_drawn = SDL_GetPerformanceCounter();
     if( font ) {
         fp3d_entry::draw( renderer, geometry, *font, fp3d_compositor::viewport_pixels(),
                           fp3d_compositor::captures_game_input() );
+    }
+    {
+        const double fp3d_frequency = SDL_GetPerformanceFrequency();
+        const Uint64 fp3d_entry_done = SDL_GetPerformanceCounter();
+        fp3d_regression::stage_sample( "hud_panel",
+                                       ( fp3d_hud_drawn - fp3d_hud_started ) * 1000.0 / fp3d_frequency );
+        fp3d_regression::stage_sample( "hud_entry",
+                                       ( fp3d_entry_done - fp3d_hud_drawn ) * 1000.0 / fp3d_frequency );
     }
     display_probe.stage( "display_present" );
     if( imclient ) {
@@ -1033,11 +1046,12 @@ void draw_fp3d_overlay_text( const std::string &text, const point &position, int
 
 static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &box, int pad )
 {
-    if( hud.body_regions.size() != 6 || box.h <= 2 * pad ) {
+    using namespace fp3d_body_figure;
+    if( hud.body_regions.size() != regions.size() || box.h <= 2 * pad ) {
         return;
     }
-    const float scale = std::min( ( box.h - 2 * pad ) / 200.0f,
-                                  ( box.w - 2 * pad ) / 100.0f );
+    const float scale = std::min( ( box.h - 2 * pad ) / static_cast<float>( height ),
+                                  ( box.w - 2 * pad ) / static_cast<float>( width ) );
     const int figure_x = box.x + pad;
     const int figure_y = box.y + pad;
 
@@ -1058,7 +1072,7 @@ static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &bo
         SDL_SetRenderDrawColor( renderer.get(), color.r, color.g, color.b, 85 );
         std::vector<int> crossings;
         crossings.reserve( outline.size() );
-        for( int y = figure_y; y < figure_y + 200 * scale; ++y ) {
+        for( int y = figure_y; y < figure_y + height * scale; ++y ) {
             crossings.clear();
             for( size_t i = 1; i < points.size(); ++i ) {
                 const SDL_Point &a = points[i - 1];
@@ -1080,21 +1094,9 @@ static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &bo
         }
         SDL_RenderDrawLines( renderer.get(), points.data(), static_cast<int>( points.size() ) );
     };
-    draw_part( 0, { { 43, 3 }, { 57, 3 }, { 62, 8 }, { 62, 19 }, { 57, 27 },
-        { 43, 27 }, { 38, 19 }, { 38, 8 } } );
-    draw_part( 1, { { 42, 29 }, { 58, 29 }, { 59, 34 }, { 70, 39 }, { 67, 63 },
-        { 61, 80 }, { 65, 99 }, { 60, 110 }, { 40, 110 }, { 35, 99 },
-        { 39, 80 }, { 33, 63 }, { 30, 39 }, { 41, 34 } } );
-    // A front view places the character's left limbs on the viewer's right.
-    draw_part( 2, { { 72, 39 }, { 78, 44 }, { 84, 64 }, { 89, 87 }, { 90, 109 },
-        { 86, 115 }, { 80, 111 }, { 80, 90 }, { 75, 72 }, { 68, 51 } } );
-    draw_part( 3, { { 28, 39 }, { 22, 44 }, { 16, 64 }, { 11, 87 }, { 10, 109 },
-        { 14, 115 }, { 20, 111 }, { 20, 90 }, { 25, 72 }, { 32, 51 } } );
-    draw_part( 4, { { 52, 113 }, { 64, 111 }, { 67, 132 }, { 65, 154 }, { 69, 180 },
-        { 74, 191 }, { 70, 197 }, { 57, 196 }, { 55, 180 }, { 51, 153 }, { 50, 131 } } );
-    draw_part( 5, { { 48, 113 }, { 36, 111 }, { 33, 132 }, { 35, 154 }, { 31, 180 },
-        { 26, 191 }, { 30, 197 }, { 43, 196 }, { 45, 180 }, { 49, 153 }, { 50, 131 } } );
-
+    for( size_t i = 0; i < regions.size(); ++i ) {
+        draw_part( i, regions[i].outline );
+    }
 }
 
 static void draw_fp3d_hud()
@@ -1102,7 +1104,7 @@ static void draw_fp3d_hud()
     if( !font ) { return; }
     const auto lines = fp3d_compositor::hud_lines();
     if( lines.empty() ) { return; }
-    const auto hud = fp3d_compositor::hud_data();
+    const auto &hud = fp3d_compositor::hud_data();
     const auto area = fp3d_compositor::viewport_pixels();
     if( area[2] <= font->width * 4 || area[3] <= font->height * 4 ) { return; }
     constexpr unsigned char fp3d_ui_yellow = 11; // YELLOW in data/raw/colors.json
@@ -1176,34 +1178,136 @@ static void draw_fp3d_hud()
     const int effect_height = effect_count * effect_row_height;
     const int health_height = std::min( health_preferred_height,
                                        std::max( 90, status_y - top - mini - 2 * pad - effect_height ) );
+    // One reusable transparent layer scales text, icons and borders together.
+    static SDL_Texture_Ptr panel_layer;
+    static int layer_width = 0;
+    static int layer_height = 0;
+    int output_width = 0;
+    int output_height = 0;
+    SDL_GetRendererOutputSize( renderer.get(), &output_width, &output_height );
+    if( !panel_layer || layer_width != output_width || layer_height != output_height ) {
+        panel_layer.reset( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
+                                             SDL_TEXTUREACCESS_TARGET, output_width, output_height ) );
+        layer_width = output_width;
+        layer_height = output_height;
+        if( panel_layer ) {
+            SDL_SetTextureBlendMode( panel_layer.get(), SDL_BLENDMODE_BLEND );
+            SDL_SetTextureScaleMode( panel_layer.get(), SDL_ScaleModeLinear );
+        }
+    }
+    if( !panel_layer ) {
+        SDL_RenderSetClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
+        SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );
+        SDL_SetRenderDrawBlendMode( renderer.get(), blend );
+        return;
+    }
+    SDL_Texture *const hud_target = SDL_GetRenderTarget( renderer.get() );
+    SDL_Rect hud_viewport;
+    SDL_RenderGetViewport( renderer.get(), &hud_viewport );
+    float hud_scale_x = 1.0f;
+    float hud_scale_y = 1.0f;
+    SDL_RenderGetScale( renderer.get(), &hud_scale_x, &hud_scale_y );
+    SDL_Rect panel_source{};
+    bool panel_scaled = false;
+    fp3d_regression::turn_probe panel_probe( "hud_panel_layout" );
+    int panel_index = 0;
+    const char *const panel_names[] = { "hud_map", "hud_body", "hud_effects", "hud_compass",
+                                      "hud_hotbar", "hud_status", "hud_log", "hud_mission",
+                                      "hud_time", "hud_extra" };
+    const auto panel_size = [&]( int width, int height, const char *option ) {
+        const float requested = get_option<int>( option ) / 100.0f;
+        const float scale = std::min( { requested, ( area[2] - 2.0f * pad ) / width,
+                                       ( area[3] - 2.0f * pad ) / height } );
+        return point( std::max( 1, static_cast<int>( std::round( width * scale ) ) ),
+                      std::max( 1, static_cast<int>( std::round( height * scale ) ) ) );
+    };
+    const auto begin_panel = [&]( const SDL_Rect &source, const SDL_Rect &destination ) {
+        panel_probe.stage( "hud_target_switch" );
+        panel_source = source;
+        panel_scaled = source.x != destination.x || source.y != destination.y ||
+                       source.w != destination.w || source.h != destination.h;
+        if( !panel_scaled ) {
+            SDL_RenderSetClipRect( renderer.get(), &source );
+            panel_probe.stage( panel_names[std::min( panel_index++, 9 )] );
+            return;
+        }
+        SDL_SetRenderTarget( renderer.get(), panel_layer.get() );
+        SDL_RenderSetViewport( renderer.get(), nullptr );
+        SDL_RenderSetScale( renderer.get(), hud_scale_x, hud_scale_y );
+        SDL_RenderSetClipRect( renderer.get(), &source );
+        SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_NONE );
+        SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 0 );
+        SDL_RenderFillRect( renderer.get(), &source );
+        SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_BLEND );
+        panel_probe.stage( panel_names[std::min( panel_index++, 9 )] );
+    };
+    const auto end_panel = [&]( const SDL_Rect &destination ) {
+        panel_probe.stage( "hud_target_composite" );
+        if( !panel_scaled ) {
+            SDL_RenderSetClipRect( renderer.get(), &clip );
+            return;
+        }
+        SDL_SetRenderTarget( renderer.get(), hud_target );
+        SDL_RenderSetViewport( renderer.get(), &hud_viewport );
+        SDL_RenderSetScale( renderer.get(), hud_scale_x, hud_scale_y );
+        SDL_RenderSetClipRect( renderer.get(), &clip );
+        SDL_RenderCopy( renderer.get(), panel_layer.get(), &panel_source, &destination );
+    };
+    const point hotbar_size = panel_size( hotbar_width, slot_size, "FP3D_HUD_HOTBAR_SCALE" );
+    const SDL_Rect hotbar_dest{ area[0] + ( area[2] - hotbar_size.x ) / 2,
+                               bottom - hotbar_size.y, hotbar_size.x, hotbar_size.y };
+    const point status_size = panel_size( left_width, panel_h, "FP3D_HUD_STATUS_SCALE" );
+    const SDL_Rect status_dest{ area[0] + pad, hotbar_dest.y - pad - status_size.y,
+                               status_size.x, status_size.y };
+    const point map_size = panel_size( mini, mini, "FP3D_HUD_MAP_SCALE" );
+    const SDL_Rect map_dest{ area[0] + pad, top, map_size.x, map_size.y };
     SDL_Rect map_box{ area[0] + pad, top, mini, mini };
+    begin_panel( map_box, map_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 205 );
     SDL_RenderFillRect( renderer.get(), &map_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
     SDL_RenderDrawRect( renderer.get(), &map_box );
     if( tilecontext && g ) {
+        // QA: the minimap re-renders native tiles into the display buffer every
+        // frame; keep it separately measurable from the rest of the panels.
+        const Uint64 fp3d_minimap_started = SDL_GetPerformanceCounter();
         // The minimap may render a smaller clipped texture when scale-to-fit is disabled.
         // Clear the whole source area first so uncovered pixels do not copy the 3D scene.
         SDL_SetRenderTarget( renderer.get(), display_buffer.get() );
         SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 255 );
         SDL_RenderFillRect( renderer.get(), &map_box );
-        SDL_SetRenderTarget( renderer.get(), nullptr );
+        // Native minimap drawing selects its own cache targets and then the
+        // display buffer; selecting the HUD target here would submit no drawing.
         tilecontext->draw_minimap( point( map_box.x, map_box.y ),
                                    tripoint_bub_ms( get_avatar().pos_bub( get_map() ).xy(), g->ter_view_p.z() ),
                                    map_box.w, map_box.h );
         // The vanilla minimap restores the game display buffer as its render target.
         // HUD drawing runs after the buffer has already been copied to the window.
-        SDL_SetRenderTarget( renderer.get(), nullptr );
-        SDL_RenderSetClipRect( renderer.get(), &clip );
+        SDL_SetRenderTarget( renderer.get(), panel_scaled ? panel_layer.get() : hud_target );
+        SDL_RenderSetClipRect( renderer.get(), &map_box );
         if( display_buffer ) {
             SDL_RenderCopy( renderer.get(), display_buffer.get(), &map_box, &map_box );
         }
         SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
         SDL_RenderDrawRect( renderer.get(), &map_box );
+        fp3d_regression::stage_sample( "hud_minimap",
+                                       ( SDL_GetPerformanceCounter() - fp3d_minimap_started ) * 1000.0 /
+                                       SDL_GetPerformanceFrequency() );
     }
 
+    end_panel( map_dest );
     const int body_y = map_box.y + map_box.h + pad;
-    draw_fp3d_body_health( hud, SDL_Rect{ map_box.x, body_y, mini, health_height }, pad );
+    const SDL_Rect body_box{ map_box.x, body_y, mini, health_height };
+    const point body_size = panel_size( mini, health_height, "FP3D_HUD_BODY_SCALE" );
+    const SDL_Rect body_dest{ map_dest.x, map_dest.y + map_dest.h + pad, body_size.x, body_size.y };
+    begin_panel( body_box, body_dest );
+    draw_fp3d_body_health( hud, body_box, pad );
+    end_panel( body_dest );
+    const SDL_Rect effects_box{ map_box.x, body_y + health_height, mini,
+                               std::max( effect_row_height, effect_height ) };
+    const point effects_size = panel_size( effects_box.w, effects_box.h, "FP3D_HUD_EFFECTS_SCALE" );
+    const SDL_Rect effects_dest{ body_dest.x, body_dest.y + body_dest.h, effects_size.x, effects_size.y };
+    begin_panel( effects_box, effects_dest );
     // Actual player effects, vertical below the body-health silhouette.
     // Missing artwork from the selected pack is simply skipped.
     int effect_y = body_y + health_height;
@@ -1231,9 +1335,14 @@ static void draw_fp3d_hud()
         effect_y += effect_row_height;
     }
 
+    end_panel( effects_dest );
     const int compass_width = std::min( area[2] - 2 * pad, 34 * font->width );
     const int compass_x = area[0] + ( area[2] - compass_width ) / 2;
     SDL_Rect compass_box{ compass_x, top, compass_width, font->height * 3 + 2 * pad };
+    const point compass_size = panel_size( compass_box.w, compass_box.h, "FP3D_HUD_COMPASS_SCALE" );
+    const SDL_Rect compass_dest{ area[0] + ( area[2] - compass_size.x ) / 2, top,
+                                compass_size.x, compass_size.y };
+    begin_panel( compass_box, compass_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 175 );
     SDL_RenderFillRect( renderer.get(), &compass_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
@@ -1291,6 +1400,8 @@ static void draw_fp3d_hud()
                             marker_x + arm, marker_y - arm );
     }
 
+    end_panel( compass_dest );
+    begin_panel( SDL_Rect{ hotbar_x, hotbar_y, hotbar_width, slot_size }, hotbar_dest );
     for( int i = 0; i < 8; ++i ) {
         SDL_Rect slot{ hotbar_x + i * ( slot_size + slot_gap ), hotbar_y, slot_size, slot_size };
         const bool active_slot = i == hud.active_slot;
@@ -1323,7 +1434,9 @@ static void draw_fp3d_hud()
         }
     }
 
+    end_panel( hotbar_dest );
     SDL_Rect status_box{ area[0] + pad, status_y, left_width, panel_h };
+    begin_panel( status_box, status_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
     SDL_RenderFillRect( renderer.get(), &status_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
@@ -1354,15 +1467,30 @@ static void draw_fp3d_hud()
                      point( value_x, y ), static_cast<unsigned char>( palette_index ) );
     }
 
-    const int log_x = status_box.x + status_box.w + pad;
-    SDL_Rect log_box{ log_x, status_box.y, std::max( 0, area[0] + area[2] - pad - log_x ), status_box.h };
+    end_panel( status_dest );
+    const int log_x = status_dest.x + status_dest.w + pad;
+    const int log_available = std::max( 1, area[0] + area[2] - pad - log_x );
+    const int default_log_width = std::max( 1, area[2] - left_width - 3 * pad );
+    const float requested_log_scale = get_option<int>( "FP3D_HUD_LOG_SCALE" ) / 100.0f;
+    const point log_size( static_cast<int>( std::round( default_log_width * requested_log_scale ) ),
+                          static_cast<int>( std::round( panel_h * requested_log_scale ) ) );
+    const SDL_Rect log_dest{ log_x, hotbar_dest.y - pad - log_size.y,
+                            std::min( log_available, log_size.x ), log_size.y };
+    // Wrap at the displayed width when a larger panel reaches the screen edge.
+    const float log_scale = static_cast<float>( log_size.y ) / panel_h;
+    SDL_Rect log_box{ requested_log_scale == 1.0f ? log_x : area[0] + pad,
+                     requested_log_scale == 1.0f ? log_dest.y : status_y,
+                     std::max( 1, static_cast<int>( log_dest.w / log_scale ) ), panel_h };
+    begin_panel( log_box, log_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 150 );
     SDL_RenderFillRect( renderer.get(), &log_box );
     SDL_SetRenderDrawColor( renderer.get(), 220, 220, 220, 185 );
     SDL_RenderDrawRect( renderer.get(), &log_box );
     int y = log_box.y + pad;
-    for( const auto &message : hud.messages ) {
-        if( y + font->height > log_box.y + log_box.h ) { break; }
+    const auto log_rows = fp3d_hud::message_rows( hud.messages,
+                          ( log_box.w - 2 * pad ) / font->width,
+                          ( log_box.h - 2 * pad ) / font->height );
+    for( const auto &message : log_rows ) {
         const auto &pair = cata_cursesport::colorpairs[message.color.to_color_pair_index()];
         int palette_index = pair.FG != 0 ? pair.FG : pair.BG;
         if( message.color.is_bold() ) {
@@ -1373,7 +1501,12 @@ static void draw_fp3d_hud()
                      point( log_box.x + pad, y ), static_cast<unsigned char>( palette_index ) );
         y += font->height;
     }
+    end_panel( log_dest );
     SDL_Rect mission_box{ area[0] + area[2] - right_width - pad, top, right_width, font->height * 2 + 2 * pad };
+    const point mission_size = panel_size( mission_box.w, mission_box.h, "FP3D_HUD_MISSION_SCALE" );
+    const SDL_Rect mission_dest{ area[0] + area[2] - pad - mission_size.x, top,
+                                mission_size.x, mission_size.y };
+    begin_panel( mission_box, mission_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
     SDL_RenderFillRect( renderer.get(), &mission_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
@@ -1384,8 +1517,13 @@ static void draw_fp3d_hud()
                      point( mission_box.x + pad, mission_box.y + pad + font->height ), fp3d_ui_white );
     }
 
+    end_panel( mission_dest );
     SDL_Rect time_box{ compass_x, compass_box.y + compass_box.h + pad, compass_width,
                        font->height * 2 + 2 * pad };
+    const point time_size = panel_size( time_box.w, time_box.h, "FP3D_HUD_TIME_SCALE" );
+    const SDL_Rect time_dest{ area[0] + ( area[2] - time_size.x ) / 2,
+                             compass_dest.y + compass_dest.h + pad, time_size.x, time_size.y };
+    begin_panel( time_box, time_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 185 );
     SDL_RenderFillRect( renderer.get(), &time_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
@@ -1395,6 +1533,7 @@ static void draw_fp3d_hud()
     draw_string( *font, renderer, geometry, utf8_truncate( "温度 " + hud.temperature,
                  ( time_box.w - 2 * pad ) / font->width ),
                  point( time_box.x + pad, time_box.y + pad + font->height ), fp3d_ui_yellow );
+    end_panel( time_dest );
     const auto &details = fp3d_compositor::target_details();
     const int look_y = time_box.y + time_box.h + pad;
     const int columns = ( time_box.w - 2 * pad ) / font->width;
@@ -1418,6 +1557,10 @@ static void draw_fp3d_hud()
         }
         SDL_Rect look_box{ time_box.x, look_y, time_box.w,
                            static_cast<int>( rows.size() ) * font->height + 2 * pad };
+        const point look_size = panel_size( look_box.w, look_box.h, "FP3D_HUD_TARGET_SCALE" );
+        const SDL_Rect look_dest{ area[0] + ( area[2] - look_size.x ) / 2,
+                                 time_dest.y + time_dest.h + pad, look_size.x, look_size.y };
+        begin_panel( look_box, look_dest );
         SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
         SDL_RenderFillRect( renderer.get(), &look_box );
         SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
@@ -1432,6 +1575,7 @@ static void draw_fp3d_hud()
                          point( look_box.x + pad, row_y ), std::clamp( color, 1, 15 ) );
             row_y += font->height;
         }
+        end_panel( look_dest );
     }
     SDL_RenderSetClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
     SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );

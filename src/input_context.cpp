@@ -478,6 +478,8 @@ const std::string &input_context::handle_input( const int timeout )
             // dispatcher one plain secondary select, which opens the same dropdown
             // modern 2D uses on the picked tile.
             if( fp3d_compositor::take_secondary_select( &next_action.mouse_pos ) ) {
+                next_action.type = input_event_t::mouse;
+                next_action.sequence = { static_cast<int>( MouseInput::RightButtonPressed ) };
                 next_action.text = action_ident( ACTION_SEC_SELECT );
                 result = &next_action.text;
                 break;
@@ -491,6 +493,19 @@ const std::string &input_context::handle_input( const int timeout )
         }
 #endif
         next_action = inp_mngr.get_input_event( preferred_keyboard_mode );
+#if defined(ENABLE_FP3D)
+        // SDL consumes the physical right-click while polling. Dispatch it
+        // before handling timeouts or another event from the same poll batch.
+        if( !nonblocking && category == "DEFAULTMODE" &&
+            fp3d_compositor::captures_game_input() &&
+            fp3d_compositor::take_secondary_select( &next_action.mouse_pos ) ) {
+            next_action.type = input_event_t::mouse;
+            next_action.sequence = { static_cast<int>( MouseInput::RightButtonPressed ) };
+            next_action.text = action_ident( ACTION_SEC_SELECT );
+            result = &next_action.text;
+            break;
+        }
+#endif
 #if defined(ENABLE_FP3D)
         if( !nonblocking && category == "DEFAULTMODE" && fp3d_compositor::turn_based() && next_action.type == input_event_t::timeout ) {
             continue; // Display/input polling never submits a native wait action.

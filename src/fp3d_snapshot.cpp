@@ -31,6 +31,7 @@
 #include "field_type.h"
 #include "effect.h"
 #include "fp3d_camera.h"
+#include "fp3d_ramp.h"
 #include "item.h"
 #include "item_location.h"
 #include "itype.h"
@@ -49,18 +50,72 @@
 
 namespace fp3d_snapshot
 {
+void connect_ground_terrain( scene_snapshot &scene )
+{
+    std::unordered_map<tripoint_abs_ms, const cell *> ground;
+    for( auto &tile : scene.cells ) {
+        tile.ground_connections = -1;
+        if( tile.kind != terrain_kind::floor || !tile.floor_present || tile.is_ramp ) { continue; }
+        for( const char *prefix : { "t_grass", "t_dirt", "t_sand", "t_clay", "t_moss", "t_gravel" } ) {
+            if( tile.terrain.compare( 0, std::char_traits<char>::length( prefix ), prefix ) == 0 ) {
+                ground.emplace( tile.position, &tile );
+                tile.ground_connections = 0;
+                break;
+            }
+        }
+    }
+    const std::array<tripoint_rel_ms, 4> dirs{ tripoint_rel_ms::south,
+        tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
+    for( auto &tile : scene.cells ) {
+        if( tile.ground_connections < 0 ) { continue; }
+        for( unsigned i = 0; i < dirs.size(); ++i ) {
+            const auto neighbour = ground.find( tile.position + dirs[i] );
+            if( neighbour != ground.end() && neighbour->second->terrain == tile.terrain ) {
+                tile.ground_connections |= 1 << i;
+            }
+        }
+    }
+}
+
+void connect_ground_fields( scene_snapshot &scene )
+{
+    std::unordered_map<tripoint_abs_ms, const cell *> coverings;
+    for( const auto &tile : scene.cells ) {
+        if( tile.known == knowledge::visible && !tile.ground_fields.empty() ) {
+            coverings.emplace( tile.position, &tile );
+        }
+    }
+    const std::array<tripoint_rel_ms, 4> dirs{ tripoint_rel_ms::south,
+        tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
+    for( auto &tile : scene.cells ) {
+        for( auto &field : tile.ground_fields ) {
+            field.connections = 0;
+            if( tile.known != knowledge::visible ) { continue; }
+            for( unsigned i = 0; i < dirs.size(); ++i ) {
+                const auto neighbour = coverings.find( tile.position + dirs[i] );
+                if( neighbour != coverings.end() &&
+                    std::any_of( neighbour->second->ground_fields.begin(),
+                                 neighbour->second->ground_fields.end(),
+                [&]( const ground_field &other ) { return other.id == field.id; } ) ) {
+                    field.connections |= 1 << i;
+                }
+            }
+        }
+    }
+}
+
 void reuse_geometry( scene_snapshot &scene, scene_snapshot *previous )
 {
     const auto equal = []( const cell &a, const cell &b ) {
-        if( std::tie( a.position, a.terrain, a.roof_connections, a.kind, a.known,
+        if( std::tie( a.position, a.terrain, a.roof_connections, a.ground_connections, a.kind, a.known,
                      a.vegetation, a.appliance, a.vegetation_height, a.pane, a.exterior_only,
-                     a.ceiling_present, a.glass_ceiling, a.ceiling_surface, a.floor_present,
-                     a.metal_deck_railing, a.open_air, a.goes_up, a.goes_down, a.is_ramp,
+                     a.ceiling_present, a.cutaway_ceiling, a.glass_ceiling, a.ceiling_surface, a.floor_present,
+                     a.metal_deck_railing, a.faded_tower, a.open_air, a.goes_up, a.goes_down, a.is_ramp,
                      a.ramp_delta, a.over_avatar_region ) !=
-            std::tie( b.position, b.terrain, b.roof_connections, b.kind, b.known,
+            std::tie( b.position, b.terrain, b.roof_connections, b.ground_connections, b.kind, b.known,
                      b.vegetation, b.appliance, b.vegetation_height, b.pane, b.exterior_only,
-                     b.ceiling_present, b.glass_ceiling, b.ceiling_surface, b.floor_present,
-                     b.metal_deck_railing, b.open_air, b.goes_up, b.goes_down, b.is_ramp,
+                     b.ceiling_present, b.cutaway_ceiling, b.glass_ceiling, b.ceiling_surface, b.floor_present,
+                     b.metal_deck_railing, b.faded_tower, b.open_air, b.goes_up, b.goes_down, b.is_ramp,
                      b.ramp_delta, b.over_avatar_region ) ||
             bool( a.furniture ) != bool( b.furniture ) || bool( a.stairs ) != bool( b.stairs ) ) {
             return false;
@@ -72,7 +127,7 @@ void reuse_geometry( scene_snapshot &scene, scene_snapshot *previous )
         return a.ground_fields.size() == b.ground_fields.size() &&
                std::equal( a.ground_fields.begin(), a.ground_fields.end(), b.ground_fields.begin(),
         []( const ground_field &x, const ground_field &y ) {
-            return x.id == y.id && x.intensity == y.intensity;
+            return x.id == y.id && x.intensity == y.intensity && x.connections == y.connections;
         } );
     };
     scene.geometry_generation = scene.render_generation;
@@ -368,6 +423,23 @@ void capture_landscape( scene_snapshot &scene )
 
 float plant_height( const std::string &id )
 {
+    // These native plants do not all carry the FLOWER or SHRUB flag.
+    if( id == "f_brambles" ) {
+        return 1.2f;
+    }
+    if( id == "f_cattails" || id == "f_kelp_sugar" || id == "f_sunflower" ) {
+        return .85f;
+    }
+    if( id == "f_datura" ) {
+        return .5f;
+    }
+    if( id == "f_algae_green" || id == "f_algae_red" ||
+        id == "f_bladderwrack" || id == "f_sea_lettuce" ) {
+        return .35f;
+    }
+    if( id == "f_lilypad" ) {
+        return 0.f; // The renderer lays the tile flat on the surface.
+    }
     // UndeadPeople f_midden is a tangled triffid organic bush. Never create
     // a fake solid cylindrical machine from its vegetation-style sprite.
     if( id == "f_midden" || id == "f_alien_anemone" ||
@@ -520,7 +592,10 @@ sprite describe_creature( const Creature &critter, const avatar &you, const map 
     // effect ID. The pack-only temp/morale_wet art stays dormant unless an
     // optional mod actually registers that effect. Urgent effects come first;
     // four displayed badges per creature avoid long ribbons across the world.
-    static constexpr const char *extra_effects_by_priority[] = {
+    if( active_effects.empty() ) { return image; }
+    // Keep lookup keys owned once, instead of constructing a temporary string
+    // for every effect probe on every creature in every snapshot.
+    static const std::string extra_effects_by_priority[] = {
         "onfire",
         "attention",
         "stunned",
@@ -575,7 +650,7 @@ sprite describe_creature( const Creature &critter, const avatar &you, const map 
     };
     const unsigned reserved = static_cast<unsigned>( image.alerted ) +
                               static_cast<unsigned>( image.bleeding );
-    for( const char *id : extra_effects_by_priority ) {
+    for( const std::string &id : extra_effects_by_priority ) {
         if( reserved + image.status_icons.size() >= 4 ) {
             break;
         }
@@ -635,6 +710,21 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
         }
     }
     const auto tile = here.maptile_at( p );
+    for( const auto &entry : tile.get_field() ) {
+        const std::string &id = entry.first.id().str();
+        const bool smoke = id == "fd_smoke";
+        if( ( smoke || id == "fd_fire" || id == "fd_flame_burst" || id == "fd_fire_FAKE" ) &&
+            entry.first->display_field && entry.second.is_field_alive() ) {
+            sprite image;
+            image.position = here.get_abs( p );
+            image.kind = sprite_kind::field;
+            image.id = id;
+            image.field_intensity = entry.second.get_field_intensity();
+            image.height = ( smoke ? .95f : .75f ) + .15f * image.field_intensity;
+            image.elevation = smoke ? .45f : 0.f;
+            scene.sprites.push_back( std::move( image ) );
+        }
+    }
     // Most visible cells contain no items. Avoid field/container queries there.
     if( tile.get_item_count() > 0 && tile.get_field().displayed_field_type()->display_items &&
         here.could_see_items( p, you ) ) {
@@ -1031,6 +1121,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     const bool blind = you.is_blind();
     camera_geometry = camera_geometry && !blind;
     scene_snapshot result;
+    result.camera_geometry = camera_geometry;
     result.origin = you.pos_abs();
     result.player_crouching = you.is_crouching();
     // The player's discrete map cell is for CDDA collision/interactions,
@@ -1123,6 +1214,40 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     constexpr unsigned char air_bit = 2;
     const int first_x = camera_geometry ? -1 : player.x() - radius - 1;
     const int first_y = camera_geometry ? -1 : player.y() - radius - 1;
+    std::unordered_set<tripoint_bub_ms> tower;
+    if( cut_overhead && camera_geometry && result.max_z > player.z() ) {
+        // Open towers have no indoor room to use for the cutaway. Follow the
+        // connected decks from the avatar or the platform directly above the base.
+        const auto tower_omt = project_to<coords::omt>( result.origin ).xy();
+        std::vector<tripoint_bub_ms> pending;
+        bool has_lattice = false;
+        const auto enqueue = [&]( const tripoint_bub_ms &p ) {
+            if( p.z() > result.max_z || !here.inbounds( p ) || tower.count( p ) ||
+                project_to<coords::omt>( here.get_abs( p ) ).xy() != tower_omt ) {
+                return;
+            }
+            const std::string &id = here.ter( p ).id().str();
+            if( id == "t_radio_tower" || id == "t_metal_floor_no_roof" || id == "t_floor_metal_gangway" ||
+                id == "t_railing" || id == "t_ladder_up" || id == "t_ladder_up_down" ||
+                id == "t_ladder_down" ) {
+                has_lattice |= id == "t_radio_tower";
+                tower.insert( p );
+                pending.push_back( p );
+            }
+        };
+        enqueue( player );
+        enqueue( player + tripoint_rel_ms::above );
+        for( size_t i = 0; i < pending.size(); ++i ) {
+            const tripoint_bub_ms p = pending[i];
+            for( const auto &dir : { tripoint_rel_ms::north, tripoint_rel_ms::east,
+                     tripoint_rel_ms::south, tripoint_rel_ms::west, tripoint_rel_ms::above } ) {
+                enqueue( p + dir );
+            }
+        }
+        if( !has_lattice ) {
+            tower.clear();
+        }
+    }
     std::vector<unsigned char> perception( ( result.max_z - result.min_z + 1 ) * side * side );
     const auto index = [&]( const tripoint_bub_ms & p ) {
         return ( ( p.z() - result.min_z ) * side + p.y() - first_y ) * side + p.x() - first_x;
@@ -1177,10 +1302,11 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     // data at the avatar's own storey is read; nothing here widens perception.
     std::vector<unsigned char> avatar_region;
     const auto region_index = [&]( const int x, const int y ) {
-        return ( player.z() - result.min_z ) * side * side + ( y - first_y ) * side + ( x - first_x );
+        return ( y - first_y ) * side + ( x - first_x );
     };
     if( ( fresh || camera_geometry ) && !blind && !here.is_outside( player ) ) {
-        avatar_region.assign( perception.size(), 0 );
+        // This mask describes columns above a region on the avatar's own storey.
+        avatar_region.assign( side * side, 0 );
         std::vector<tripoint_bub_ms> queue;
         queue.reserve( 256 );
         const auto in_grid = [&]( const tripoint_bub_ms &q ) {
@@ -1428,8 +1554,10 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     // The independent path contains several full storeys, rather than the
     // sparse native-visible cells. Avoid repeatedly moving the large cell
     // vector through doubling allocations on every step.
-    bool retaining = camera_geometry && previous && previous->geometry_generation &&
-                     previous->vehicles.empty() && result.vehicles.empty();
+    // Vehicles have their own live snapshot. Only their appliance projection
+    // affects these cells; resolve that projection before comparing each cell.
+    bool retaining = camera_geometry && previous && previous->camera_geometry &&
+                     previous->geometry_generation;
     size_t retained_cells = 0;
     if( !retaining ) { result.cells.reserve( camera_geometry ? ( side - 2 ) * ( side - 2 ) *
                           std::min( 4, result.max_z - result.min_z + 1 ) :
@@ -1454,10 +1582,15 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     // Definition templates live for one capture only. All map contents and
     // fields are still read this turn; no door/edit invalidation is required.
     std::unordered_map<std::uint64_t, cell> camera_templates;
+    // Unchanged field cells only need comparison, not another allocation.
+    // Transfer this scratch buffer only when a new cell must own its fields.
+    std::vector<ground_field> ground_fields;
     for( int z = result.min_z; z <= result.max_z; ++z ) {
         const auto &cache = here.access_cache( z );
         for( int y = first_y + 1; y < first_y + side - 1; ++y ) {
             const int dy = y - player.y();
+            const submap *camera_submap = nullptr;
+            int camera_submap_end_x = -1;
             for( int x = first_x + 1; x < first_x + side - 1; ++x ) {
                 const int dx = x - player.x();
                 const tripoint_bub_ms p = player + tripoint_rel_ms( dx, dy, z - player.z() );
@@ -1465,11 +1598,12 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     continue;
                 }
                 const bool region_column = over_avatar_region( p );
+                const bool upper_tower = !tower.empty() && p.z() > player.z() && tower.count( p );
                 // P3: the overhead camera looks down through the avatar's own
                 // roof. Dropping that geometry IS the cut: this path never adds
                 // a cell, never reads an unseen storey and never reveals an
                 // interior that the avatar's own perception did not produce.
-                if( cut_overhead && region_column && p.z() > player.z() ) {
+                if( cut_overhead && region_column && p.z() > player.z() && !upper_tower ) {
                     continue;
                 }
                 // Native perception still gates actors and nearby actions.
@@ -1478,7 +1612,16 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 const bool native_visible = perception[index( p )] & visible_bit;
                 const bool visible = camera_geometry || native_visible;
                 if( camera_geometry ) {
-                    const ter_id terrain = here.ter( p );
+                    // This synchronous capture only reads the loaded map. A
+                    // row stays in the same submap for SEEX consecutive cells;
+                    // resolve it once, then share it for terrain/furniture/fields.
+                    // The bounds check above makes these local offsets positive.
+                    if( x >= camera_submap_end_x ) {
+                        camera_submap = here.maptile_at( p ).wrapped_submap();
+                        camera_submap_end_x = x + SEEX - x % SEEX;
+                    }
+                    const point_sm_ms local( x % SEEX, y % SEEY );
+                    const ter_id terrain = camera_submap ? camera_submap->get_ter( local ) : here.ter( p );
                     const ter_t &definition = terrain.obj();
                     if( native_visible ) {
                         const auto creature = creatures.find( p );
@@ -1498,7 +1641,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     if( definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR ) || terrain == ter_id() ) {
                         continue;
                     }
-                    const furn_id furniture = here.furn( p );
+                    const furn_id furniture = camera_submap ? camera_submap->get_furn( local ) : here.furn( p );
                     const furn_t &furn_definition = furniture.obj();
                     const std::uint64_t key = static_cast<std::uint64_t>( terrain.to_i() ) << 32 |
                                               static_cast<unsigned>( furniture.to_i() );
@@ -1512,11 +1655,13 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                                              !furn_definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR_WATER );
                         base.goes_up = definition.has_flag( ter_furn_flag::TFLAG_GOES_UP );
                         base.goes_down = definition.has_flag( ter_furn_flag::TFLAG_GOES_DOWN );
-                        base.is_ramp = definition.has_flag( ter_furn_flag::TFLAG_RAMP ) ||
+                        base.is_ramp = fp3d_ramp::paired( base.terrain ) ||
+                                       definition.has_flag( ter_furn_flag::TFLAG_RAMP ) ||
                                        definition.has_flag( ter_furn_flag::TFLAG_RAMP_UP ) ||
                                        definition.has_flag( ter_furn_flag::TFLAG_RAMP_DOWN );
                         base.ramp_delta = !base.is_ramp ? 0 :
-                                          definition.has_flag( ter_furn_flag::TFLAG_RAMP_DOWN ) ? -1 : 1;
+                                          ( definition.has_flag( ter_furn_flag::TFLAG_RAMP_DOWN ) ||
+                                          fp3d_ramp::downward( base.terrain ) ) ? -1 : 1;
                         if( base.kind == terrain_kind::window ) {
                             base.pane = !definition.has_flag( ter_furn_flag::TFLAG_TRANSPARENT ) ?
                                         window_pane::covered : definition.movecost > 0 ?
@@ -1528,24 +1673,43 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                             base.kind = terrain_kind::floor;
                         }
                         const std::string &furn = furniture.id().str();
-                        if( const float height = plant_height( furn ); height > 0 ) {
+                        if( const float height = plant_height( furn ); height > 0 || furn == "f_lilypad" ) {
                             base.vegetation = furn;
                             base.vegetation_height = height;
                         }
                         base.furniture = furniture_model( furn );
                     }
                     const cell &base = entry.first->second;
+                    const auto *projected_furniture = &base.furniture;
+                    const std::string *appliance = &base.appliance;
+                    if( !base.furniture && cache.get_veh_exists_at( p ) ) {
+                        const auto part = here.veh_at( p ).part_with_feature( VPFLAG_APPLIANCE, false );
+                        if( part ) {
+                            projected_furniture = &furniture_model( part->info().looks_like );
+                            if( *projected_furniture ) { appliance = &part->info().id.str(); }
+                        }
+                    }
                     const auto absolute = here.get_abs( p );
                     const bool floor = !here.supports_zlevels() || z < -OVERMAP_DEPTH + 1 || base.floor_present;
-                    const bool metal_railing = base.terrain == "t_railing" && floor && metal_rail( p );
+                    const bool metal_railing = base.terrain == "t_railing" && floor &&
+                                               ( upper_tower || metal_rail( p ) );
+                    // The camera cut removes upper geometry, but its opaque
+                    // boundary must still block sunlight and local lights.
+                    const auto overhead = p + tripoint_rel_ms::above;
+                    const bool cutaway_ceiling = cut_overhead && region_column &&
+                        p.z() == player.z() && here.inbounds( overhead ) && !tower.count( overhead ) &&
+                        here.has_floor( overhead ) &&
+                        here.ter( overhead ).id().str() != "t_radio_tower" &&
+                        !is_glass_roof( here.ter( overhead ).id().str() );
                     const int native_lum = std::max( definition.light_emitted, furn_definition.light_emitted );
                     if( native_lum > 0 ) {
                         result.lights.push_back( { absolute, light_kind::fixture,
                             static_cast<float>( native_lum ), furn_definition.light_emitted > 0 ? 1.6f : .4f,
                             furn_definition.light_emitted > 0 ? furniture.id().str() : base.terrain } );
                     }
-                    std::vector<ground_field> ground_fields;
-                    for( const auto &field : here.field_at( p ) ) {
+                    ground_fields.clear();
+                    const auto &fields = camera_submap ? camera_submap->get_field( local ) : here.field_at( p );
+                    for( const auto &field : fields ) {
                         const int lum = field.second.get_intensity_level().light_emitted;
                         const std::string &id = field.first.id().str();
                         if( lum > 0 ) {
@@ -1576,36 +1740,41 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     if( retaining ) {
                         const cell *old = retained_cells < previous->cells.size() ? &previous->cells[retained_cells] : nullptr;
                         const bool same = old && old->position == absolute && old->terrain == base.terrain &&
-                            old->kind == base.kind && old->known == knowledge::visible && !old->exterior_only &&
+                            old->kind == base.kind && !old->exterior_only &&
                             old->vegetation == base.vegetation && old->vegetation_height == base.vegetation_height &&
                             old->pane == base.pane && old->floor_present == floor && !old->ceiling_present &&
+                            old->cutaway_ceiling == cutaway_ceiling &&
+                            old->faded_tower == upper_tower &&
                             !old->open_air && old->metal_deck_railing == metal_railing &&
-                            old->over_avatar_region == region_column && old->appliance.empty() &&
+                            old->over_avatar_region == region_column && old->appliance == *appliance &&
                             old->goes_up == base.goes_up && old->goes_down == base.goes_down &&
                             old->is_ramp == base.is_ramp && old->ramp_delta == base.ramp_delta &&
-                            bool( old->furniture ) == bool( base.furniture ) &&
-                            ( !base.furniture || ( old->furniture->id == base.furniture->id &&
-                                                  old->furniture->shape == base.furniture->shape ) ) &&
+                            bool( old->furniture ) == bool( *projected_furniture ) &&
+                            ( !*projected_furniture || ( old->furniture->id == ( *projected_furniture )->id &&
+                                                        old->furniture->shape == ( *projected_furniture )->shape ) ) &&
                             old->ground_fields.size() == ground_fields.size() &&
                             std::equal( ground_fields.begin(), ground_fields.end(), old->ground_fields.begin(),
                             []( const ground_field &a, const ground_field &b ) { return a.id == b.id && a.intensity == b.intensity; } );
                         if( same ) { ++retained_cells; continue; }
-                        result.cells.assign( previous->cells.begin(), previous->cells.begin() + retained_cells );
+                        // A changed cell rules out retaining this geometry
+                        // revision. Transfer its buffer and unchanged prefix
+                        // instead of copying that prefix into a new allocation.
+                        result.cells = std::move( previous->cells );
+                        previous->geometry_generation = 0;
+                        result.cells.resize( retained_cells );
+                        for( auto &tile : result.cells ) { tile.known = knowledge::visible; }
                         retaining = false;
                     }
                     cell tile = base;
                     tile.position = absolute;
                     tile.floor_present = floor;
+                    tile.cutaway_ceiling = cutaway_ceiling;
                     tile.over_avatar_region = region_column;
                     tile.metal_deck_railing = metal_railing;
+                    tile.faded_tower = upper_tower;
                     tile.ground_fields = std::move( ground_fields );
-                    if( !tile.furniture && cache.get_veh_exists_at( p ) ) {
-                        const auto part = here.veh_at( p ).part_with_feature( VPFLAG_APPLIANCE, false );
-                        if( part ) {
-                            tile.furniture = furniture_model( part->info().looks_like );
-                            if( tile.furniture ) { tile.appliance = part->info().id.str(); }
-                        }
-                    }
+                    tile.furniture = *projected_furniture;
+                    tile.appliance = *appliance;
                     result.cells.push_back( std::move( tile ) );
                     continue;
                 }
@@ -1862,17 +2031,20 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 // The same cut removes only the overhead boundary of the
                 // avatar's own room; the walls, floor and contents stay.
                 if( cut_overhead && region_column ) {
+                    tile.cutaway_ceiling = tile.ceiling_present && !tile.glass_ceiling;
                     tile.ceiling_present = false;
                     tile.glass_ceiling = false;
                     tile.ceiling_surface.clear();
                 }
                 tile.goes_up = definition.has_flag( ter_furn_flag::TFLAG_GOES_UP );
                 tile.goes_down = definition.has_flag( ter_furn_flag::TFLAG_GOES_DOWN );
-                tile.is_ramp = definition.has_flag( ter_furn_flag::TFLAG_RAMP ) ||
+                tile.is_ramp = fp3d_ramp::paired( tile.terrain ) ||
+                               definition.has_flag( ter_furn_flag::TFLAG_RAMP ) ||
                                definition.has_flag( ter_furn_flag::TFLAG_RAMP_UP ) ||
                                definition.has_flag( ter_furn_flag::TFLAG_RAMP_DOWN );
                 tile.ramp_delta = !tile.is_ramp ? 0 :
-                                  definition.has_flag( ter_furn_flag::TFLAG_RAMP_DOWN ) ? -1 : 1;
+                                  ( definition.has_flag( ter_furn_flag::TFLAG_RAMP_DOWN ) ||
+                                  fp3d_ramp::downward( tile.terrain ) ) ? -1 : 1;
                 const auto presentation = terrain_presentations.try_emplace( tile.terrain );
                 if( presentation.second ) {
                     presentation.first->second = { classify( tile.terrain ), cached_plant_height( tile.terrain ) };
@@ -1899,7 +2071,8 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 const std::string furniture = tile.exterior_only ? "" : visible ?
                                               here.furn( p ).id().str() :
                                               memorized.at( tile.position ).get_dec_id();
-                if( const float height = cached_plant_height( furniture ); height > 0 ) {
+                if( const float height = cached_plant_height( furniture );
+                    height > 0 || furniture == "f_lilypad" ) {
                     tile.vegetation = furniture;
                     tile.vegetation_height = height;
                 }
@@ -1978,9 +2151,20 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
         if( retained_cells == previous->cells.size() ) {
             result.cells = std::move( previous->cells );
             result.geometry_generation = previous->geometry_generation;
+            // Keep the previous overhead mask in place until the fresh LOS
+            // pass can compare it directly. First person uses the live grid.
+            if( !cut_overhead ) {
+                for( auto &tile : result.cells ) {
+                    if( tile.known != knowledge::visible ) { result.geometry_generation = 0; }
+                    tile.known = knowledge::visible;
+                }
+            }
             result.stairs_connected = true;
         } else {
-            result.cells.assign( previous->cells.begin(), previous->cells.begin() + retained_cells );
+            result.cells = std::move( previous->cells );
+            previous->geometry_generation = 0;
+            result.cells.resize( retained_cells );
+            for( auto &tile : result.cells ) { tile.known = knowledge::visible; }
         }
     }
     // An orbit camera needs the exterior roof skin even where ground LOS
@@ -2037,17 +2221,19 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
             }
         }
     }
+    const bool retained_overhead_mask = cut_overhead && result.geometry_generation;
     // Native 2D gutter connections: south/east/west/north bits.
     for( auto &tile : result.cells ) {
         if( tile.terrain != "t_gutter" && tile.terrain != "t_gutter_drop" ) { continue; }
         const auto p = here.get_bub( tile.position );
         const std::array<tripoint_rel_ms, 4> dirs{ tripoint_rel_ms::south,
             tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
+        const int old_connections = tile.roof_connections;
         tile.roof_connections = 0;
         for( unsigned i = 0; i < dirs.size(); ++i ) {
             const auto q = p + dirs[i];
             std::string id;
-            if( tile.known == knowledge::visible && here.inbounds( q ) ) {
+            if( ( retained_overhead_mask || tile.known == knowledge::visible ) && here.inbounds( q ) ) {
                 id = here.ter( q ).id().str();
             } else {
                 id = memorized.at( here.get_abs( q ) ).get_ter_id();
@@ -2056,6 +2242,8 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 tile.roof_connections |= 1 << i;
             }
         }
+        // Boundary neighbors can change without changing any captured cell.
+        if( tile.roof_connections != old_connections ) { result.geometry_generation = 0; }
     }
     const auto detail_finished = std::chrono::steady_clock::now();
     if( !blind ) {
@@ -2103,6 +2291,16 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
         std::chrono::duration<double, std::milli>( finished - detail_finished ).count(),
         std::chrono::duration<double, std::milli>( perception_finished - perception_started ).count(),
         std::chrono::duration<double, std::milli>( detail_finished - perception_finished ).count() );
+    // A retained grid has identical positions, terrain and field contents. Its
+    // neighbor masks are already valid, including connections across chunks.
+    if( !result.geometry_generation ) {
+        if( retained_overhead_mask ) {
+            // Connections are computed for the live grid before orbit dimming.
+            for( auto &tile : result.cells ) { tile.known = knowledge::visible; }
+        }
+        connect_ground_terrain( result );
+        connect_ground_fields( result );
+    }
     if( !result.stairs_connected ) { connect_stairs( result ); }
     std::sort( result.weather.columns.begin(), result.weather.columns.end(), [&]( const auto &a, const auto &b ) {
         const auto left = a - result.origin;
@@ -2165,15 +2363,56 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below, bool
     return capture_impl( you, here, above, below, cut_overhead, false );
 }
 
+namespace
+{
+void apply_overhead_occlusion( scene_snapshot &scene, const avatar &you, const map &here )
+{
+    const auto player = you.pos_bub( here );
+    if( !here.inbounds( player ) ) { return; }
+    // Keep camera geometry and coarse distant scenery, regardless of map
+    // memory. Only physical occlusion dims a column; darkness, exploration
+    // state and the avatar's sight range must not erase the zoomed-out view.
+    const int side = here.getmapsize() * SEEX;
+    std::vector<signed char> columns( side * side, -1 );
+    scene.unknown.clear();
+    scene.visible = 0;
+    scene.remembered = 0;
+    for( auto &tile : scene.cells ) {
+        auto p = here.get_bub( tile.position );
+        if( !here.inbounds( p ) ) { continue; }
+        p = tripoint_bub_ms( p.x(), p.y(), player.z() );
+        auto &clear = columns[p.y() * side + p.x()];
+        if( clear < 0 ) {
+            // Unlimited range: a far square on an open road is not obstructed
+            // merely because it lies outside native 2D perception range.
+            clear = p == player || here.sees( player, p, -1 );
+        }
+        const auto known = clear ? knowledge::visible : knowledge::remembered;
+        // Obstruction can change without a terrain edit or camera movement.
+        if( tile.known != known ) { scene.geometry_generation = 0; }
+        tile.known = known;
+        if( clear ) {
+            ++scene.visible;
+        } else {
+            ++scene.remembered;
+        }
+    }
+}
+}
+
 scene_snapshot capture_camera( avatar &you, const map &here, int above, int below,
                                bool cut_overhead )
 {
-    return capture_impl( you, here, above, below, cut_overhead, true );
+    auto scene = capture_impl( you, here, above, below, cut_overhead, true );
+    if( cut_overhead ) { apply_overhead_occlusion( scene, you, here ); }
+    return scene;
 }
 scene_snapshot capture_camera_reusing( avatar &you, const map &here, scene_snapshot *previous,
                                        int above, int below, bool cut_overhead )
 {
-    return capture_impl( you, here, above, below, cut_overhead, true, previous );
+    auto scene = capture_impl( you, here, above, below, cut_overhead, true, previous );
+    if( cut_overhead ) { apply_overhead_occlusion( scene, you, here ); }
+    return scene;
 }
 } // namespace fp3d_snapshot
 #endif

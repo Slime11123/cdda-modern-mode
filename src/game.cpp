@@ -3438,6 +3438,63 @@ bool game::load( const save_t &name )
                         << "isolated_lamp=" << static_cast<int>( lab.isolated_fixture ) << "\n";
         }
     }
+    // QA only: park one real vehicle beside the avatar in a copy of the city
+    // benchmark world, so the movement benchmark exercises the vehicle path from
+    // a reproducible start. Off by default; the outcome is written next to the
+    // save so a run can be rejected if nothing was placed.
+    const char *city_vehicle = std::getenv( "CDDA_FP3D_PROVISION_CITY_VEHICLE" );
+    if( city_vehicle && std::string( city_vehicle ) == "1" &&
+        world_generator->active_world &&
+        world_generator->active_world->world_name == "FP3D_Dense_City_Benchmark" ) {
+        const tripoint_bub_ms avatar_pos = u.pos_bub();
+        const std::array<point, 8> spots = {{
+                point( 3, 0 ), point( -3, 0 ), point( 0, 3 ), point( 0, -3 ),
+                point( 3, 3 ), point( -3, 3 ), point( 3, -3 ), point( -3, -3 )
+            }};
+        tripoint_bub_ms spot;
+        bool found = false;
+        for( const point &offset : spots ) {
+            const tripoint_bub_ms candidate = avatar_pos + offset;
+            bool free = true;
+            for( int dx = -1; dx <= 1 && free; ++dx ) {
+                for( int dy = -1; dy <= 2 && free; ++dy ) {
+                    const tripoint_bub_ms tile = candidate + point( dx, dy );
+                    if( !here.inbounds( tile ) || here.veh_at( tile ) ||
+                        here.impassable( tile ) || here.has_furn( tile ) ) {
+                        free = false;
+                    }
+                }
+            }
+            if( free ) {
+                spot = candidate;
+                found = true;
+                break;
+            }
+        }
+        int placed = 0;
+        if( found ) {
+            for( int dx = -1; dx <= 1; ++dx ) {
+                for( int dy = -1; dy <= 2; ++dy ) {
+                    const tripoint_bub_ms tile = spot + point( dx, dy );
+                    here.ter_set( tile, ter_str_id( "t_pavement" ) );
+                    here.furn_set( tile, furn_str_id( "f_null" ) );
+                }
+            }
+            vehicle *car = here.add_vehicle( vproto_id( "car" ), spot, 0_degrees, -1, 0 );
+            placed = car ? static_cast<int>( car->part_count() ) : -1;
+            here.build_map_cache( spot.z() );
+        }
+        const bool persisted = found && placed > 0 && save();
+        std::ofstream vehicle_file( ( PATH_INFO::world_base_save_path() /
+                                      "CITY_PERF_VEHICLE_RESULT.txt" ).get_unrelative_path() );
+        if( vehicle_file ) {
+            vehicle_file << "found=" << static_cast<int>( found ) << "\n"
+                         << "placed_parts=" << placed << "\n"
+                         << "spot=" << spot.x() << "," << spot.y() << "," << spot.z() << "\n"
+                         << "avatar=" << avatar_pos.x() << "," << avatar_pos.y() << "," << avatar_pos.z() << "\n"
+                         << "saved=" << static_cast<int>( persisted ) << "\n";
+        }
+    }
     const char *light_diag = std::getenv( "CDDA_FP3D_LIGHT_DIAGNOSTICS" );
     if( light_diag && std::string( light_diag ) == "1" ) {
         std::ofstream file( "C:/Users/StickySlime/Documents/Codex/Projects/cdda3dproject/qa/LIGHT_LAB_DIAGNOSTICS.txt" );

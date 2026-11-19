@@ -3383,6 +3383,7 @@ bool game::handle_action()
                                     fp3d_compositor::take_secondary_select_target() :
                                     fp3d_compositor::pointer_tile();
                 if( !picked || !here.inbounds( here.get_bub( *picked ) ) ) {
+                    DebugLog( D_INFO, D_MAIN ) << "fp3d: overhead_context v4 dropped dispatch target";
                     return false;
                 }
                 mouse_target = here.get_bub( *picked );
@@ -3416,6 +3417,10 @@ bool game::handle_action()
                     // Same dropdown, same entries and the same native resolution
                     // as modern 2D; only the target source differs.
                     const auto choices = fp3d_interaction::context_2d_entries( *mouse_target, player_character, here );
+                    if( fp3d_compositor::overhead() ) {
+                        DebugLog( D_INFO, D_MAIN ) << "fp3d: overhead_context v4 menu target="
+                                                   << *mouse_target << ", entries=" << choices.size();
+                    }
                     // Nothing the native rules allow here: no menu to show.
                     if( choices.empty() ) { return false; }
                     const auto choice = fp3d_quick_menu::show_dropdown( choices, ctxt.get_raw_input().mouse_pos );
@@ -3472,6 +3477,7 @@ bool game::handle_action()
     int before_action_moves = player_character.get_moves();
 #if defined(ENABLE_FP3D)
     const tripoint_abs_ms fp3d_before = player_character.pos_abs();
+    fp3d_regression::action_started();
 #endif
 
     // These actions are allowed while deathcam is active. Registered in game::get_player_input

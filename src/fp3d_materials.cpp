@@ -187,6 +187,9 @@ bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot )
 
 std::string terrain_key( const fp3d_snapshot::cell &tile )
 {
+    if( tile.ground_connections >= 0 ) {
+        return "$ground:" + std::to_string( tile.ground_connections ) + ":" + tile.terrain;
+    }
     return tile.roof_connections < 0 ? tile.terrain :
            "$roof:" + std::to_string( tile.roof_connections ) + ":" + tile.terrain;
 }
@@ -338,6 +341,9 @@ std::string sprite_key( const fp3d_snapshot::sprite &image )
     };
     append( image.id );
     append( image.variant );
+    if( image.kind == fp3d_snapshot::sprite_kind::field ) {
+        append( std::to_string( image.field_intensity ) );
+    }
     if( image.kind == fp3d_snapshot::sprite_kind::item && image.multiple_items ) {
         append( "highlight_item" );
     }
@@ -444,7 +450,88 @@ std::string vehicle_key( const fp3d_vehicle::part_view &part )
 
 std::string ground_field_key( const fp3d_snapshot::ground_field &field )
 {
-    return "$field:" + field.id + "#" + std::to_string( field.intensity );
+    return "$field:" + field.id + "#" + std::to_string( field.intensity ) +
+           ":" + std::to_string( field.connections );
+}
+
+const tile_type *resolve_ground_field( const tileset &set,
+                                      const fp3d_snapshot::ground_field &field,
+                                      season_type season, int &rotation )
+{
+    static const std::array<const char *, 16> subtiles{
+        "unconnected", "end_piece", "end_piece", "corner",
+        "end_piece", "corner", "edge", "t_connection",
+        "end_piece", "edge", "corner", "t_connection",
+        "corner", "t_connection", "t_connection", "center" };
+    static const std::array<int, 16> rotations{ 0, 0, 1, 0, 3, 3, 1, 0,
+                                               2, 0, 1, 1, 2, 3, 2, 0 };
+    rotation = 0;
+    std::string name = field.id;
+    std::unordered_set<std::string> visited;
+    for( int tries = 0; tries < 10 && !name.empty() && visited.insert( name ).second;
+         ++tries ) {
+        for( const auto &candidate : { name + "_int" + std::to_string( field.intensity ), name } ) {
+            if( auto found = set.find_tile_type_by_season( candidate, season ) ) {
+                const tile_type &base = found->tile();
+                const int mask = field.connections & 15;
+                const std::string subtile = subtiles[mask];
+                if( base.multitile && std::find( base.available_subtiles.begin(),
+                                               base.available_subtiles.end(), subtile ) != base.available_subtiles.end() ) {
+                    if( auto connected = set.find_tile_type_by_season( candidate + "_" + subtile, season ) ) {
+                        rotation = connected->tile().rotates ? rotations[mask] : 0;
+                        return &connected->tile();
+                    }
+                }
+                return &base;
+            }
+        }
+        const field_type_str_id definition( name );
+        name = definition.is_valid() ? definition->looks_like : "";
+    }
+    return nullptr;
+}
+
+namespace
+{
+struct field_frame_source {
+    std::string key;
+    int sprite;
+    int ticks;
+};
+
+std::vector<field_frame_source> field_frame_sources( const fp3d_snapshot::sprite &image )
+{
+    int rotation = 0;
+    const tile_type *tile = selected ? resolve_ground_field( *selected,
+                            { image.id, image.field_intensity }, season, rotation ) : nullptr;
+    if( !tile ) {
+        return {};
+    }
+    const std::string key = sprite_key( image );
+    const auto &layer = tile->fg.get_weight() > 0 ? tile->fg : tile->bg;
+    std::vector<field_frame_source> frames;
+    if( tile->animated ) {
+        for( const auto &frame : layer ) {
+            if( !frame.obj.empty() && frame.obj.front() >= 0 ) {
+                frames.push_back( { key + ":" + std::to_string( frames.size() ),
+                                    frame.obj.front(), frame.weight } );
+            }
+        }
+    } else if( const auto *frame = layer.pick( stable_seed( image.id ) );
+               frame && !frame->empty() && frame->front() >= 0 ) {
+        frames.push_back( { key, frame->front(), 1 } );
+    }
+    return frames;
+}
+} // namespace
+
+std::vector<field_frame> field_animation( const fp3d_snapshot::sprite &image )
+{
+    std::vector<field_frame> result;
+    for( const auto &frame : field_frame_sources( image ) ) {
+        result.push_back( { frame.ticks, lookup( frame.key ) } );
+    }
+    return result;
 }
 
 void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview )
@@ -475,6 +562,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             std::string key = tile.terrain;
             const auto append = [&]( const std::string &value ) { key.push_back( 0 ); key += value; };
             append( std::to_string( tile.roof_connections ) );
+            append( std::to_string( tile.ground_connections ) );
             append( std::to_string( static_cast<unsigned>( tile.kind ) ) );
             append( tile.vegetation );
             append( tile.ceiling_surface );
@@ -500,6 +588,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool status = false; // Camera-facing badge using a native tileset icon.
         std::string field_id = {};
         int field_intensity = 1;
+        int field_connections = 0;
+        int field_sprite = -1;
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
@@ -531,6 +621,21 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
         for( const std::string &icon : image.status_icons ) {
             queue_status( icon );
+        }
+    }
+    std::unordered_set<std::string> prepared_fields;
+    for( const auto &image : scene.sprites ) {
+        if( image.kind == fp3d_snapshot::sprite_kind::field &&
+            prepared_fields.insert( sprite_key( image ) ).second ) {
+            for( const auto &frame : field_frame_sources( image ) ) {
+                if( pending.size() == max_slots ) {
+                    break;
+                }
+                request entry;
+                entry.key = frame.key;
+                entry.field_sprite = frame.sprite;
+                pending.push_back( std::move( entry ) );
+            }
         }
     }
     const auto prioritize_cell = [&]( const fp3d_snapshot::cell &tile ) {
@@ -578,6 +683,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 entry.field = true;
                 entry.field_id = field.id;
                 entry.field_intensity = field.intensity;
+                entry.field_connections = field.connections;
                 pending.push_back( std::move( entry ) );
             }
         }
@@ -715,7 +821,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
     }
     for( const auto &image : scene.sprites ) {
-        add( sprite_key( image ), &image );
+        if( image.kind != fp3d_snapshot::sprite_kind::field ) {
+            add( sprite_key( image ), &image );
+        }
     }
     if( pending.empty() ) {
         return;
@@ -750,11 +858,13 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
         const bool transparent = entry.image || entry.plant || entry.window || entry.field ||
+                                 entry.field_sprite >= 0 ||
                                  entry.fence || entry.vehicle || entry.status;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         SDL_RenderFillRect( renderer, &slot );
         const tile_type *tile = nullptr;
+        int field_rotation = 0;
         if( entry.vehicle ) {
             // Match CDDA's own vehicle sprite convention: vp_<vpart_id>.
             // Follow only the CURRENT selected tileset and native vpart
@@ -815,23 +925,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 tile = &found->tile();
             }
         } else if( entry.field ) {
-            std::string name = entry.field_id;
-            std::unordered_set<std::string> visited;
-            for( int tries = 0; tries < 10 && !name.empty() &&
-                 visited.insert( name ).second; ++tries ) {
-                // Match the native field intensity convention before base art.
-                if( auto found = selected->find_tile_type_by_season(
-                                     name + "_int" + std::to_string( entry.field_intensity ), season ) ) {
-                    tile = &found->tile();
-                    break;
-                }
-                if( auto found = selected->find_tile_type_by_season( name, season ) ) {
-                    tile = &found->tile();
-                    break;
-                }
-                const field_type_str_id definition( name );
-                name = definition.is_valid() ? definition->looks_like : "";
-            }
+            tile = resolve_ground_field( *selected,
+            { entry.field_id, entry.field_intensity, entry.field_connections }, season, field_rotation );
         } else {
             tile = entry.fence ? resolve_terrain( *selected, id.substr( 7 ), season ) :
                    entry.image ? nullptr : entry.furniture ?
@@ -848,10 +943,21 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
         int roof_rotation = 0;
         const bool roof_art = id.compare( 0, 6, "$roof:" ) == 0;
-        if( roof_art ) {
-            const auto separator = id.find( ':', 6 );
-            const int mask = std::stoi( id.substr( 6, separator - 6 ) ) & 15;
-            const std::string name = id.substr( separator + 1 );
+        const bool ground_art = id.compare( 0, 8, "$ground:" ) == 0;
+        if( roof_art || ground_art ) {
+            const std::size_t prefix = ground_art ? 8 : 6;
+            const auto separator = id.find( ':', prefix );
+            const int mask = std::stoi( id.substr( prefix, separator - prefix ) ) & 15;
+            std::string name = id.substr( separator + 1 );
+            if( ground_art ) {
+                // Additional tiles belong to the resolved native looks_like ID.
+                for( int jumps = 0; jumps < 10 && !name.empty(); ++jumps ) {
+                    if( selected->find_tile_type_by_season( name, season ) ) { break; }
+                    const ter_str_id definition( name );
+                    if( !definition.is_valid() ) { break; }
+                    name = definition->looks_like;
+                }
+            }
             static const std::array<const char *, 16> subtiles{
                 "unconnected", "end_piece", "end_piece", "corner",
                 "end_piece", "corner", "edge", "t_connection",
@@ -861,7 +967,10 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                                                        2, 0, 1, 1, 2, 3, 2, 0 };
             tile = resolve_terrain( *selected, name, season );
             if( auto connected = selected->find_tile_type_by_season(
-                    name + "_" + subtiles[mask], season ) ) {
+                    name + "_" + subtiles[mask], season ); connected &&
+                    ( roof_art || ( tile && tile->multitile &&
+                      std::find( tile->available_subtiles.begin(), tile->available_subtiles.end(),
+                                 subtiles[mask] ) != tile->available_subtiles.end() ) ) ) {
                 tile = &connected->tile();
                 roof_rotation = rotations[mask];
             }
@@ -869,20 +978,23 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         bool painted = false;
         if( tile ) {
             const auto sprites = choose_sprites( *tile, id );
-            if( ( !entry.plant && !entry.window && !entry.field && !entry.fence ) ||
+            if( ( !roof_art && !ground_art && !entry.plant && !entry.window && !entry.field && !entry.fence ) ||
                 ( entry.window && sprites.foreground < 0 ) ) {
                 painted = paint( sprites.background, slot );
             }
-            if( roof_art ) {
-                // No sprite padding between continuous roof-edge tiles.
+            if( roof_art || ground_art || entry.field ) {
+                // Connected ground, coverings and roof edges fill the tile without padding.
+                const int rotation = entry.field ? field_rotation : roof_rotation;
+                const unsigned seed = stable_seed( entry.field ? entry.field_id + ":" +
+                                                  std::to_string( entry.field_connections ) : id );
                 for( bool foreground : { false, true } ) {
-                    const auto *choices = ( foreground ? tile->fg : tile->bg ).pick( stable_seed( id ) );
+                    const auto *choices = ( foreground ? tile->fg : tile->bg ).pick( seed );
                     if( !choices || choices->empty() ) { continue; }
                     const int index = ( *choices )[choices->size() > 1 ?
-                                      roof_rotation % choices->size() : 0];
+                                      rotation % choices->size() : 0];
                     const texture *source = selected->get_tile( index );
                     if( source ) {
-                        const double angle = foreground && choices->size() == 1 ? -90.0 * roof_rotation : 0;
+                        const double angle = foreground && choices->size() == 1 ? -90.0 * rotation : 0;
                         painted = source->render_copy_ex( *renderer_owner, &slot,
                                   angle, nullptr, SDL_FLIP_NONE ) == 0 || painted;
                     }
@@ -893,6 +1005,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
         if( entry.image ) {
             painted = paint_sprite( *entry.image, slot );
+        }
+        if( entry.field_sprite >= 0 ) {
+            painted = paint( entry.field_sprite, slot );
         }
         if( painted && entry.status ) {
             // Native badges are positioned within a full creature-sized canvas.
@@ -969,7 +1084,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             DebugLog( D_INFO, D_MAIN ) << "fp3d: vehicle part missing in selected tileset: " << id;
             SDL_SetRenderDrawColor( renderer, 115, 122, 127, 255 );
             SDL_RenderFillRect( renderer, &slot );
-        } else if( !painted && entry.status ) {
+        } else if( !painted && ( entry.status || entry.field_sprite >= 0 ) ) {
             // A tileset can intentionally omit this marker: no magenta fallback.
         } else if( !painted && entry.plant ) {
             // Missing cutout vegetation must stay transparent. An opaque
@@ -1085,7 +1200,9 @@ std::optional<uv_rect> lookup( const std::string &id )
     }
     const float x = ( it->second % slots_per_row ) * slot_size;
     const float y = ( it->second / slots_per_row ) * slot_size;
-    const float inset = id.compare( 0, 6, "$roof:" ) == 0 ? .5f : 2.5f;
+    const float inset = ( id.compare( 0, 6, "$roof:" ) == 0 ||
+                          id.compare( 0, 7, "$field:" ) == 0 ||
+                          id.compare( 0, 8, "$ground:" ) == 0 ) ? .5f : 2.5f;
     return uv_rect{ ( x + inset ) / atlas_size * texture_width,
                     ( y + inset ) / atlas_size * texture_height,
                     ( x + slot_size - inset ) / atlas_size * texture_width,
@@ -1102,7 +1219,9 @@ std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
     // colour atlas: same per-material UVs across all three atlas textures.
     const float x = ( it->second % slots_per_row ) * slot_size;
     const float y = ( it->second / slots_per_row ) * slot_size;
-    const float inset = id.compare( 0, 6, "$roof:" ) == 0 ? .5f : 2.5f;
+    const float inset = ( id.compare( 0, 6, "$roof:" ) == 0 ||
+                          id.compare( 0, 7, "$field:" ) == 0 ||
+                          id.compare( 0, 8, "$ground:" ) == 0 ) ? .5f : 2.5f;
     return uv_rect{ ( x + inset ) / atlas_size * texture_width,
                     ( y + inset ) / atlas_size * texture_height,
                     ( x + slot_size - inset ) / atlas_size * texture_width,
@@ -1186,7 +1305,7 @@ unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
         if( dx > 32 || dz > 32 || std::abs( relative.z() ) > 3 ) {
             continue;
         }
-        const std::string &key = cell.terrain;
+        const std::string key = terrain_key( cell );
         if( slots.find( key ) == slots.end() ||
             auxiliary_cache.find( key ) != auxiliary_cache.end() ||
             !found.insert( key ).second ) {

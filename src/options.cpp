@@ -1,4 +1,7 @@
 #include "options.h"
+#if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_hud.h"
+#endif
 
 #include <cfloat>
 #include <climits>
@@ -2100,6 +2103,15 @@ void options_manager::add_options_interface()
         { { "auto", to_translation( "跟随模式" ) },
           { "classic", to_translation( "原版侧栏" ) },
           { "hud", to_translation( "3D HUD" ) } }, "auto" );
+        std::vector<int_and_option> hud_sizes;
+        for( int percent = 25; percent <= 200; percent += 25 ) {
+            hud_sizes.emplace_back( percent, no_translation( std::to_string( percent ) + "%" ) );
+        }
+        for( const auto &panel : fp3d_hud::panel_settings ) {
+            add( panel.option, page_id, no_translation( std::string( "现代 UI 大小：" ) + panel.label ),
+                 to_translation( "相对默认大小缩放，25%～200%，每档 25%。也可在 F5 模式设置的现代 UI 大小中拖动调整或恢复默认。" ),
+                 hud_sizes, 100, 100 );
+        }
 #endif
         add( "SIDEBAR_POSITION", page_id, to_translation( "Sidebar position" ),
              to_translation( "Switch between sidebar on the left or on the right side.  Requires restart." ),

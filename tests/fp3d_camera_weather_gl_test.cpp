@@ -9,6 +9,7 @@
 #endif
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include "avatar.h"
 #include "cata_catch.h"
 #include "cata_scope_helpers.h"
@@ -23,6 +24,460 @@
 #include "sdl_geometry.h"
 #include "sdltiles.h"
 #include "type_id.h"
+
+TEST_CASE( "fp3d_overhead_hidden_roof_preserves_sun_and_lamp_shadow_depth",
+           "[.fp3d_overhead_gl]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden roof shadow regression", 0, 0, 128, 128,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    on_out_of_scope cleanup( []() { fp3d_shadow::release(); } );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1;
+    scene.sky.sun_x = .6f;
+    scene.sky.sun_y = .8f;
+    scene.sky.sun_z = 0;
+    auto &room = scene.cells.emplace_back();
+    room.terrain = "t_floor";
+    const auto depth = [&]( bool lamp ) {
+        ++scene.render_generation;
+        GLuint texture;
+        int size;
+        if( lamp ) {
+            texture = fp3d_shadow::render_point( scene, { 0, 1, 0, 10 } );
+            size = 512;
+        } else {
+            const auto sun = fp3d_shadow::render( scene, 1 );
+            texture = sun.texture;
+            size = sun.resolution;
+        }
+        REQUIRE( texture != 0 );
+        std::vector<float> values( size * size );
+        glBindTexture( lamp ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, texture );
+        glGetTexImage( lamp ? GL_TEXTURE_CUBE_MAP_POSITIVE_Y : GL_TEXTURE_2D, 0,
+                       GL_DEPTH_COMPONENT, GL_FLOAT, values.data() );
+        REQUIRE( glGetError() == GL_NO_ERROR );
+        return values;
+    };
+    for( bool lamp : { false, true } ) {
+        CAPTURE( lamp );
+        room.ceiling_present = false;
+        room.cutaway_ceiling = false;
+        const auto open = depth( lamp );
+        room.ceiling_present = true;
+        const auto roof = depth( lamp );
+        CHECK( roof != open );
+        room.ceiling_present = false;
+        room.cutaway_ceiling = true;
+        CHECK( depth( lamp ) == roof );
+        room.cutaway_ceiling = false;
+        CHECK( depth( lamp ) == open );
+    }
+}
+
+TEST_CASE( "fp3d_overhead_tower_structure_blends_without_hiding_the_lower_floor",
+           "[.fp3d_overhead_gl]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden tower structure regression", 0, 0, 128, 128,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );
+
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1;
+    for( int y = -6; y <= 6; ++y ) {
+        for( int x = -6; x <= 6; ++x ) {
+            auto &ground = scene.cells.emplace_back();
+            ground.position = scene.origin + tripoint_rel_ms( x, y, 0 );
+            ground.terrain = "t_floor";
+        }
+    }
+    const auto render = [&]( const fp3d_camera::pose &camera ) {
+        ++scene.render_generation;
+        SDL_RenderFlush( renderer.get() );
+        glViewport( 0, 0, 128, 128 );
+        glDisable( GL_SCISSOR_TEST );
+        glDisable( GL_BLEND );
+        glDisable( GL_CULL_FACE );
+        glEnable( GL_DEPTH_TEST );
+        glDepthFunc( GL_LESS );
+        glDepthMask( GL_TRUE );
+        glDepthRange( 0, 1 );
+        glClearDepth( 1 );
+        glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+        fp3d_scene::draw( scene, camera.yaw, camera.pitch, 1, camera.eye,
+                          std::nullopt, false, 0, std::nullopt, true );
+        std::vector<std::array<unsigned char, 4>> colour( 128 * 128 );
+        std::vector<float> depth( 128 * 128 );
+        glReadPixels( 0, 0, 128, 128, GL_RGBA, GL_UNSIGNED_BYTE, colour.data() );
+        glReadPixels( 0, 0, 128, 128, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data() );
+        CHECK( glGetError() == GL_NO_ERROR );
+        return std::make_pair( std::move( colour ), std::move( depth ) );
+    };
+
+    for( float yaw : { 0.f, 95.f, 180.f } ) {
+        const auto camera = fp3d_camera::orbit_pose( { yaw, 66, 8 }, 0, 0 );
+        const auto [lower_colour, lower_depth] = render( camera );
+        for( const std::string feature : { "t_metal_floor_no_roof", "t_radio_tower", "t_railing",
+                                          "t_ladder_up_down", "f_table" } ) {
+            CAPTURE( yaw, feature );
+            auto &upper = scene.cells.emplace_back();
+            upper.position = scene.origin + tripoint_rel_ms::above;
+            if( feature == "f_table" ) {
+                upper.terrain = "t_metal_floor_no_roof";
+                upper.floor_present = false;
+                upper.furniture = fp3d_furniture::describe( feature );
+                REQUIRE( upper.furniture );
+            } else {
+                upper.terrain = feature;
+                upper.kind = fp3d_snapshot::terrain_shape( feature );
+                upper.goes_up = upper.goes_down = feature == "t_ladder_up_down";
+                if( upper.goes_up ) {
+                    // Compare the ladder itself, independent of its animated arrow.
+                    upper.known = fp3d_snapshot::knowledge::remembered;
+                }
+            }
+            const auto [opaque_colour, opaque_depth] = render( camera );
+            upper.faded_tower = true;
+            const auto [faded_colour, faded_depth] = render( camera );
+            CHECK( faded_depth == lower_depth );
+            int covered = 0;
+            int retained_silhouette = 0;
+            for( size_t i = 0; i < lower_depth.size(); ++i ) {
+                if( lower_depth[i] < 1 && opaque_depth[i] < lower_depth[i] ) {
+                    ++covered;
+                    retained_silhouette += !std::equal( faded_colour[i].begin(), faded_colour[i].begin() + 3,
+                                                       lower_colour[i].begin() ) &&
+                                           !std::equal( faded_colour[i].begin(), faded_colour[i].begin() + 3,
+                                                       opaque_colour[i].begin() );
+                }
+            }
+            REQUIRE( covered > 5 );
+            CHECK( retained_silhouette > covered / 2 );
+            scene.cells.pop_back();
+        }
+    }
+}
+
+TEST_CASE( "fp3d_water_mask_excludes_navigation_cutouts_without_changing_depth",
+           "[.fp3d_water_overlay_gl]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden water overlay regression", 0, 0, 256, 256,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    auto assets = cache.load_tileset( "UNDEAD_PEOPLE_BASE", renderer, false, true, false, false );
+    fp3d_materials::set_tileset( assets, renderer );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1;
+    for( int y = -10; y <= 10; ++y ) {
+        for( int x = -10; x <= 10; ++x ) {
+            auto &tile = scene.cells.emplace_back();
+            tile.position = tripoint_abs_ms( x, y, 0 );
+            tile.terrain = "t_water_dp";
+        }
+    }
+    fp3d_snapshot::sprite actor;
+    actor.kind = fp3d_snapshot::sprite_kind::character;
+    actor.id = "player_male";
+    actor.is_avatar = true;
+    scene.sprites.push_back( actor );
+    fp3d_snapshot::sprite held;
+    held.kind = fp3d_snapshot::sprite_kind::held_item;
+    held.id = "knife_combat";
+    scene.held_item = held;
+    fp3d_materials::prepare( scene );
+    SDL_RenderFlush( renderer.get() );
+    REQUIRE( fp3d_materials::bind() );
+    REQUIRE( fp3d_materials::lookup( fp3d_materials::sprite_key( actor ) ) );
+    REQUIRE( fp3d_materials::lookup( fp3d_materials::sprite_key( held ) ) );
+    const auto read_color = []() {
+        std::vector<unsigned char> pixels( 256 * 256 * 4 );
+        glReadPixels( 0, 0, 256, 256, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
+        return pixels;
+    };
+    const auto read_depth = []() {
+        std::vector<float> pixels( 256 * 256 );
+        glReadPixels( 0, 0, 256, 256, GL_DEPTH_COMPONENT, GL_FLOAT, pixels.data() );
+        return pixels;
+    };
+    for( bool overhead : { false, true } ) {
+        for( float angle : { 0.f, 47.f } ) {
+            for( float swing : { 0.f, 1.f } ) {
+                CAPTURE( overhead, angle, swing );
+                glViewport( 0, 0, 256, 256 );
+                glDisable( GL_SCISSOR_TEST );
+                glDisable( GL_BLEND );
+                glEnable( GL_DEPTH_TEST );
+                glDepthFunc( GL_LEQUAL );
+                glDepthMask( GL_TRUE );
+                glClearColor( 0, 0, 0, 0 );
+                glClearDepth( 1 );
+                glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+                REQUIRE( fp3d_materials::bind() );
+                const auto camera = fp3d_camera::orbit_pose(
+                                        { angle, overhead ? 65.f : 25.f, 5 }, 0, 0 );
+                fp3d_scene::draw( scene, camera.yaw, camera.pitch, 1, camera.eye,
+                                  std::nullopt, false, swing, std::nullopt, overhead );
+                fp3d_materials::unbind();
+                const auto depth = read_depth();
+                // Supply a water mask under every overlay pixel, isolating
+                // cutout coverage from terrain visibility and depth tests.
+                glClearColor( .84f, .13f, .08f, .95f );
+                glClear( GL_COLOR_BUFFER_BIT );
+                const auto before = read_color();
+                fp3d_scene::exclude_navigation_overlays_from_reflectivity();
+                const auto after = read_color();
+                CHECK( read_depth() == depth );
+                unsigned cleared = 0, water = 0;
+                int left = 256, right = -1, bottom = 256, top = -1;
+                for( int y = 0; y < 256; ++y ) {
+                    for( int x = 0; x < 256; ++x ) {
+                        const int i = ( y * 256 + x ) * 4;
+                        if( before[i] > 0 && after[i] == 0 ) {
+                            ++cleared;
+                            left = std::min( left, x ); right = std::max( right, x );
+                            bottom = std::min( bottom, y ); top = std::max( top, y );
+                        }
+                        if( after[i] > 0 ) { ++water; }
+                    }
+                }
+                CHECK( cleared > 20 );
+                CHECK( water > 1000 );
+                // Transparent space inside the cutout bounds keeps its water.
+                unsigned transparent_water = 0;
+                for( int y = bottom; y <= top; ++y ) {
+                    for( int x = left; x <= right; ++x ) {
+                        transparent_water += after[( y * 256 + x ) * 4] > 0;
+                    }
+                }
+                CHECK( transparent_water > 10 );
+                CHECK( glGetError() == GL_NO_ERROR );
+            }
+        }
+    }
+}
+
+TEST_CASE( "fp3d_creatures_cast_contact_shadows_without_changing_depth",
+           "[.fp3d_creature_shadow_gl]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden creature contact shadows", 0, 0, 256, 256,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1;
+    scene.sky.sun_y = 1;
+    for( int y = -4; y <= 4; ++y ) {
+        for( int x = -4; x <= 4; ++x ) {
+            auto &tile = scene.cells.emplace_back();
+            tile.position = tripoint_abs_ms( x, y, 0 );
+            tile.terrain = "t_pavement";
+        }
+    }
+    scene.sprites.emplace_back();
+    // No atlas: both actor and item draw the identical fallback body. Any
+    // colour difference therefore belongs to the contact shadow alone.
+    std::vector<unsigned char> pixels( 256 * 256 * 4 );
+    std::vector<float> depth( 256 * 256 );
+    const auto render = [&]( bool overhead ) {
+        SDL_RenderFlush( renderer.get() );
+        glViewport( 0, 0, 256, 256 );
+        glDisable( GL_SCISSOR_TEST );
+        glDisable( GL_BLEND );
+        glDepthMask( GL_TRUE );
+        glClearColor( .2f, .5f, .8f, 1 );
+        glClearDepth( 1 );
+        glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+        const auto camera = fp3d_camera::orbit_pose( { 0, overhead ? 65.f : 20.f, 5 }, 0, 0 );
+        fp3d_scene::draw( scene, camera.yaw, camera.pitch, 1, camera.eye, std::nullopt,
+                          false, 0, std::nullopt, overhead );
+        glReadPixels( 0, 0, 256, 256, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
+        glReadPixels( 0, 0, 256, 256, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data() );
+        REQUIRE( glGetError() == GL_NO_ERROR );
+        return pixels;
+    };
+    for( bool overhead : { false, true } ) {
+        CAPTURE( overhead );
+        scene.sprites.front().kind = fp3d_snapshot::sprite_kind::item;
+        const auto no_shadow = render( overhead );
+        const auto item_depth = depth;
+        scene.sprites.front().kind = fp3d_snapshot::sprite_kind::monster;
+        const auto shadow = render( overhead );
+        CHECK( shadow != no_shadow );
+        CHECK( depth == item_depth );
+        unsigned darker = 0;
+        bool brightened = false;
+        for( size_t i = 0; i < pixels.size(); i += 4 ) {
+            brightened = brightened || shadow[i] > no_shadow[i];
+            if( shadow[i] < no_shadow[i] ) { ++darker; }
+        }
+        CHECK_FALSE( brightened );
+        CHECK( darker > 0 );
+        scene.sprites.front().kind = fp3d_snapshot::sprite_kind::character;
+        CHECK( render( overhead ) == shadow );
+    }
+}
+
+TEST_CASE( "fp3d_creature_shadow_maps_follow_dynamic_silhouettes",
+           "[.fp3d_creature_shadow_gl]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden creature shadow maps", 0, 0, 640, 480,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    auto assets = cache.load_tileset( "UNDEAD_PEOPLE_BASE", renderer, false, true, false, false );
+    fp3d_materials::set_tileset( assets, renderer );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1;
+    scene.sky.sun_x = .6f;
+    scene.sky.sun_y = .8f;
+    scene.sky.sun_z = 0;
+    fp3d_snapshot::sprite actor;
+    actor.id = "mon_zombie";
+    actor.position = tripoint_abs_ms( 0, -3, 0 );
+    scene.sprites.push_back( actor );
+    fp3d_materials::prepare( scene );
+    SDL_RenderFlush( renderer.get() );
+    REQUIRE( fp3d_materials::bind() );
+    REQUIRE( fp3d_materials::lookup( fp3d_materials::sprite_key( actor ) ) );
+    scene.sprites.clear();
+    const auto read_depth = []( GLuint texture, int size ) {
+        std::vector<float> values( size * size );
+        glBindTexture( GL_TEXTURE_2D, texture );
+        glGetTexImage( GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, values.data() );
+        return values;
+    };
+    const auto sun_depth = [&]() {
+        ++scene.render_generation;
+        const auto map = fp3d_shadow::render( scene, 1 );
+        REQUIRE( map.texture != 0 );
+        return read_depth( map.texture, map.resolution );
+    };
+    const auto empty = sun_depth();
+    scene.sprites.push_back( actor );
+    const auto creature = sun_depth();
+    CHECK( creature != empty );
+    const auto occupied = std::count_if( creature.begin(), creature.end(),
+    []( float value ) { return value < .99999f; } );
+    CHECK( occupied > 20 );
+    // At 1024 / 46 texels per metre, a solid 1.8m square would
+    // occupy ~1280 texels at this sun angle. Alpha must cut it out.
+    CHECK( occupied < 1100 );
+    scene.sprites.front().position += tripoint_rel_ms::east;
+    CHECK( sun_depth() != creature );
+    scene.sprites.front().kind = fp3d_snapshot::sprite_kind::item;
+    CHECK( sun_depth() == empty );
+    scene.sprites.clear();
+    CHECK( sun_depth() == empty );
+    const auto beam_depth = [&]() {
+        ++scene.render_generation;
+        const auto map = fp3d_shadow::render_beam( scene, { 0, 1.6f, 0, 10 }, 0, 0 );
+        REQUIRE( map != 0 );
+        return read_depth( map, 1024 );
+    };
+    const auto empty_beam = beam_depth();
+    scene.sprites.push_back( actor );
+    CHECK( beam_depth() != empty_beam );
+    scene.sprites.front().is_avatar = true;
+    CHECK( beam_depth() == empty_beam );
+    const auto point_depth = [&]() {
+        ++scene.render_generation;
+        const auto map = fp3d_shadow::render_point( scene, { 0, 2, 0, 10 } );
+        REQUIRE( map != 0 );
+        std::vector<float> values( 512 * 512 );
+        glBindTexture( GL_TEXTURE_CUBE_MAP, map );
+        glGetTexImage( GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, 0, GL_DEPTH_COMPONENT,
+                       GL_FLOAT, values.data() );
+        return values;
+    };
+    // A streetlamp still sees the avatar; only their held beam excludes it.
+    const auto avatar_point = point_depth();
+    scene.sprites.clear();
+    CHECK( point_depth() != avatar_point );
+    scene.sprites.push_back( actor );
+    CHECK( point_depth() == avatar_point );
+    CHECK( glGetError() == GL_NO_ERROR );
+    if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+        std::filesystem::create_directories( directory );
+        scene.sprites.front().is_avatar = false;
+        for( int y = -7; y <= 2; ++y ) {
+            for( int x = -4; x <= 4; ++x ) {
+                auto &tile = scene.cells.emplace_back();
+                tile.position = tripoint_abs_ms( x, y, 0 );
+                tile.terrain = "t_pavement";
+            }
+        }
+        fp3d_materials::prepare( scene );
+        SDL_RenderFlush( renderer.get() );
+        REQUIRE( fp3d_materials::bind() );
+        for( bool overhead : { false, true } ) {
+            glViewport( 0, 0, 640, 480 );
+            glDepthMask( GL_TRUE );
+            glClearColor( .2f, .3f, .4f, 1 );
+            glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+            const auto camera = overhead ? fp3d_camera::orbit_pose( { 0, 65, 6 }, 0, -3 ) :
+                                fp3d_camera::pose{ 0, 20, { 0, 0, 1.6f } };
+            fp3d_scene::draw( scene, camera.yaw, camera.pitch, 640.f / 480, camera.eye,
+                              std::nullopt, false, 0, std::nullopt, overhead );
+            std::vector<unsigned char> pixels( 640 * 480 * 4 );
+            glReadPixels( 0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
+            for( int row = 0; row < 240; ++row ) {
+                std::swap_ranges( pixels.begin() + row * 640 * 4,
+                                  pixels.begin() + ( row + 1 ) * 640 * 4,
+                                  pixels.begin() + ( 479 - row ) * 640 * 4 );
+            }
+            SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(),
+                                     640, 480, 32, 640 * 4, SDL_PIXELFORMAT_RGBA32 ) );
+            REQUIRE( surface );
+            CHECK( IMG_SavePNG( surface.get(), ( std::filesystem::path( directory ) /
+                                               ( overhead ? "contact-overhead.png" : "contact-first-person.png" ) ).u8string().c_str() ) == 0 );
+        }
+    }
+}
 
 TEST_CASE( "fp3d_overhead_sprites_keep_square_silhouettes_when_rotating",
            "[.fp3d_billboard_gl]" )
@@ -287,6 +742,58 @@ TEST_CASE( "fp3d_unknown_mask_changes_only_background_colour", "[.fp3d_missing_s
             CHECK( fp3d_scene::statistics().rebuilt == 0 );
         }
     }
+}
+
+TEST_CASE( "fp3d_daylight_invalidates_only_chunks_with_metal_undersides",
+           "[.fp3d_camera_geometry_gl]" )
+{
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Terrain daylight regression", 0, 0, 128, 128,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 5, 1, 0 );
+    scene.render_generation = scene.geometry_generation = 1;
+    scene.sky.daylight = .25f;
+    fp3d_snapshot::cell tile;
+    tile.position = tripoint_abs_ms( 1, 1, 0 );
+    tile.terrain = "t_pavement";
+    scene.cells.push_back( tile );
+    tile.position = tripoint_abs_ms( 9, 1, 0 );
+    tile.terrain = "t_metal_floor_no_roof";
+    scene.cells.push_back( tile );
+    const auto camera = fp3d_camera::orbit_pose( { 0.f, 60.f, 24.f }, 0, 0 );
+    const auto render = [&]() {
+        SDL_RenderFlush( renderer.get() );
+        glViewport( 0, 0, 128, 128 );
+        glDisable( GL_SCISSOR_TEST );
+        glEnable( GL_DEPTH_TEST );
+        glDepthMask( GL_TRUE );
+        glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+        fp3d_scene::draw( scene, camera.yaw, camera.pitch, 1, camera.eye,
+                          std::nullopt, false, 0, std::nullopt, true );
+        std::vector<std::uint32_t> pixels( 128 * 128 );
+        glReadPixels( 0, 0, 128, 128, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data() );
+        CHECK( glGetError() == GL_NO_ERROR );
+        return pixels;
+    };
+    render();
+    REQUIRE( fp3d_scene::statistics().rebuilt == 2 );
+    scene.sky.daylight = .75f;
+    const auto warm_cache = render();
+    CHECK( fp3d_scene::statistics().indexed_cells == 0 );
+    CHECK( fp3d_scene::statistics().rebuilt == 1 );
+    render();
+    CHECK( fp3d_scene::statistics().rebuilt == 0 );
+    fp3d_scene::release();
+    const auto cold_cache = render();
+    CHECK( static_cast<bool>( cold_cache == warm_cache ) );
 }
 
 TEST_CASE( "fp3d_camera_geometry_uses_cached_depth_at_all_orbit_angles",

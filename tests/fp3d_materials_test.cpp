@@ -42,6 +42,41 @@ TEST_CASE( "fp3d_materials_resolve_season_and_native_looks_like", "[fp3d][materi
            set.find_tile_type( "t_vitrified_floor" ) );
 }
 
+TEST_CASE( "fp3d_ground_field_materials_follow_native_connections", "[fp3d][materials][ground_fields]" )
+{
+    tileset set;
+    tile_type base;
+    base.multitile = true;
+    base.available_subtiles = { "unconnected", "end_piece", "corner", "edge", "t_connection", "center" };
+    set.create_tile_type( "fd_blood", tile_type( base ) );
+    for( const auto &name : base.available_subtiles ) {
+        tile_type child;
+        child.rotates = true;
+        set.create_tile_type( "fd_blood_" + name, std::move( child ) );
+    }
+    const std::array<std::string, 16> expected{
+        "unconnected", "end_piece", "end_piece", "corner",
+        "end_piece", "corner", "edge", "t_connection",
+        "end_piece", "edge", "corner", "t_connection",
+        "corner", "t_connection", "t_connection", "center" };
+    const std::array<int, 16> angles{ 0, 0, 1, 0, 3, 3, 1, 0, 2, 0, 1, 1, 2, 3, 2, 0 };
+    for( int mask = 0; mask < 16; ++mask ) {
+        CAPTURE( mask );
+        int rotation = -1;
+        CHECK( fp3d_materials::resolve_ground_field( set, { "fd_blood", 3, mask }, SPRING, rotation ) ==
+               set.find_tile_type( "fd_blood_" + expected[mask] ) );
+        CHECK( rotation == angles[mask] );
+    }
+    int rotation = -1;
+    set.create_tile_type( "fd_blood_int2", tile_type{} );
+    CHECK( fp3d_materials::resolve_ground_field( set, { "fd_blood", 2, 15 }, SPRING, rotation ) ==
+           set.find_tile_type( "fd_blood_int2" ) );
+    CHECK( rotation == 0 );
+    CHECK( fp3d_materials::ground_field_key( { "fd_blood", 3, 1 } ) !=
+           fp3d_materials::ground_field_key( { "fd_blood", 3, 8 } ) );
+    CHECK_FALSE( fp3d_materials::resolve_ground_field( set, { "missing", 1 }, SPRING, rotation ) );
+}
+
 TEST_CASE( "fp3d_materials_choose_stable_sprites_without_gameplay_rng", "[fp3d][materials]" )
 {
     tile_type tile;

@@ -19,6 +19,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include "cata_scope_helpers.h"
 #include "fp3d_compositor.h"
+#include "fp3d_aiming.h"
 #include "fp3d_simple_ui.h"
 #endif
 
@@ -643,7 +644,8 @@ bool cataimgui::client::render_overlay( ImDrawData *draw_data, SDL_Texture *back
 
 void cataimgui::client::present_overlay()
 {
-    if( overlay_ready && fp3d_compositor::turn_based() && ui_adaptor::has_imgui() ) {
+    if( overlay_ready && ( fp3d_compositor::turn_based() || fp3d_compositor::aiming::active() ) &&
+        ui_adaptor::has_imgui() ) {
         SDL_RenderCopy( sdl_renderer.get(), overlay.get(), nullptr, nullptr );
     }
 }
@@ -656,7 +658,8 @@ void cataimgui::client::end_frame()
 #if defined(TILES) && defined(ENABLE_FP3D)
     overlay_ready = false;
     SDL_Texture *background = SDL_GetRenderTarget( sdl_renderer.get() );
-    if( !background || !fp3d_compositor::turn_based() || !render_overlay( draw_data, background ) )
+    if( !background || ( !fp3d_compositor::turn_based() && !fp3d_compositor::aiming::active() ) ||
+        !render_overlay( draw_data, background ) )
 #endif
     {
         ImGui_ImplSDLRenderer2_RenderDrawData( draw_data, sdl_renderer.get() );

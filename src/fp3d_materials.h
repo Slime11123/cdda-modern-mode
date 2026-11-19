@@ -34,6 +34,11 @@ struct uv_rect {
     float right;
     float bottom;
 };
+struct field_frame {
+    int ticks;
+    std::optional<uv_rect> uv;
+};
+std::vector<field_frame> field_animation( const fp3d_snapshot::sprite &image );
 
 // Resource lookups only; never consult the map or consume gameplay RNG.
 const tile_type *resolve_terrain( const tileset &set, std::string id, season_type season );
@@ -62,6 +67,9 @@ inline std::string treetop_plant_key( const std::string &terrain )
 // Native vpart_id plus cosmetic variant; independent of world orientation.
 std::string vehicle_key( const fp3d_vehicle::part_view &part );
 std::string ground_field_key( const fp3d_snapshot::ground_field &field );
+const tile_type *resolve_ground_field( const tileset &set,
+                                      const fp3d_snapshot::ground_field &field,
+                                      season_type season, int &rotation );
 // Dominant paint tint sampled from the currently selected tileset's
 // real bodywork image, never a hard-coded UndeadPeople-only color.
 std::optional<std::array<float, 3>> vehicle_body_color( const std::string &key );

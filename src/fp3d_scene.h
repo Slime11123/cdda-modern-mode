@@ -37,6 +37,8 @@ struct draw_statistics {
     unsigned visible_vehicle_parts = 0;
 };
 draw_statistics statistics();
+// Presentation height shared by opaque water and its depth-tested material mask.
+float water_surface_offset( const std::string &terrain );
 // Skip the Ultra reflection FBO and SSR sampling when the snapshot contains
 // no reflective water or wet pavement. Cached per published generation.
 bool has_reflective_surfaces( const fp3d_snapshot::scene_snapshot &scene, float rain );
@@ -52,6 +54,9 @@ bool vehicle_roof_sheet_suppressed( const tripoint_abs_ms &position,
                                     unsigned render_generation );
 // Call before destroying the current OpenGL context.
 void release();
+// Clear the current frame's avatar/hand/crosshair cutouts from a bound
+// reflectivity FBO. Call after draw() and draw_reflectivity_mask().
+void exclude_navigation_overlays_from_reflectivity();
 // Draws only owned snapshot data within the compositor's saved GL state/FBO.
 // overhead switches the hand overlay, the centre crosshair and the avatar's own
 // tile sprite. Everything else (world geometry, lighting, shadows, reflections)

@@ -40,6 +40,7 @@
 #include "auto_pickup.h"
 #include "avatar.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_compositor.h"
 #include "fp3d_inventory.h"
 #endif
 #include "basecamp.h"
@@ -1590,6 +1591,7 @@ void avatar::store( JsonOut &json ) const
     Character::store( json );
 #if defined(TILES) && defined(ENABLE_FP3D)
     fp3d_inventory::save_slots( *this, json );
+    json.member( "fp3d_view_mode", fp3d_compositor::saved_view_mode() );
 #endif
 
     // player-specific specifics
@@ -1800,6 +1802,9 @@ void avatar::load( const JsonObject &data )
     data.read( "snippets_read", snippets_read );
     data.read( "may_activity_occupancy_after_end_items_loc",
                may_activity_occupancy_after_end_items_loc );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    fp3d_compositor::restore_view_mode( data.get_string( "fp3d_view_mode", "" ) );
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

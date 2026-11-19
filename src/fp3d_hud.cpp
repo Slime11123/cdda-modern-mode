@@ -147,6 +147,26 @@ std::vector<data::message_entry> inspect( const avatar &you, const map &here,
     return lines;
 }
 
+std::vector<data::message_entry> message_rows( const std::vector<data::message_entry> &messages,
+        int columns, int rows )
+{
+    std::vector<data::message_entry> result;
+    if( columns <= 0 || rows <= 0 ) {
+        return result;
+    }
+    // Collect backwards so wrapping an old message never hides a newer one.
+    for( auto message = messages.rbegin(); message != messages.rend() &&
+         static_cast<int>( result.size() ) < rows; ++message ) {
+        auto folded = foldstring( message->text, columns );
+        for( auto line = folded.rbegin(); line != folded.rend() &&
+             static_cast<int>( result.size() ) < rows; ++line ) {
+            result.push_back( { *line, message->color } );
+        }
+    }
+    std::reverse( result.begin(), result.end() );
+    return result;
+}
+
 data capture( avatar &you )
 {
     data result;
@@ -213,11 +233,11 @@ data capture( avatar &you )
     result.slots = fp3d_inventory::slot_names( you );
     result.hotbar_icons = fp3d_inventory::slot_icons( you );
     result.active_slot = fp3d_inventory::active_slot();
-    for( const auto &message : Messages::recent_messages_with_color( 4 ) ) {
+    for( const auto &message : Messages::recent_messages_with_color( 64 ) ) {
         std::string line = message.timestamp + "  " + remove_color_tags( message.text );
         std::replace( line.begin(), line.end(), '\n', ' ' );
         std::replace( line.begin(), line.end(), '\r', ' ' );
-        result.messages.push_back( { utf8_truncate( line, 72 ), message.color } );
+        result.messages.push_back( { std::move( line ), message.color } );
     }
     result.expanded.push_back( "力量 " + std::to_string( you.get_str() ) + " 敏捷 " +
                                std::to_string( you.get_dex() ) +

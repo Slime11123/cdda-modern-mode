@@ -35,6 +35,7 @@ bool native_shadows_enabled = true;
 bool wet_ssr = true;
 bool shadow_volume = true;
 bool native_local_lights = true;
+bool native_local_shadows = true;
 bool local_shader_compiled = false;
 bool experimental_pbr = false;
 int pbr_strength = 100;
@@ -463,6 +464,12 @@ void restore_choice()
         ( stored_local_lights == 0 || stored_local_lights == 1 ) ) {
         native_local_lights = stored_local_lights != 0;
     }
+    int stored_local_shadows = 1;
+    std::ifstream local_shadow_file( root_path() / ".local_shadows", std::ios::binary );
+    if( local_shadow_file >> stored_local_shadows &&
+        ( stored_local_shadows == 0 || stored_local_shadows == 1 ) ) {
+        native_local_shadows = stored_local_shadows != 0;
+    }
     int stored_volume = 1;
     std::ifstream volume_file( root_path() / ".shadow_volume", std::ios::binary );
     if( volume_file >> stored_volume && ( stored_volume == 0 || stored_volume == 1 ) ) {
@@ -619,6 +626,7 @@ void compile_current()
         local_shader_compiled = false;
     } else {
         report = mc_direct ? "Minecraft final.fsh 已编译，使用有限的直接最终 Pass。" :
+                 mc_bridge && !mc_profile.water_source.empty() ? mc_profile.note :
                  mc_bridge ? mc_profile.label +
                              " 已通过 CDDA 光照/后处理适配启用（非原版 Iris 多 Pass）。" :
                  "当前光影已启用。";
@@ -809,6 +817,11 @@ bool wet_ssr_enabled()
     return wet_ssr;
 }
 
+bool pack_water_enabled()
+{
+    return mc_bridge && !mc_profile.water_source.empty();
+}
+
 void set_wet_ssr_enabled( bool enabled )
 {
     restore_choice();
@@ -831,6 +844,21 @@ void set_local_lights_enabled( bool enabled )
     std::ofstream file( root_path() / ".local_lights", std::ios::trunc );
     if( file ) { file << static_cast<int>( enabled ) << '\n'; }
     else { report = "动态灯光设置未能写入光影目录。"; }
+}
+
+bool local_shadows_enabled()
+{
+    restore_choice();
+    return native_local_shadows;
+}
+
+void set_local_shadows_enabled( bool enabled )
+{
+    restore_choice();
+    native_local_shadows = enabled;
+    std::ofstream file( root_path() / ".local_shadows", std::ios::trunc );
+    if( file ) { file << static_cast<int>( enabled ) << '\n'; }
+    else { report = "局部光源阴影设置未能写入光影目录。"; }
 }
 
 bool local_lights_compiled()
@@ -987,6 +1015,14 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
         active_texture( GL_TEXTURE4 );
         glBindTexture( GL_TEXTURE_2D, values.shadow_far );
     }
+    if( values.native_beam_shadow ) {
+        active_texture( GL_TEXTURE5 );
+        glBindTexture( GL_TEXTURE_2D, values.native_beam_shadow );
+    }
+    if( values.native_point_shadow ) {
+        active_texture( GL_TEXTURE6 );
+        glBindTexture( GL_TEXTURE_CUBE_MAP, values.native_point_shadow );
+    }
     active_texture( GL_TEXTURE0 );
     use_program( program );
     const auto set_int = [&]( const char *name, int value ) {
@@ -1025,6 +1061,12 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
     set_int( "u_depth", 1 );
     set_int( "u_shadow", 2 );
     set_int( "u_shadow_far", 4 );
+    set_int( "u_native_beam_shadow", 5 );
+    set_int( "u_native_beam_shadow_index", values.native_beam_shadow ?
+             values.native_beam_shadow_index : -1 );
+    set_int( "u_native_point_shadow", 6 );
+    set_int( "u_native_point_shadow_index", values.native_point_shadow ?
+             values.native_point_shadow_index : -1 );
     set_int( "u_mc_reflect_mask", 3 );
     set_int( "colortex0", 0 );
     set_int( "gcolor", 0 );
@@ -1122,6 +1164,14 @@ GLuint apply( GLuint scene_color, int width, int height, environment values )
     if( values.shadow_far ) {
         active_texture( GL_TEXTURE4 );
         glBindTexture( GL_TEXTURE_2D, 0 );
+    }
+    if( values.native_beam_shadow ) {
+        active_texture( GL_TEXTURE5 );
+        glBindTexture( GL_TEXTURE_2D, 0 );
+    }
+    if( values.native_point_shadow ) {
+        active_texture( GL_TEXTURE6 );
+        glBindTexture( GL_TEXTURE_CUBE_MAP, 0 );
     }
     active_texture( GL_TEXTURE0 );
     glBindTexture( GL_TEXTURE_2D, 0 );

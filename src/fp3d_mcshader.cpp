@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include "fp3d_shader_archive.h"
 
@@ -57,6 +58,67 @@ void replace_once( std::string &source, const std::string &old_text,
     if( at != std::string::npos ) {
         source.replace( at, old_text.size(), replacement );
     }
+}
+float setting_number( const std::string &settings, const char *name, float fallback,
+                      float minimum, float maximum )
+{
+    std::istringstream lines( settings );
+    std::string line, directive, key;
+    float value;
+    while( std::getline( lines, line ) ) {
+        std::istringstream tokens( line );
+        if( tokens >> directive >> key >> value && directive == "#define" && key == name ) {
+            return std::clamp( value, minimum, maximum );
+        }
+    }
+    return fallback;
+}
+
+std::string photon_water_source( const fs::path &file, const std::string &settings )
+{
+    std::string waves;
+    if( !read( file, "shaders/include/surface/water_normal.glsl", waves ) ) { return {}; }
+    const auto begin = waves.find( "float gerstner_wave(" );
+    const auto end = waves.find( "vec3 get_water_normal(" );
+    if( begin == std::string::npos || end == std::string::npos || end <= begin ) { return {}; }
+    waves = waves.substr( begin, end - begin );
+    // The installed pack supplies the actual Gerstner/setup/height functions.
+    // Adapt only GLSL 4 syntax and Iris's noise/time inputs to the GL2 bridge.
+    waves = std::regex_replace( waves, std::regex( "float\\[WATER_WAVE_ITERATIONS\\] wave_noise" ),
+                               "float wave_noise[WATER_WAVE_ITERATIONS]" );
+    waves = std::regex_replace( waves, std::regex( "\\buint\\b" ), "int" );
+    waves = std::regex_replace( waves, std::regex( "\\b([0-9]+)u\\b" ), "$1" );
+    waves = std::regex_replace( waves, std::regex( "texture\\(\\s*noisetex\\s*," ),
+                               "mc_photon_noise(" );
+    std::string definitions = "\n#define CDDA_PACK_WATER\n";
+    for( const auto *key : { "WATER_WAVE_ITERATIONS", "WATER_WAVE_FREQUENCY",
+                            "WATER_WAVE_PERSISTENCE", "WATER_WAVE_LACUNARITY",
+                            "WATER_WAVE_SPEED_STILL", "WATER_WAVE_SPEED_FLOWING" } ) {
+        const bool iterations = std::string( key ) == "WATER_WAVE_ITERATIONS";
+        const float value = setting_number( settings, key, iterations ? 3 : 1,
+                                           iterations ? 1 : 0, iterations ? 8 : 1.9f );
+        definitions += "#define " + std::string( key ) + " " +
+                       ( iterations ? std::to_string( static_cast<int>( value ) ) :
+                         std::to_string( value ) ) + "\n";
+    }
+    if( defined( settings, "WATER_WAVES_HEIGHT_VARIATION", false ) ) {
+        definitions += "#define WATER_WAVES_HEIGHT_VARIATION\n";
+    }
+    definitions += R"glsl(
+#define tau 6.28318530718
+#define degree 0.01745329252
+#define golden_angle 2.39996322973
+#define frameTimeCounter u_time
+#define sqr(x) ((x)*(x))
+vec4 mc_photon_noise(vec2 coord) {
+    return vec4(mc_noise(coord*256.0));
+}
+)glsl";
+    std::string cleanup;
+    for( const auto *key : { "tau", "degree", "golden_angle", "frameTimeCounter", "sqr" } ) {
+        cleanup += "\n#undef " + std::string( key );
+    }
+    return definitions + waves + cleanup + "\n";
 }
 bool self_contained_final( const std::string &source )
 {
@@ -119,15 +181,27 @@ profile inspect( const fs::path &file )
     p.saturation = p.photon ? 1.22f : 1.13f;
     p.warmness = p.photon ? 0.16f : 0.07f;
     p.glow = p.bloom ? ( p.photon ? 1.05f : .82f ) : 0.0f;
+    if( p.photon ) {
+        p.water_source = photon_water_source( file, settings );
+        p.water_wave_strength = defined( settings, "WATER_WAVES", false ) ?
+                               setting_number( settings, "WATER_WAVE_STRENGTH", 1, 0, 2 ) : 0;
+        p.water_texture = settings.find( "#define WATER_TEXTURE WATER_TEXTURE_VANILLA" ) !=
+                          std::string::npos ? 1.0f : 0.0f;
+        p.water_absorption[0] = setting_number( settings, "WATER_ABSORPTION_R", .39f, 0, 1 );
+        p.water_absorption[1] = setting_number( settings, "WATER_ABSORPTION_G", .14f, 0, 1 );
+        p.water_absorption[2] = setting_number( settings, "WATER_ABSORPTION_B", .07f, 0, 1 );
+        if( !p.water_source.empty() ) {
+            p.note = "Photon 视觉适配 + 包内水波函数；反射/水色适配 CDDA，非完整 Iris 多 Pass。";
+        }
+    }
     return p;
 }
 
 std::string bridge_fragment( const profile &pack, const std::string &builtin )
 {
     // Re-use the native CDDA screen-space renderer and supply shader-pack
-    // appearance parameters. Minecraft Iris materials and G-buffers are NOT
-    // emulated: this is a truthful visual bridge, not raw Photon execution.
-    ( void )pack;
+    // appearance parameters and optional installed-pack wave functions.
+    // Minecraft Iris materials and multi-pass G-buffers are not emulated.
     std::string source = builtin;
     replace_once( source, "uniform float u_style;\n",
                   "uniform float u_style;\n"
@@ -258,7 +332,20 @@ vec3 mc_sun_volume(vec2 uv,float depth) {
            u_shadow_strength*(0.42+0.20*u_mc_intensity)*
            surface_attenuation;
 }
-vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
+vec4 mc_reflection_tap(vec2 uv,float center_depth,float tolerance,float weight) {
+    // Roughness filtering must not smear a foreground car or window frame
+    // into a reflected background. Missing/sky taps contribute no colour.
+    float edge=min(min(uv.x,uv.y),min(1.0-uv.x,1.0-uv.y));
+    if(edge<=0.0) { return vec4(0.0); }
+    if(texture2D(u_mc_reflect_mask,uv).a>0.1) { return vec4(0.0); }
+    float depth=texture2D(u_depth,uv).r;
+    if(depth>=0.99998) { return vec4(0.0); }
+    float agreement=1.0-smoothstep(tolerance,2.0*tolerance,
+                                  abs(mc_linear_depth(depth)-center_depth));
+    float accepted=weight*agreement;
+    return vec4(texture2D(u_scene,uv).rgb*accepted,accepted);
+}
+vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec4 material) {
     if(d>=0.9999 || d<=0.0 || material.r<=0.02) {
         return original_color;
     }
@@ -272,9 +359,31 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
     // Use world coordinates so turning the camera doesn't move the pattern.
     // Not a full tileset normal map and it never bends the geometry depth.
     vec3 world=mc_world_at(p);
+    vec3 world_incident=normalize(world-vec3(u_camera_offset.x,
+                                          u_camera_height,u_camera_offset.y));
+    float water_footprint=max(length(dFdx(world.xz)),length(dFdy(world.xz)));
+    bool water=material.a>0.1;
     float phase=world.x*1.55+world.z*0.89+u_time*(roughness<0.25?0.5:0.0);
     float phase2=world.z*1.41-world.x*0.37+u_time*(roughness<0.25?0.32:0.0);
     vec3 nworld=normalize(vec3(bump*cos(phase),1.0,bump*cos(phase2)));
+#ifdef CDDA_PACK_WATER
+    if(water) {
+        vec2 wave_dir;
+        mat2 wave_rot;
+        float wave_time;
+        water_waves_setup(false,vec2(0.0),wave_dir,wave_rot,wave_time);
+        // A distant pixel spans multiple ripples. Widen the normal sample
+        // and fade unresolved slopes instead of aliasing them into black dots.
+        float wave_step=clamp(water_footprint,0.1,1.0);
+        float h0=get_water_height(world.xz,wave_dir,wave_rot,wave_time);
+        float hx=get_water_height(world.xz+vec2(wave_step,0.0),wave_dir,wave_rot,wave_time);
+        float hz=get_water_height(world.xz+vec2(0.0,wave_step),wave_dir,wave_rot,wave_time);
+        float influence=(0.04+0.15*u_rain_strength)*CDDA_WATER_STRENGTH;
+        influence*=smoothstep(0.0,0.15,abs(world_incident.y));
+        influence/=1.0+4.0*water_footprint*water_footprint;
+        nworld=normalize(vec3((hx-h0)*influence,wave_step,(hz-h0)*influence));
+    }
+#endif
     float cy=cos(u_yaw_pitch.x),sy=sin(u_yaw_pitch.x);
     float cp=cos(u_yaw_pitch.y),sp=sin(u_yaw_pitch.y);
     float intermediate=-sy*nworld.x+cy*nworld.z;
@@ -283,7 +392,10 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
                                sp*nworld.y+cp*intermediate));
     vec3 incident=normalize(p);
     float up_angle=clamp(-dot(normal,incident),0.0,1.0);
-    if(up_angle<=0.015) { return original_color; }
+    // At grazing angles a wave normal can point away from the eye. Water
+    // still owns that pixel; returning the scene here restored vanilla art
+    // in large moving patches between the pack-coloured regions.
+    if(up_angle<=0.015 && !water) { return original_color; }
     float grazing=1.0-up_angle;
     float wet=clamp(material.r,0.0,1.0);
     float range=mc_linear_depth(d);
@@ -298,52 +410,146 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
     float fresnel=0.04+0.96*pow(grazing,5.0);
     float film=wet*(0.025+0.070*fresnel)*(1.0-0.40*roughness);
     vec3 result=mix(original_color,atmosphere,film);
+#ifdef CDDA_PACK_WATER
+    if(water) {
+        // Photon defaults to clean water rather than the vanilla tile albedo.
+        // Optical depth comes from CDDA shallow/deep classes, not a bed buffer.
+        float optical_depth=mix(0.65,4.5,clamp(material.a,0.0,1.0));
+        vec3 transmission=exp(-CDDA_WATER_ABSORPTION*optical_depth*2.0);
+        float illumination=0.12+0.65*clamp(u_daylight,0.0,1.0);
+        if(u_has_shadow>0.5) {
+            illumination*=mix(0.45,1.0,mc_sun_occlusion(world));
+        }
+        vec3 water_color=(vec3(0.025,0.12,0.14)+
+            vec3(0.13,0.24,0.20)*transmission)*illumination;
+        vec3 sky_ray=reflect(world_incident,nworld);
+        vec3 environment=atmosphere*0.15;
+        // A covered pool must not acquire a bright, imaginary outdoor sky.
+        if(u_sky_visible>0.5) {
+            // Waves can reflect just below the horizon. Continue the horizon
+            // colour there; switching to the dark indoor fallback caused a
+            // discontinuity amplified by grazing-angle Fresnel reflection.
+            float elevation=smoothstep(0.0,0.65,sky_ray.y);
+            environment=mix(vec3(0.52,0.64,0.73),vec3(0.12,0.36,0.68),elevation);
+            vec2 coord=sky_ray.xz/max(sky_ray.y,0.07)*1.4+
+                       vec2(u_time*0.009,u_time*0.003);
+            float cloud=0.55*mc_noise(coord)+0.3*mc_noise(coord*2.0)+
+                        0.15*mc_noise(coord*4.0);
+            float coverage=smoothstep(0.55-u_clouds*0.07,0.69-u_clouds*0.07,cloud);
+            environment=mix(environment,vec3(0.91,0.94,0.97),
+                            coverage*0.72*u_mc_clouds*smoothstep(0.02,0.12,sky_ray.y));
+            environment*=0.04+0.96*clamp(u_daylight,0.0,1.0);
+        }
+        fresnel=0.02+0.98*pow(grazing,5.0);
+        float reflection_weight=0.12+0.88*fresnel;
+        result=mix(mix(water_color,original_color,CDDA_WATER_TEXTURE),
+                   environment,reflection_weight);
+    }
+#endif
     // The old abrupt 20-m cutoff looked like bands of dry tiles. Fade only
     // the extra screen-space reflection; the underlying rain film stays.
-    float distance_fade=1.0-smoothstep(15.0,36.0,range);
-    if(distance_fade<=0.01) { return result; }
+    float distance_fade=1.0-smoothstep(water?32.0:15.0,water?72.0:36.0,range);
+    if(distance_fade<=0.01 || u_mc_ssr_enabled<0.5 || u_quality<3.0) { return result; }
     vec3 reflected=normalize(reflect(incident,normal));
     vec3 origin=p+normal*0.085;
     vec2 hituv=vec2(-1.0);
     float hitfade=0.0;
+    float hit_depth=0.0;
+    float hit_length=0.0;
+    float previous_length=0.0;
+    float previous_delta=-0.01;
     for(int i=0;i<16;i++) {
-        float length_m=0.35+float(i)*0.83;
+        float length_m=0.35+float(i)*(water?1.55:0.83);
         vec3 testpos=origin+reflected*length_m;
         if(testpos.z>=-0.22) { break; }
         vec2 testuv=mc_project_view(testpos);
-        if(testuv.x<=0.015 || testuv.y<=0.015 ||
-           testuv.x>=0.985 || testuv.y>=0.985) { break; }
+        if(testuv.x<=0.001 || testuv.y<=0.001 ||
+           testuv.x>=0.999 || testuv.y>=0.999) { break; }
         float dz=texture2D(u_depth,testuv).r;
         if(dz>=0.99998) {
-            hituv=testuv;
-            hitfade=0.24;
+            // Sky is not a geometry hit. Keep the continuous environment
+            // sheen instead of reusing a stale sky sample after ray exit.
+            previous_length=length_m;
+            previous_delta=-0.01;
             continue;
         }
         float delta=-testpos.z-mc_linear_depth(dz);
-        if(delta>0.015 && delta<0.28+0.035*length_m) {
-            hituv=testuv;
-            hitfade=1.0-0.55*(length_m/14.0);
+        if(delta>=0.0 && previous_delta<0.0) {
+            // Refine only the first front-to-back crossing. Four bisections
+            // reduce the original 0.83m march step to about five centimetres.
+            float lo=previous_length, hi=length_m;
+            for(int refinement=0;refinement<4;++refinement) {
+                float middle=(lo+hi)*0.5;
+                vec3 candidate=origin+reflected*middle;
+                vec2 sample_uv=mc_project_view(candidate);
+                float sample_depth=texture2D(u_depth,sample_uv).r;
+                float difference=-candidate.z-mc_linear_depth(sample_depth);
+                if(sample_depth>=0.99998 || difference<0.0) { lo=middle; }
+                else { hi=middle; }
+            }
+            vec3 refined=origin+reflected*hi;
+            vec2 refined_uv=mc_project_view(refined);
+            float refined_depth=texture2D(u_depth,refined_uv).r;
+            float scene_depth=mc_linear_depth(refined_depth);
+            float error=-refined.z-scene_depth;
+            // Bounded view-space thickness avoids accepting a ray that
+            // jumped behind a thin vehicle edge or a nearby wall silhouette.
+            float pixel_width=scene_depth*3.4641016*
+                              max(u_texel.x,u_texel.y/max(u_aspect,0.25));
+            float thickness=clamp(0.06+pixel_width*1.5,0.08,0.28);
+            if(refined_depth<0.99998 && error>=0.0 && error<thickness) {
+                // Water is not an opaque reflected object. A near-horizontal
+                // ray can otherwise hit the same water plane through depth
+                // quantization and paste its old tile image over the waves.
+                if(texture2D(u_mc_reflect_mask,refined_uv).a>0.1) { break; }
+                hituv=refined_uv;
+                hit_depth=scene_depth;
+                hit_length=hi;
+                hitfade=(1.0-smoothstep(thickness*0.35,thickness,error))*
+                        (1.0-smoothstep(water?18.0:9.0,water?24.0:13.0,hi));
+            }
+            // Do not tunnel through a rejected foreground surface looking
+            // for an unrelated background object on later march steps.
             break;
         }
+        if(delta>=0.0) { break; }
+        previous_length=length_m;
+        previous_delta=delta;
     }
     if(hitfade<=0.0) { return result; }
-    // Gentle spatial filtering and low bounded strength keep car reflections
-    // visible but prevent a single hit from becoming a solid mirror tile.
-    vec2 spread=u_texel*(1.0+5.0*roughness);
-    vec3 reflection=texture2D(u_scene,hituv).rgb*(0.66-0.30*roughness)+
-                    texture2D(u_scene,hituv+vec2(spread.x,0.0)).rgb*(0.085+0.075*roughness)+
-                    texture2D(u_scene,hituv-vec2(spread.x,0.0)).rgb*(0.085+0.075*roughness)+
-                    texture2D(u_scene,hituv+vec2(0.0,spread.y)).rgb*(0.085+0.075*roughness)+
-                    texture2D(u_scene,hituv-vec2(0.0,spread.y)).rgb*(0.085+0.075*roughness);
+    // A longer reflection path broadens the rough-surface footprint. Keep
+    // water crisp and normalize only taps belonging to the same depth layer.
+    vec2 spread=u_texel*(1.0+roughness*(3.0+min(hit_length,12.0)*0.4));
+    float tolerance=max(0.12,hit_depth*0.025);
+    vec4 filtered=vec4(texture2D(u_scene,hituv).rgb,1.0)*(0.66-0.30*roughness);
+    float side_weight=0.085+0.075*roughness;
+    filtered+=mc_reflection_tap(hituv+vec2(spread.x,0.0),hit_depth,tolerance,side_weight);
+    filtered+=mc_reflection_tap(hituv-vec2(spread.x,0.0),hit_depth,tolerance,side_weight);
+    filtered+=mc_reflection_tap(hituv+vec2(0.0,spread.y),hit_depth,tolerance,side_weight);
+    filtered+=mc_reflection_tap(hituv-vec2(0.0,spread.y),hit_depth,tolerance,side_weight);
+    vec3 reflection=filtered.rgb/max(filtered.a,0.001);
     float edge=smoothstep(0.02,0.14,min(min(hituv.x,hituv.y),
                                         min(1.0-hituv.x,1.0-hituv.y)));
     float confidence=hitfade*edge*distance_fade;
     float strength=wet*(0.08+0.22*fresnel)*(1.0-0.55*roughness)*confidence;
+#ifdef CDDA_PACK_WATER
+    if(water) { strength=(0.12+0.88*fresnel)*confidence; }
+#endif
     return mix(result,reflection,strength);
 }
 )glsl";
     replace_once( source, "void main() {",
-                  raymarch_helpers + "void main() {" );
+                  pack.water_source + raymarch_helpers + "void main() {" );
+    if( !pack.water_source.empty() ) {
+        replace_once( source, "#define CDDA_PACK_WATER\n",
+                      "#define CDDA_PACK_WATER\n#define CDDA_WATER_STRENGTH " +
+                      std::to_string( pack.water_wave_strength ) +
+                      "\n#define CDDA_WATER_TEXTURE " + std::to_string( pack.water_texture ) +
+                      "\n#define CDDA_WATER_ABSORPTION vec3(" +
+                      std::to_string( pack.water_absorption[0] ) + "," +
+                      std::to_string( pack.water_absorption[1] ) + "," +
+                      std::to_string( pack.water_absorption[2] ) + ")\n" );
+    }
 
     // Layered sky only, keyed by depth=1 so world textures/HUD remain
     // untouched. Generated entirely by this project; no Photon sources copied.
@@ -384,21 +590,21 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
                   "lit * focus * foreground * 0.24;",
                   "lit * focus * foreground * (0.20 + 0.22*u_mc_intensity);" );
 
-    // Controlled scene-depth effects. No Minecraft multi-pass code is
-    // executed here: both kernels are original CDDA OpenGL 2.1 GLSL 1.20.
+    // CDDA depth effects with optional runtime-loaded pack wave functions.
     const std::string raymarch_main = R"glsl(
     // Use world-depth and shadow-map *per pixel*, not the player outdoors
     // flag. Outdoor roads remain reflective when viewed through windows;
     // sunlit shafts can reach room surfaces through open door/window holes.
-    if(u_has_depth>0.5 && u_quality>=3.0) {
+    if(u_has_depth>0.5 && u_quality>=1.0) {
         float surface_depth=texture2D(u_depth,v_uv).r;
-        if(u_mc_ssr_enabled>0.5 && u_has_mc_reflect_mask>0.5) {
-            vec3 surface_material=texture2D(u_mc_reflect_mask,v_uv).rgb;
-            if(surface_material.r>0.025) {
+        if(u_has_mc_reflect_mask>0.5) {
+            vec4 surface_material=texture2D(u_mc_reflect_mask,v_uv);
+            if(surface_material.r>0.025 &&
+               (surface_material.a>0.1 || (u_mc_ssr_enabled>0.5 && u_quality>=3.0))) {
                 color=mc_wet_reflection(v_uv,surface_depth,color,surface_material);
             }
         }
-        if(u_has_shadow>0.5 && u_mc_volume_enabled>0.5 &&
+        if(u_quality>=3.0 && u_has_shadow>0.5 && u_mc_volume_enabled>0.5 &&
            u_daylight>0.15 && u_shadow_strength>0.01) {
             color+=mc_sun_volume(v_uv,surface_depth);
         }
@@ -438,8 +644,14 @@ vec3 mc_wet_reflection(vec2 uv, float d, vec3 original_color, vec3 material) {
                   " texture detail in dark streets.\n"
                   "    float mc_contrast=1.0 + 0.12*(u_mc_intensity-0.6);\n"
                   "    color=clamp((color-0.36)*mc_contrast+0.36,0.0,1.0);\n"
-                  "    color=mix(original.rgb,color,clamp(0.68+"
-                  "0.28*u_mc_intensity,0.45,1.22));" );
+                  "    float mc_blend=clamp(0.68+0.28*u_mc_intensity,0.45,1.22);\n"
+                  "#ifdef CDDA_PACK_WATER\n"
+                  "    if(u_quality>=1.0 && u_has_mc_reflect_mask>0.5 &&\n"
+                  "       texture2D(u_mc_reflect_mask,v_uv).a>0.1 && CDDA_WATER_TEXTURE<0.5) {\n"
+                  "        mc_blend=1.0;\n"
+                  "    }\n"
+                  "#endif\n"
+                  "    color=mix(original.rgb,color,mc_blend);" );
     return source;
 }
 } // namespace fp3d_mcshader

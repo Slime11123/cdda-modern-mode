@@ -43,6 +43,12 @@ struct data {
 // Restricted nearby daylight shadow-map pass, only for known terrain geometry.
 // Never queries game simulation or hidden world entities.
 data render( const fp3d_snapshot::scene_snapshot &scene, int quality );
+// One camera-directed portable light, independent of daylight and sun targets.
+GLuint render_beam( const fp3d_snapshot::scene_snapshot &scene,
+                    const std::array<float, 4> &position, float yaw, float pitch );
+// One important fixed emitter, six bounded 512px depth faces.
+GLuint render_point( const fp3d_snapshot::scene_snapshot &scene,
+                     const std::array<float, 4> &position );
 void release();
 } // namespace fp3d_shadow
 #endif

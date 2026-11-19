@@ -21,6 +21,11 @@
 #include "construction.h"
 #include "sdl_geometry.h"
 #include "sdltiles.h"
+#if defined(_MSC_VER) && defined(USE_VCPKG)
+#include <SDL2/SDL_opengl.h>
+#else
+#include <SDL_opengl.h>
+#endif
 
 // Hidden production-renderer regression, using owned snapshots only.
 TEST_CASE( "fp3d_gl_storage_doors_and_contents_keep_environment_occlusion", "[.fp3d_gl]" )
@@ -652,11 +657,38 @@ TEST_CASE( "fp3d_gl_ground_coverings_render_intensity_mixing_and_removal", "[.fp
             target.ground_fields.front().intensity = maximum;
             const auto thick = render();
             if( maximum > 1 ) {
-                CHECK( thick != thin );
+                int rotation = 0;
+                const auto *thin_art = fp3d_materials::resolve_ground_field( *assets, { id, 1 },
+                                       scene.season, rotation );
+                const auto *thick_art = fp3d_materials::resolve_ground_field( *assets, { id, maximum },
+                                        scene.season, rotation );
+                // Native intensity art may change; an unchanged sprite keeps
+                // its full-tile size so neighbouring coverings still meet.
+                if( thin_art && thin_art == thick_art ) {
+                    CHECK( thick == thin );
+                } else {
+                    CHECK( thick != thin );
+                }
             }
             save( id, thick );
             target.ground_fields.clear();
             CHECK( render() == clean );
+        }
+        if( pack == "UNDEAD_PEOPLE_BASE" ) {
+            auto &neighbour = scene.cells.at( 4 + 3 * 7 );
+            for( const std::string id : { "fd_blood", "fd_acid", "fd_slime", "fd_web", "fd_gibs_flesh" } ) {
+                CAPTURE( id );
+                target.ground_fields = { { id, 3 } };
+                neighbour.ground_fields = { { id, 1 } };
+                const auto isolated = render();
+                fp3d_snapshot::connect_ground_fields( scene );
+                CHECK( target.ground_fields.front().connections == 2 );
+                CHECK( neighbour.ground_fields.front().connections == 4 );
+                const auto connected = render();
+                CHECK( connected != isolated );
+                save( id + "-connected", connected );
+            }
+            neighbour.ground_fields.clear();
         }
         target.ground_fields = { { "fd_blood", 3 } };
         const auto blood = render();
@@ -768,4 +800,330 @@ TEST_CASE( "fp3d_gl_zombie_status_badges_keep_body_scale_and_show_detection", "[
     scene.sprites.front().alerted = false;
     CHECK( render( "cleared" ) == clean );
 }
+
+TEST_CASE( "fp3d_gl_natural_ground_matches_native_connected_art", "[.fp3d_gl][ground_terrain]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D natural terrain",
+                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480,
+                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    int driver = -1;
+    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
+        SDL_RendererInfo info{};
+        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
+            driver = i;
+        }
+    }
+    REQUIRE( driver >= 0 );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    int width = 0;
+    int height = 0;
+    REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
+    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+
+    const std::array<const char *, 16> subtiles{
+        "unconnected", "end_piece", "end_piece", "corner",
+        "end_piece", "corner", "edge", "t_connection",
+        "end_piece", "edge", "corner", "t_connection",
+        "corner", "t_connection", "t_connection", "center" };
+    const std::array<int, 16> rotations{ 0, 0, 1, 0, 3, 3, 1, 0, 2, 0, 1, 1, 2, 3, 2, 0 };
+    for( const std::string pack : { "UNDEAD_PEOPLE_BASE", "retrodays" } ) {
+        DYNAMIC_SECTION( pack ) {
+            CAPTURE( pack );
+            REQUIRE( TILESETS.count( pack ) == 1 );
+            auto assets = cache.load_tileset( pack, renderer, false, true, false, false );
+            fp3d_materials::set_tileset( assets, renderer );
+            fp3d_snapshot::scene_snapshot scene;
+            for( const std::string id : { "t_grass", "t_grass_long", "t_grass_dead", "t_dirt", "t_sand", "t_moss" } ) {
+                for( int mask = 0; mask < 16; ++mask ) {
+                    auto &tile = scene.cells.emplace_back();
+                    tile.terrain = id;
+                    tile.ground_connections = mask;
+                }
+            }
+            fp3d_materials::prepare( scene );
+            SDL_RenderFlush( renderer.get() );
+            REQUIRE( fp3d_materials::bind() );
+            std::vector<unsigned char> atlas( 2048 * 2048 * 4 );
+            glGetTexImage( GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, atlas.data() );
+            fp3d_materials::unbind();
+            SDL_Texture_Ptr expected( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
+                                      SDL_TEXTUREACCESS_TARGET, 64, 64 ) );
+            REQUIRE( expected );
+            for( const auto &cell : scene.cells ) {
+                const int mask = cell.ground_connections;
+                const std::string key = fp3d_materials::terrain_key( cell );
+                CAPTURE( key );
+                const tile_type *base = fp3d_materials::resolve_terrain( *assets, cell.terrain, SPRING );
+                REQUIRE( base );
+                const tile_type *art = base;
+                int rotation = 0;
+                if( base->multitile ) {
+                    auto child = assets->find_tile_type_by_season( cell.terrain + "_" + subtiles[mask], SPRING );
+                    REQUIRE( child );
+                    art = &child->tile();
+                    rotation = rotations[mask];
+                }
+                REQUIRE( SDL_SetRenderTarget( renderer.get(), expected.get() ) == 0 );
+                SDL_SetRenderDrawColor( renderer.get(), 180, 180, 180, 255 );
+                SDL_RenderClear( renderer.get() );
+                // One sprite per weighted choice in these packs; foreground arrays
+                // encode orientations and the background must remain unrotated.
+                for( bool foreground : { false, true } ) {
+                    // Reproduce native rotation arrays using the same selected entry.
+                    const auto &list = foreground ? art->fg : art->bg;
+                    unsigned seed = 2166136261u;
+                    for( unsigned char c : key ) { seed = ( seed ^ c ) * 16777619u; }
+                    const auto *choices = list.pick( seed );
+                    if( !choices || choices->empty() ) { continue; }
+                    const int index = ( *choices )[rotation % choices->size()];
+                    const texture *source = assets->get_tile( index );
+                    REQUIRE( source );
+                    const SDL_Rect dest{ 0, 0, 64, 64 };
+                    REQUIRE( source->render_copy_ex( renderer, &dest,
+                             foreground && choices->size() == 1 ? -90.0 * rotation : 0,
+                             nullptr, SDL_FLIP_NONE ) == 0 );
+                }
+                std::vector<unsigned char> native( 64 * 64 * 4 );
+                REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA32,
+                                              native.data(), 64 * 4 ) == 0 );
+                REQUIRE( SDL_SetRenderTarget( renderer.get(), nullptr ) == 0 );
+                REQUIRE( fp3d_materials::bind() );
+                const auto uv = fp3d_materials::lookup( key );
+                REQUIRE( uv );
+                const int ax = static_cast<int>( uv->left * 2048 );
+                const int ay = static_cast<int>( uv->top * 2048 );
+                CHECK( ( uv->right - uv->left ) * 2048 == Approx( 63.f ) );
+                fp3d_materials::unbind();
+                unsigned mismatches = 0;
+                for( int y = 0; y < 64; ++y ) {
+                    for( int x = 0; x < 64; ++x ) {
+                        for( int c = 0; c < 4; ++c ) {
+                            mismatches += atlas[( ( ay + y ) * 2048 + ax + x ) * 4 + c] !=
+                                          native[( y * 64 + x ) * 4 + c];
+                        }
+                    }
+                }
+                CHECK( mismatches == 0 );
+            }
+            // Production renders of connected natural surfaces in both cameras.
+            scene.cells.clear();
+            scene.sky.daylight = 1.f;
+            scene.weather.fog_end = 60.f;
+            for( int y = -10; y <= 3; ++y ) {
+                for( int x = -8; x <= 8; ++x ) {
+                    auto &tile = scene.cells.emplace_back();
+                    tile.position = tripoint_abs_ms( x, y, 0 );
+                    tile.terrain = x >= -2 && x <= 2 && y >= -6 && y <= -2 ? "t_grass_long" :
+                                   x >= -5 && x <= 4 && y >= -8 && y <= 0 ? "t_grass" : "t_dirt";
+                }
+            }
+            fp3d_snapshot::connect_ground_terrain( scene );
+            for( const std::string mode : { "first_person", "overhead" } ) {
+                fp3d_compositor::restore_view_mode( mode );
+                fp3d_compositor::publish( scene );
+                fp3d_compositor::compose();
+                if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+                    std::vector<std::uint32_t> pixels( width * height );
+                    REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                                  pixels.data(), width * 4 ) == 0 );
+                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), width, height,
+                                             32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+                    REQUIRE( picture );
+                    CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                                       ( pack + "-natural-ground-" + mode + ".png" ) ).u8string().c_str() ) == 0 );
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE( "fp3d_gl_native_fire_and_smoke_render_in_both_cameras", "[.fp3d_gl][field_sprites]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    constexpr int width = 640;
+    constexpr int height = 480;
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D field sprites", SDL_WINDOWPOS_UNDEFINED,
+                           SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    REQUIRE( SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl" ) );
+    on_out_of_scope clear_hint( []() { SDL_ResetHint( SDL_HINT_RENDER_DRIVER ); } );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    REQUIRE( TILESETS.count( "UNDEAD_PEOPLE_BASE" ) == 1 );
+    fp3d_materials::set_tileset( cache.load_tileset( "UNDEAD_PEOPLE_BASE", renderer,
+                                 false, true, false, false ), renderer );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1.f;
+    scene.weather.fog_end = 60.f;
+    for( int y = -6; y <= 2; ++y ) {
+        for( int x = -4; x <= 4; ++x ) {
+            auto &tile = scene.cells.emplace_back();
+            tile.position = tripoint_abs_ms( x, y, 0 );
+            tile.terrain = "t_floor";
+        }
+    }
+    fp3d_snapshot::sprite fire;
+    fire.position = tripoint_abs_ms( -1, -4, 0 );
+    fire.kind = fp3d_snapshot::sprite_kind::field;
+    fire.id = "fd_fire";
+    fire.field_intensity = 2;
+    fire.height = 1.05f;
+    auto smoke = fire;
+    smoke.position = tripoint_abs_ms( 1, -4, 0 );
+    smoke.id = "fd_smoke";
+    smoke.height = 1.25f;
+    smoke.elevation = .45f;
+    const auto render = [&]() {
+        SDL_SetRenderDrawColor( renderer.get(), 8, 12, 20, 255 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        fp3d_compositor::publish( scene );
+        fp3d_compositor::compose();
+        std::vector<std::uint32_t> pixels( width * height );
+        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                       pixels.data(), width * 4 ) == 0 );
+        return pixels;
+    };
+    for( const std::string mode : { "first_person", "overhead" } ) {
+        CAPTURE( mode );
+        fp3d_compositor::restore_view_mode( mode );
+        scene.sprites.clear();
+        const auto bare = render();
+        scene.sprites = { fire };
+        CHECK( render() != bare );
+        scene.sprites = { smoke };
+        CHECK( render() != bare );
+    }
+    {
+        REQUIRE( fp3d_materials::bind() );
+        on_out_of_scope unbind( []() { fp3d_materials::unbind(); } );
+        for( const auto &image : { fire, smoke } ) {
+            const auto frames = fp3d_materials::field_animation( image );
+            REQUIRE( frames.size() > 1 );
+            CHECK( std::all_of( frames.begin(), frames.end(), []( const auto &frame ) {
+                return frame.uv && frame.ticks > 0;
+            } ) );
+        }
+    }
+    fp3d_compositor::restore_view_mode( "first_person" );
+    for( auto &tile : scene.cells ) {
+        if( tile.position.y() == -2 ) {
+            tile.terrain = "t_wall";
+            tile.kind = fp3d_snapshot::terrain_kind::wall;
+        }
+    }
+    scene.sprites.clear();
+    const auto wall = render();
+    scene.sprites = { fire, smoke };
+    CHECK( render() == wall );
+}
+
+TEST_CASE( "fp3d_gl_crossed_flora_and_flat_lilypad_in_both_cameras", "[.fp3d_gl][plants_gl]" )
+{
+    REQUIRE( fp3d_compositor::requested() );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    constexpr int width = 640;
+    constexpr int height = 480;
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D vegetation", SDL_WINDOWPOS_UNDEFINED,
+                           SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    REQUIRE( window );
+    REQUIRE( SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl" ) );
+    on_out_of_scope clear_hint( []() { SDL_ResetHint( SDL_HINT_RENDER_DRIVER ); } );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope old_tilecontext( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    on_out_of_scope cleanup( []() {
+        fp3d_compositor::release();
+        tilecontext.reset();
+    } );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    fp3d_compositor::set_viewport( 0, 0, width, height, width, height );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    REQUIRE( TILESETS.count( "UNDEAD_PEOPLE_BASE" ) == 1 );
+    fp3d_materials::set_tileset( cache.load_tileset( "UNDEAD_PEOPLE_BASE", renderer,
+                                 false, true, false, false ), renderer );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1.f;
+    scene.weather.fog_end = 60.f;
+    for( int y = -7; y <= 2; ++y ) {
+        for( int x = -4; x <= 4; ++x ) {
+            auto &tile = scene.cells.emplace_back();
+            tile.position = tripoint_abs_ms( x, y, 0 );
+            tile.terrain = y < -2 ? "t_water_sh" : "t_grass";
+        }
+    }
+    auto &lilypad = scene.cells[4 * 9 + 4];
+    auto &cattails = scene.cells[4 * 9 + 3];
+    const auto render = [&]() {
+        SDL_SetRenderDrawColor( renderer.get(), 8, 12, 20, 255 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        fp3d_compositor::publish( scene );
+        fp3d_compositor::compose();
+        std::vector<std::uint32_t> pixels( width * height );
+        REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                       pixels.data(), width * 4 ) == 0 );
+        return pixels;
+    };
+    for( const std::string mode : { "first_person", "overhead" } ) {
+        CAPTURE( mode );
+        fp3d_compositor::restore_view_mode( mode );
+        lilypad.vegetation.clear();
+        cattails.vegetation.clear();
+        cattails.vegetation_height = 0.f;
+        const auto bare = render();
+        lilypad.vegetation = "f_lilypad";
+        const auto flat = render();
+        CHECK( flat != bare );
+        // A flat leaf must keep its pixels even if given an upright plant height.
+        lilypad.vegetation_height = .85f;
+        CHECK( render() == flat );
+        lilypad.vegetation_height = 0.f;
+        cattails.vegetation = "f_cattails";
+        cattails.vegetation_height = .85f;
+        auto planted = render();
+        CHECK( planted != flat );
+        if( const char *directory = std::getenv( "CDDA_FP3D_RENDER_REPORT_DIR" ) ) {
+            SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( planted.data(), width, height,
+                                     32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+            REQUIRE( picture );
+            CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
+                               ( "lilypad-" + mode + ".png" ) ).u8string().c_str() ) == 0 );
+        }
+    }
+}
+
 #endif

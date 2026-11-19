@@ -81,12 +81,14 @@ struct stair_section {
 struct ground_field {
     std::string id;
     int intensity = 1;
+    int connections = 0; // Native south/east/west/north bits.
 };
 
 struct cell {
     tripoint_abs_ms position;
     std::string terrain;
     int roof_connections = -1;
+    int ground_connections = -1; // Natural ground: south/east/west/north bits.
     terrain_kind kind = terrain_kind::floor;
     knowledge known = knowledge::visible;
     std::string vegetation;
@@ -99,6 +101,8 @@ struct cell {
     bool exterior_only = false;
     // A visible room's immediate overhead boundary, without upstairs identity.
     bool ceiling_present = false;
+    // Opaque room boundary hidden by the overhead cut, retained for light occlusion.
+    bool cutaway_ceiling = false;
     // The overhead boundary is walkable roof glass (a skylight). It is drawn
     // as a translucent pane like a glass wall, lets the sky/sun through, and
     // never becomes an opaque ceiling sheet or a solid ceiling shadow.
@@ -112,6 +116,8 @@ struct cell {
     // exposed metal walkway of a radio tower. Determined from real adjacent
     // terrain while the cell is visible, not from partially visible sprites.
     bool metal_deck_railing = false;
+    // Render upper tower structures translucent while preserving physical geometry.
+    bool faded_tower = false;
     bool open_air = false;
     bool goes_up = false;
     bool goes_down = false;
@@ -124,7 +130,7 @@ struct cell {
     bool over_avatar_region = false;
 };
 
-enum class sprite_kind { monster, character, item, held_item };
+enum class sprite_kind { monster, character, item, held_item, field };
 
 struct sprite {
     tripoint_abs_ms position;
@@ -145,6 +151,7 @@ struct sprite {
     std::vector<std::string> status_icons;
     float height = 1.8f;
     float elevation = 0;
+    int field_intensity = 0;
 };
 
 // Copied from native *active* emitters while capturing the visible world.
@@ -192,6 +199,8 @@ struct scene_snapshot {
     // Capture has already grouped neighbouring stair tiles. Publishing must
     // not repeat this full-scene pass on every native player action.
     bool stairs_connected = false;
+    // Cells came from the complete live camera grid, before overhead dimming.
+    bool camera_geometry = false;
     std::vector<landscape_patch> landscape;
     std::vector<sprite> sprites;
     // Only native-visible, active/powered sources; never remembered lamp IDs.
@@ -219,6 +228,10 @@ struct scene_snapshot {
 
 // Connect permitted adjacent stair tiles into rectangular flights.
 void connect_stairs( scene_snapshot &scene );
+// Connect same-type coverings using only captured, visible cells.
+void connect_ground_fields( scene_snapshot &scene );
+// Connect natural surfaces using captured terrain only, including remembered cells.
+void connect_ground_terrain( scene_snapshot &scene );
 // Compare every cell attribute, then retain the previous allocation and revision.
 // Dynamic sprites, lights, weather and vehicles keep their own fresh publication.
 void reuse_geometry( scene_snapshot &scene, scene_snapshot *previous );

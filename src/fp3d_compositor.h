@@ -45,6 +45,9 @@ fp3d_input::mode controls();
 // F6 flips it inside the 3D world; nothing here is a 2D mode.
 bool overhead();
 void toggle_camera();
+// Per-character save preference, independent of global rendering defaults.
+std::string saved_view_mode();
+void restore_view_mode( const std::string &mode );
 // Modern movement follows the active camera heading, including overhead orbit.
 float movement_heading();
 // Read-only presentation state of the overhead camera (HUD and regression
@@ -54,6 +57,7 @@ float overhead_distance();
 // The native tile under the mouse cursor inside the 3D world viewport. Only
 // natively visible, non-facade cells on the avatar's own storey qualify.
 std::optional<tripoint_abs_ms> pointer_tile();
+bool overhead_tile_visible( const tripoint_abs_ms &position );
 // Overhead right-click: the 3D profile binds the right button to aiming, so the
 // native secondary-select binding can never arrive. The compositor owns the
 // click and hands the world dispatcher one plain "SEC_SELECT" request instead,
@@ -81,7 +85,8 @@ float heading();
 void set_blueprint( std::optional<fp3d_scene::blueprint> preview );
 bool turn_based();
 std::vector<std::string> hud_lines();
-fp3d_hud::data hud_data();
+// Borrowed until the next HUD/scene publication or compositor reset.
+const fp3d_hud::data &hud_data();
 const std::vector<fp3d_hud::data::message_entry> &target_details();
 bool interaction_available();
 std::string interaction_prompt();

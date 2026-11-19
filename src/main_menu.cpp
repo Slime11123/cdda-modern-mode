@@ -861,6 +861,10 @@ bool main_menu::opening_screen()
         input_event sInput = ctxt.get_raw_input();
 #if defined(TILES) && defined(ENABLE_FP3D)
         if( fp3d_compositor::requested() && fp3d_input::is_mode_settings_key( sInput ) ) {
+            set_main_menu_demo_active( false );
+            on_out_of_scope restore_backdrop( []() {
+                set_main_menu_demo_active( true );
+            } );
             fp3d_input::display_bindings( ctxt );
             init_strings();
             init_windows();
@@ -1027,10 +1031,12 @@ bool main_menu::opening_screen()
             }
         } else if( action == "CONFIRM" ) {
 #if defined(TILES) && defined(ENABLE_FP3D)
-            // Sub-screens (settings, world selection, character creation) are opaque
-            // and cover the backdrop, but the demo must keep running behind them: it is
-            // only switched off when the player actually enters the game, which happens
-            // when opening_screen() returns (see the scope guard above).
+            // Restore vanilla black backgrounds while a sub-screen is open.
+            // The sandbox worker keeps running; only its UI backdrop is hidden.
+            set_main_menu_demo_active( false );
+            on_out_of_scope restore_backdrop( []() {
+                set_main_menu_demo_active( true );
+            } );
 #endif
             switch( static_cast<main_menu_opts>( sel1 ) ) {
                 case main_menu_opts::HELP:

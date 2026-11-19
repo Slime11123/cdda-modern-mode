@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include "fp3d_camera.h"
 #include "fp3d_snapshot.h"
+#include "fp3d_ramp.h"
+#include "fp3d_scene.h"
 namespace fp3d_targeting
 {
 namespace
@@ -134,9 +136,9 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         }
     }
     std::unordered_map<tripoint_abs_ms, const fp3d_snapshot::cell *> indexed;
-    indexed.reserve( local.size() );
-    for( const auto *tile : local ) {
-        indexed.emplace( tile->position, tile );
+    indexed.reserve( scene.cells.size() );
+    for( const auto &tile : scene.cells ) {
+        indexed.emplace( tile.position, &tile );
     }
     const auto cell_at = [&]( const tripoint_abs_ms & p ) -> const fp3d_snapshot::cell * {
         const auto it = indexed.find( p );
@@ -157,6 +159,19 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         const float x = p.x();
         const float y = p.y();
         const float z = p.z() * fp3d_camera::floor_height;
+        const auto *support = fp3d_ramp::support( *tile, cell_at );
+        const bool slope_guardrail = support && support != tile;
+        if( slope_guardrail && fp3d_ramp::covered( *support,
+            cell_at( support->position + tripoint_rel_ms::above ) ) &&
+            cell_at( tile->position + tripoint_rel_ms::above ) ) {
+            continue;
+        }
+        const auto rail_plane = slope_guardrail ? fp3d_ramp::plane( *support, cell_at ) :
+                                fp3d_ramp::surface{};
+        vector3 box_eye = eye;
+        vector3 box_direction = direction;
+        box_eye[2] -= rail_plane.height( eye[0] - x, eye[1] - y );
+        box_direction[2] -= rail_plane.dx * direction[0] + rail_plane.dy * direction[1];
         const auto accept = [&]( const std::optional<float> &hit, const edge_outline &outline,
                                  kind type = kind::terrain ) {
             if( !hit || *hit < fp3d_camera::near_clip || *hit > reach ) {
@@ -186,9 +201,13 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             const float north = y + dy - depth / 2;
             const float south = y + dy + depth / 2;
             const float base = z + ( flat ? top : bottom );
-            accept( intersect( eye, direction, { left, north, z + bottom }, { right, south, z + top }, reach, round ),
-            { {{ { left, base, north }, { right, base, north }, { right, base, south },
-                    { left, base, south } }}, flat ? 0 : top - bottom }, type );
+            accept( intersect( box_eye, box_direction, { left, north, z + bottom },
+                               { right, south, z + top }, reach, round ),
+            { {{ { left, base + rail_plane.height( left - x, north - y ), north },
+                    { right, base + rail_plane.height( right - x, north - y ), north },
+                    { right, base + rail_plane.height( right - x, south - y ), south },
+                    { left, base + rail_plane.height( left - x, south - y ), south } }},
+                flat ? 0 : top - bottom }, type );
         };
         if( tile->furniture ) {
             const auto shape = tile->furniture->shape;
@@ -225,6 +244,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         }
         if( tile->vegetation_height > 0 ) {
             const float height = tile->vegetation_height;
+            const float base = z + fp3d_scene::water_surface_offset( tile->terrain ) + .015f;
             const float width = std::max( .9f, height <= 1.2f ? height : height * .7f );
             for( const float diagonal : {
                      -1.0f, 1.0f
@@ -235,29 +255,30 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 }
                 const float distance = ( y - eye[1] + diagonal * ( eye[0] - x ) ) / denominator;
                 const float across = eye[0] + distance * direction[0] - x;
-                const float up = eye[2] + distance * direction[2] - z;
-                if( std::abs( across ) <= width / 2 && up >= .015f && up <= height + .015f ) {
+                const float up = eye[2] + distance * direction[2] - base;
+                if( std::abs( across ) <= width / 2 && up >= 0.f && up <= height ) {
                     const float half = width / 2;
-                    accept( distance, { {{ { x - half, z + .015f, y - diagonal * half },
-                            { x + half, z + .015f, y + diagonal * half },
-                            { x + half, z + height + .015f, y + diagonal * half },
-                            { x - half, z + height + .015f, y - diagonal * half } }} } );
+                    accept( distance, { {{ { x - half, base, y - diagonal * half },
+                            { x + half, base, y + diagonal * half },
+                            { x + half, base + height, y + diagonal * half },
+                            { x - half, base + height, y - diagonal * half } }} } );
                 }
             }
         }
-        const auto *above = tile->ceiling_present || tile->goes_up ?
+        const auto *above = tile->ceiling_present || tile->goes_up || tile->is_ramp ?
                             cell_at( tile->position + tripoint_rel_ms::above ) : nullptr;
-        if( tile->is_ramp ) {
-            // The renderer slopes along native y, inside this tile only.
-            const float slope = tile->ramp_delta * fp3d_camera::floor_height;
-            const float denominator = direction[2] + slope * direction[1];
+        if( tile->is_ramp && !fp3d_ramp::covered( *tile, above ) ) {
+            const auto ramp = fp3d_ramp::plane( *tile, cell_at );
+            const float denominator = direction[2] - ramp.dx * direction[0] - ramp.dy * direction[1];
             if( std::abs( denominator ) > .000001f ) {
-                const float distance = ( z + slope * ( .5f - eye[1] + y ) - eye[2] ) / denominator;
+                const float distance = ( z + ramp.height( eye[0] - x, eye[1] - y ) - eye[2] ) /
+                                       denominator;
                 if( std::abs( eye[0] + distance * direction[0] - x ) <= .5f &&
                     std::abs( eye[1] + distance * direction[1] - y ) <= .5f ) {
-                    accept( distance, { {{ { x - .5f, z + slope, y - .5f },
-                            { x + .5f, z + slope, y - .5f }, { x + .5f, z, y + .5f },
-                            { x - .5f, z, y + .5f } }} } );
+                    accept( distance, { {{ { x - .5f, z + ramp.height( -.5f, -.5f ), y - .5f },
+                            { x + .5f, z + ramp.height( .5f, -.5f ), y - .5f },
+                            { x + .5f, z + ramp.height( .5f, .5f ), y + .5f },
+                            { x - .5f, z + ramp.height( -.5f, .5f ), y + .5f } }} } );
                 }
             }
         }
@@ -272,8 +293,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 box( 0, 0, 1, 1, -.08f, 0, kind::terrain, true );
             }
         }
-        const bool upper_floor_surface = above && above->floor_present && !above->is_ramp;
-        if( tile->ceiling_present && !upper_floor_surface &&
+        const bool upper_floor_surface = above && ( above->floor_present || above->is_ramp );
+        if( tile->ceiling_present && !slope_guardrail && !upper_floor_surface &&
             !( tile->terrain == "t_radio_tower" && above && above->terrain == "t_radio_tower" ) ) {
             box( 0, 0, 1, 1, fp3d_camera::floor_height - .08f, fp3d_camera::floor_height - .08f );
         }
@@ -477,7 +498,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     }
     float nearest_sprite = reach + .001f;
     for( const auto &image : scene.sprites ) {
-        if( image.kind == fp3d_snapshot::sprite_kind::held_item ) {
+        if( image.kind == fp3d_snapshot::sprite_kind::held_item ||
+            image.kind == fp3d_snapshot::sprite_kind::field ) {
             continue;
         }
         // The overhead avatar sprite is the pointer target's own tile, never a

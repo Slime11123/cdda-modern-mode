@@ -32,6 +32,7 @@ bool shadows_enabled();
 void set_shadows_enabled( bool enabled );
 // Real depth/scene-colour raymarching in MC visual bridge only.
 bool wet_ssr_enabled();
+bool pack_water_enabled();
 void set_wet_ssr_enabled( bool enabled );
 bool shadow_volume_enabled();
 void set_shadow_volume_enabled( bool enabled );
@@ -39,6 +40,8 @@ void set_shadow_volume_enabled( bool enabled );
 // unsupported direct final.fsh remains unchanged.
 bool local_lights_enabled();
 void set_local_lights_enabled( bool enabled );
+bool local_shadows_enabled();
+void set_local_shadows_enabled( bool enabled );
 bool local_lights_compiled();
 // Opt-in, Ultra-only normal/roughness/metalness lighting prototype; default Off.
 bool pbr_enabled();
@@ -84,6 +87,10 @@ struct environment {
     float native_local_position[8][4] = {};
     float native_local_color[8][4] = {};
     float native_local_beam[8] = {};
+    GLuint native_beam_shadow = 0;
+    int native_beam_shadow_index = -1;
+    GLuint native_point_shadow = 0;
+    int native_point_shadow_index = -1;
 };
 int quality();
 void set_quality( int level );

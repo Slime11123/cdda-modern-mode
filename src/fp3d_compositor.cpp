@@ -1,4 +1,5 @@
 #include "fp3d_modern_ui.h"
+#include "fp3d_aiming.h"
 #include "fp3d_compositor.h"
 #include "fp3d_regression.h"
 
@@ -69,6 +70,9 @@ bool in_world = false;
 bool world_input = false;
 bool overlay_input = false;
 bool panel_input = false;
+bool modern_aiming = false;
+bool aiming_input = false;
+std::optional<tripoint_abs_ms> aimed_creature;
 bool available = false;
 bool draw_permitted = true;
 bool selftest = false;
@@ -242,7 +246,7 @@ void sync_mouse()
     // camera owns relative mouse capture.
     const bool capture = available && enabled && draw_permitted && latest_scene && window &&
                          !overhead_view && SDL_GetKeyboardFocus() == window;
-    const bool keyboard_world = overhead_view && enabled && draw_permitted && window &&
+    const bool keyboard_world = overhead_view && enabled && draw_permitted && !aiming_input && window &&
                                 SDL_GetKeyboardFocus() == window;
     if( !capture && !keyboard_world ) {
         fp3d_input::world_gestures().cancel();
@@ -460,6 +464,10 @@ void clear_map_overlays()
 
 void add_map_overlay( map_overlay overlay )
 {
+    if( aiming_input && aimed_creature == overlay.position &&
+        ( overlay.id == "cursor" || overlay.id == "line_target" ) ) {
+        return;
+    }
     native_map_overlays.push_back( std::move( overlay ) );
 }
 
@@ -561,7 +569,7 @@ bool process_event( const SDL_Event &event )
     if( !requested() ) {
         return false;
     }
-    if( !draw_permitted ) {
+    if( !draw_permitted || aiming_input ) {
         return false;
     }
     if( event.type == SDL_WINDOWEVENT ) {
@@ -642,6 +650,9 @@ bool process_event( const SDL_Event &event )
                     secondary_select_tile = pointer_tile();
                     secondary_select_pending = secondary_select_tile.has_value();
                     secondary_select_mouse = point( event.button.x, event.button.y );
+                    DebugLog( D_INFO, D_MAIN ) << "fp3d: overhead_context v4 click="
+                                               << secondary_select_mouse << ", picked="
+                                               << secondary_select_pending;
                 }
                 return true;
             }
@@ -706,7 +717,8 @@ bool menu_text_input()
 
 bool captures_game_input()
 {
-    return requested() && available && enabled && draw_permitted && latest_scene && window &&
+    return requested() && available && enabled && draw_permitted && !aiming_input &&
+           latest_scene && window &&
            SDL_GetKeyboardFocus() == window;
 }
 
@@ -747,6 +759,23 @@ void toggle_camera()
     }
 }
 
+std::string saved_view_mode()
+{
+    return enabled ? ( overhead_view ? "overhead" : "first_person" ) : "2d";
+}
+
+void restore_view_mode( const std::string &mode )
+{
+    if( !requested() ) {
+        return;
+    }
+    // Missing/unknown values retain the configured rendering preference, but
+    // must never inherit another character's overhead camera in this session.
+    const bool known = mode == "2d" || mode == "first_person" || mode == "overhead";
+    overhead_view = mode == "overhead";
+    apply_modes( known ? mode != "2d" : enabled, modern_2d );
+}
+
 float movement_heading()
 {
     // WASD stays relative to the screen after orbiting with the middle button.
@@ -770,16 +799,57 @@ std::optional<tripoint_abs_ms> pointer_tile()
     }
     // Same camera, same snapshot, same storey as the frame the player is
     // looking at. Only natively visible, non-facade cells can be produced.
-    const auto target = pointing_target( camera_pose( SDL_GetTicks() ) );
-    if( !target || target->position.z() != latest_scene->origin.z() ) {
+    const auto pose = camera_pose( SDL_GetTicks() );
+    const auto target = pointing_target( pose );
+    if( target && target->position.z() == latest_scene->origin.z() ) {
+        return target->position;
+    }
+    // A facade or another storey's roof may be the first mesh hit. The tile
+    // menu still needs a map square on the player's floor, rather than silently
+    // dropping the right-click. Unproject onto that floor and keep the same
+    // snapshot visibility gate; this never invents an unseen destination.
+    constexpr float radians = 3.14159265358979323846f / 180.0f;
+    const float sy = std::sin( pose.yaw * radians );
+    const float cy = std::cos( pose.yaw * radians );
+    const float sp = std::sin( pose.pitch * radians );
+    const float cp = std::cos( pose.pitch * radians );
+    const float aspect = texture_height > 0 ?
+                         static_cast<float>( texture_width ) / texture_height : 1.0f;
+    const float horizontal = pointer.ndc_x * fp3d_camera::horizontal_tangent();
+    const float vertical = pointer.ndc_y * fp3d_camera::horizontal_tangent() / aspect;
+    const float dz = -sp + cp * vertical;
+    if( dz >= -.000001f ) {
         return std::nullopt;
     }
-    return target->position;
+    const float distance = -pose.eye.height / dz;
+    if( distance < fp3d_camera::near_clip || distance > fp3d_camera::far_clip ) {
+        return std::nullopt;
+    }
+    const float x = pose.eye.x + distance * ( sy * cp + cy * horizontal + sp * sy * vertical );
+    const float y = pose.eye.y + distance * ( -cy * cp + sy * horizontal - sp * cy * vertical );
+    const tripoint_abs_ms position = latest_scene->origin + tripoint_rel_ms(
+                                        static_cast<int>( std::floor( x + .5f ) ),
+                                        static_cast<int>( std::floor( y + .5f ) ), 0 );
+    return overhead_tile_visible( position ) ? std::optional<tripoint_abs_ms>( position ) :
+           std::nullopt;
+}
+
+bool overhead_tile_visible( const tripoint_abs_ms &position )
+{
+    if( !overhead() || !latest_scene || position.z() != latest_scene->origin.z() ||
+        !g || latest_scene->origin != get_avatar().pos_abs() ) {
+        return false;
+    }
+    // This also works while the menu owns input and draw_permitted is false.
+    return std::any_of( latest_scene->cells.begin(), latest_scene->cells.end(),
+    [&]( const auto &tile ) {
+        return tile.position == position &&
+               tile.known == fp3d_snapshot::knowledge::visible && !tile.exterior_only;
+    } );
 }
 
 bool take_secondary_select( point *mouse )
 {
-    dispatched_secondary_tile.reset();
     if( !secondary_select_pending ) {
         return false;
     }
@@ -917,7 +987,7 @@ void set_blueprint( std::optional<fp3d_scene::blueprint> preview )
 
 std::vector<std::string> hud_lines()
 {
-    if( !uses_hud() || !draw_permitted ||
+    if( !uses_hud() || !draw_permitted || aiming_input ||
         ( enabled ? !latest_scene.has_value() : !latest_2d_hud.has_value() ) ) {
         return {};
     }
@@ -965,10 +1035,11 @@ std::vector<std::string> hud_lines()
     return lines;
 }
 
-fp3d_hud::data hud_data()
+const fp3d_hud::data &hud_data()
 {
-    return enabled ? ( latest_scene ? latest_scene->hud : fp3d_hud::data{} ) :
-           latest_2d_hud.value_or( fp3d_hud::data{} );
+    static const fp3d_hud::data empty;
+    return enabled ? ( latest_scene ? latest_scene->hud : empty ) :
+           ( latest_2d_hud ? *latest_2d_hud : empty );
 }
 
 static bool interaction_available( const std::optional<fp3d_targeting::target> &target )
@@ -1191,10 +1262,11 @@ void set_input_context( const std::string &category )
 {
     panel_input = category == "FP3D_PANEL";
     world_input = category == "DEFAULTMODE";
+    aiming_input = modern_aiming && category == "TARGET";
     if( world_input || category == "MAIN_MENU" ) {
         in_world = world_input;
     }
-    overlay_input = category == "MODERN_2D_CONTEXT" || category == "FP3D_WHEEL";
+    overlay_input = category == "MODERN_2D_CONTEXT" || category == "FP3D_WHEEL" || aiming_input;
     if( category == "MAIN_MENU" ) { fp3d_modern_ui::clear_resume(); }
     if( !requested() ) {
         return;
@@ -1203,7 +1275,8 @@ void set_input_context( const std::string &category )
     // draw stage; final composition must not cover their controls.
     const bool was_permitted = draw_permitted;
     draw_permitted = !fp3d_modern_ui::transfer_pending() &&
-                     ( category == "DEFAULTMODE" || category == "FP3D_BUILD" || category == "MAIN_MENU" );
+                     ( category == "DEFAULTMODE" || category == "FP3D_BUILD" || category == "MAIN_MENU" ||
+                       aiming_input );
     if( was_permitted && !draw_permitted ) {
         menu_background = copy_view();
         held_swing.reset();
@@ -1486,6 +1559,7 @@ void compose()
     if( SDL_GetRendererOutputSize( renderer, &width, &height ) != 0 || width <= 0 || height <= 0 ) {
         return;
     }
+    fp3d_regression::gpu_collect();
     bool qa_material_gpu_verified = false;
     bool material_gpu_ready = false;
     bool pbr_supported = false;
@@ -1686,21 +1760,24 @@ void compose()
             }
             const auto &offset = frame_camera;
             profile.stage( "compose_target" );
-            const auto aim = draw_permitted ? interaction_target( pose ) : std::nullopt;
+            const auto aim = draw_permitted && !aiming_input ? interaction_target( pose ) : std::nullopt;
             profile.stage( "compose_world" );
             // The first-person hand overlay and swing pose belong to the eye
             // camera only; the overhead view shows the avatar's tile sprite.
+            fp3d_regression::gpu_probe world_timer( "world" );
             fp3d_scene::draw( *latest_scene, view_yaw, view_pitch,
                               static_cast<float>( texture_width ) / texture_height,
                               offset, construction_preview, interaction_available( aim ),
                               overhead_view ? 0.0f : held_swing.amount( SDL_GetTicks() ), aim,
                               overhead_view );
+            world_timer.finish();
             fp3d_materials::unbind();
             profile.stage( "compose_auxiliary" );
             const bool qa_surface_requested = qa_material_gpu_verified &&
                 env_enabled( "CDDA_FP3D_QA_MATERIAL_SURFACE" );
             if( ( pbr_supported || qa_surface_requested ) && material_gpu_ready &&
                 depth_texture ) {
+                fp3d_regression::gpu_probe surface_timer( "surface" );
                 qa_surface = fp3d_surface_pass::render( *latest_scene, view_yaw, view_pitch,
                     static_cast<float>( texture_width ) / texture_height,
                     frame_camera, texture_width, texture_height, depth_texture,
@@ -1727,9 +1804,11 @@ void compose()
             // Material-aware SSR mask: render only visible native water/road
             // tiles, with original world depth attached read-only. Neither
             // colour nor the existing scene depth can be overwritten here.
-            if( reflectivity_fbo && fp3d_shaderpacks::wet_ssr_enabled() &&
+            if( reflectivity_fbo &&
+                ( fp3d_shaderpacks::pack_water_enabled() ||
+                  ( fp3d_shaderpacks::wet_ssr_enabled() && fp3d_shaderpacks::quality() >= 3 ) ) &&
                 fp3d_shaderpacks::mc_visual_strength() > 0.0f &&
-                fp3d_shaderpacks::quality() >= 3 ) {
+                fp3d_shaderpacks::quality() >= 1 ) {
                 // Optional QA-only synthetic wetness, applied to the
                 // isolated test frame, never to the game simulation.
                 const float rain =
@@ -1740,6 +1819,7 @@ void compose()
                 // Dry terrain without visible water needs neither another FBO
                 // pass nor the full-screen SSR sampling branch.
                 if( fp3d_scene::has_reflective_surfaces( *latest_scene, rain ) ) {
+                    fp3d_regression::gpu_probe reflection_timer( "reflection_mask" );
                     bind_framebuffer( GL_FRAMEBUFFER, reflectivity_fbo );
                     glViewport( 0, 0, texture_width, texture_height );
                     glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
@@ -1748,6 +1828,7 @@ void compose()
                     fp3d_scene::draw_reflectivity_mask( *latest_scene, view_yaw, view_pitch,
                         static_cast<float>( texture_width ) / texture_height,
                         frame_camera, rain );
+                    fp3d_scene::exclude_navigation_overlays_from_reflectivity();
                     bind_framebuffer( GL_FRAMEBUFFER, framebuffer );
                     reflectivity_rendered = true;
                 }
@@ -1872,6 +1953,7 @@ void compose()
         // The main game FBO is immutable; failure falls back to its old source.
         GLuint world_color = color_texture;
         if( latest_scene && pbr_supported && qa_surface.valid && depth_texture ) {
+            fp3d_regression::gpu_probe pbr_timer( "pbr" );
             const float sun_direction[3] = {
                 latest_scene->sky.sun_x, latest_scene->sky.sun_y, latest_scene->sky.sun_z
             };
@@ -1939,11 +2021,29 @@ void compose()
                     post_env.native_local_color[i][k] = lights[i].color[k];
                 }
                 post_env.native_local_beam[i] = lights[i].beam;
+                if( lights[i].held_beam && post_env.native_beam_shadow_index < 0 &&
+                    fp3d_shaderpacks::local_shadows_enabled() ) {
+                    post_env.native_beam_shadow = fp3d_shadow::render_beam(
+                        *latest_scene, lights[i].position, post_env.yaw, post_env.pitch );
+                    if( post_env.native_beam_shadow ) {
+                        post_env.native_beam_shadow_index = i;
+                    }
+                }
+                if( lights[i].fixture && post_env.native_point_shadow_index < 0 &&
+                    fp3d_shaderpacks::local_shadows_enabled() ) {
+                    post_env.native_point_shadow = fp3d_shadow::render_point(
+                        *latest_scene, lights[i].position );
+                    if( post_env.native_point_shadow ) {
+                        post_env.native_point_shadow_index = i;
+                    }
+                }
             }
         }
         profile.stage( "compose_post" );
+        fp3d_regression::gpu_probe post_timer( "post_combined" );
         const GLuint displayed_color = latest_scene ? fp3d_shaderpacks::apply( world_color,
                                        texture_width, texture_height, post_env ) : world_color;
+        post_timer.finish();
         profile.stage( "compose_output" );
         // Optional internal QA capture of the *actual 3D FBO*, independent of
         // Windows desktop focus and UI screenshots. Disabled for every normal
@@ -2251,6 +2351,7 @@ void release()
         SDL_SetRelativeMouseMode( SDL_FALSE );
     }
     if( context && SDL_GL_GetCurrentContext() == context ) {
+        fp3d_regression::gpu_release();
         if( renderer ) {
             SDL_RenderFlush( renderer );
         }
@@ -2281,7 +2382,8 @@ void release()
     renderer = nullptr;
     window = nullptr;
     available = enabled = selftest = false;
-    panel_input = false;
+    panel_input = modern_aiming = aiming_input = false;
+    aimed_creature.reset();
     modern_2d = in_world = world_input = overlay_input = false;
     overhead_view = false;
     orbit_dragging = false;
@@ -2298,6 +2400,40 @@ void release()
     held_swing.reset();
     swing_pending = false;
     accepted_walk.reset();
+}
+namespace aiming
+{
+void set_active( bool active )
+{
+    modern_aiming = active;
+    if( active ) {
+        orbit_dragging = false;
+    } else {
+        aimed_creature.reset();
+    }
+    set_input_context( active ? "TARGET" : "DEFAULTMODE" );
+}
+
+bool active()
+{
+    return aiming_input;
+}
+
+void set_target( std::optional<tripoint_abs_ms> position )
+{
+    aimed_creature = position;
+}
+
+std::optional<tripoint_abs_ms> target()
+{
+    return aiming_input ? aimed_creature : std::nullopt;
+}
+
+std::optional<tripoint_abs_ms> pick( const point &mouse )
+{
+    update_pointer( mouse.x, mouse.y );
+    return pointer_tile();
+}
 }
 } // namespace fp3d_compositor
 #endif

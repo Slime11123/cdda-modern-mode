@@ -19,6 +19,10 @@ class turn_probe
 void tick();
 // Loading redraws are not a playable action boundary.
 void action_boundary();
+// Native dispatch ID, independent of calendar::turn (several actions may share it).
+void action_started();
+// After native world/body/weather updates, before the next action redraw.
+void native_turn_finished();
 // Opt-in QA sampling of actual presents and native snapshot costs.
 void presented( SDL_Renderer *renderer );
 void snapshot_captured( double milliseconds );
@@ -35,5 +39,29 @@ void material_prepare( double milliseconds );
 // One scene::draw() pass: its CPU time and the incremental work it had to do.
 void scene_draw( double cpu_ms, int indexed_cells, int chunks, int rebuilt, int landscape_chunks,
                  int landscape_rebuilt );
+// Building-geometry detail of one scene::draw(): the static index/regroup block,
+// the chunk signature and display-list pass, and why chunk lists were discarded
+// (forced by a new geometry generation versus a changed chunk signature).
+void scene_geometry( double index_ms, double chunk_pass_ms, int forced_rebuilds,
+                     int changed_rebuilds, int visible_vehicles );
+// One named slice of an overlay pass (a HUD panel, the entry overlay), reported
+// as stage_<name> so a per-frame overlay cost can be attributed. Sampled only
+// while FRAME_SELFTEST is on.
+void stage_sample( const char *name, double milliseconds );
+// Default-off timestamp queries. Results are polled on later frames, never waited on.
+class gpu_probe
+{
+    public:
+        explicit gpu_probe( const char *name );
+        ~gpu_probe();
+        gpu_probe( const gpu_probe & ) = delete;
+        gpu_probe &operator=( const gpu_probe & ) = delete;
+        void finish();
+    private:
+        int slot = -1;
+};
+void gpu_collect();
+// Call before destroying the current compositor GL context.
+void gpu_release();
 }
 #endif

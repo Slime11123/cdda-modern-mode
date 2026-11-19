@@ -22,6 +22,7 @@
 #include "game.h"
 #include "kill_tracker.h"
 #include "fp3d_map.h"
+#include "fp3d_body_figure.h"
 #include "fp3d_hud.h"
 #include "catacharset.h"
 #include "cata_utility.h"
@@ -746,41 +747,60 @@ class panel : public cataimgui::window
             ImGui::PopID();
         }
         void body_equipment() {
-            const float width = ( ImGui::GetContentRegionAvail().x - 16 * scale ) / 3;
-            if( ImGui::BeginTable( "装备部位示意", 3, ImGuiTableFlags_SizingStretchSame ) ) {
-                const std::pair<const char *, const char *> parts[] = {
-                    { "", "" }, { "head", "头部" }, { "", "" },
-                    { "arm_l", "左臂" }, { "torso", "躯干" }, { "arm_r", "右臂" },
-                    { "leg_l", "左腿" }, { "", "" }, { "leg_r", "右腿" }
+            using namespace fp3d_body_figure;
+            const float available = ImGui::GetContentRegionAvail().x;
+            if( available > 0 ) {
+                const float icon_scale = std::min( .8f * scale, available / width );
+                const ImVec2 start = ImGui::GetCursorScreenPos();
+                const float left = start.x + ( available - width * icon_scale ) * .5f;
+                const auto screen_pos = [&]( const point &p ) {
+                    return ImVec2( left + p.x * icon_scale, start.y + p.y * icon_scale );
                 };
-                for( const auto &part : parts ) {
-                    ImGui::TableNextColumn();
-                    if( !*part.first || !you.get_body().count( bodypart_str_id( part.first ) ) ) {
-                        ImGui::Dummy( ImVec2( width, 39 * scale ) );
-                        continue;
+                ImDrawList *draw = ImGui::GetWindowDrawList();
+                ImGui::BeginGroup();
+                for( const auto &region : regions ) {
+                    const bodypart_str_id part( region.id );
+                    const bool present = you.get_body().count( part ) != 0;
+                    bool hovered = false;
+                    if( present ) {
+                        const ImVec2 min = screen_pos( region.hit_min );
+                        const ImVec2 max = screen_pos( region.hit_max );
+                        ImGui::SetCursorScreenPos( min );
+                        if( ImGui::InvisibleButton( region.id, ImVec2( max.x - min.x, max.y - min.y ),
+                                                    ImGuiButtonFlags_EnableNav ) ) {
+                            gear_part = region.id;
+                        }
+                        target( fp3d_inventory::operation_kind::wear );
+                        hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+                        if( ImGui::IsItemHovered() ) {
+                            ImGui::SetTooltip( "%s  %d/%d\n点击筛选 · 拖放穿戴", body_part_name( part.id() ).c_str(),
+                                               you.get_part_hp_cur( part.id() ), you.get_part_hp_max( part.id() ) );
+                        }
                     }
-                    ImGui::PushID( part.first );
-                    if( gear_part == part.first ) {
-                        ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .22f, .4f, .45f, 1 ) );
+                    SDL_Color rgb{ 105, 110, 115, 160 };
+                    if( present ) {
+                        const nc_color health = display::get_bodygraph_bp_color( you, part.id(), bodygraph_var::hp );
+                        const auto &pair = cata_cursesport::colorpairs[health.to_color_pair_index()];
+                        const int palette = ( pair.FG != 0 ? pair.FG : pair.BG ) + ( health.is_bold() ? 8 : 0 );
+                        rgb = windowsPalette[palette];
+                        rgb.a = 255;
                     }
-                    const bool selected = gear_part == part.first;
-                    if( yellow_button( part.second, ImVec2( width, 30 * scale ) ) ) {
-                        gear_part = part.first;
+                    const bool selected = present && gear_part == region.id;
+                    std::vector<ImVec2> polygon;
+                    polygon.reserve( region.outline.size() );
+                    for( const point &p : region.outline ) {
+                        polygon.push_back( screen_pos( p ) );
                     }
-                    if( selected ) {
-                        ImGui::PopStyleColor();
-                    }
-                    target( fp3d_inventory::operation_kind::wear );
-                    if( ImGui::IsItemHovered() ) {
-                        ImGui::SetTooltip( "点击筛选覆盖此部位的衣物；拖入装备时仍由原版决定实际穿戴部位与层次。" );
-                    }
-                    const auto id = bodypart_str_id( part.first ).id();
-                    const int maximum = you.get_part_hp_max( id );
-                    ImGui::ProgressBar( maximum > 0 ? you.get_part_hp_cur( id ) / static_cast<float>( maximum ) : 0,
-                                        ImVec2( width, 5 * scale ), "" );
-                    ImGui::PopID();
+                    const int vertices = static_cast<int>( polygon.size() );
+                    draw->AddConcavePolyFilled( polygon.data(), vertices,
+                                                IM_COL32( rgb.r, rgb.g, rgb.b, hovered || selected ? 150 : 85 ) );
+                    draw->AddPolyline( polygon.data(), vertices,
+                                       selected ? IM_COL32( 255, 218, 85, 255 ) : IM_COL32( rgb.r, rgb.g, rgb.b, rgb.a ),
+                                       ImDrawFlags_Closed, selected ? 2.0f : 1.0f );
                 }
-                ImGui::EndTable();
+                ImGui::SetCursorScreenPos( start );
+                ImGui::Dummy( ImVec2( available, height * icon_scale ) );
+                ImGui::EndGroup();
             }
             const auto selected = gear_part.empty() ? "全身" : body_part_name( bodypart_str_id(
                                       gear_part ).id() );

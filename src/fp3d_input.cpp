@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "fp3d_camera.h"
 #include "fp3d_compositor.h"
+#include "fp3d_hud.h"
 #include "fp3d_shaderpacks.h"
 #include "cata_scope_helpers.h"
 #include "avatar.h"
@@ -327,6 +328,7 @@ class mode_settings : public cataimgui::window
         int column = 0;
         int result = -1;
         bool shader_page = false;
+        bool hud_page = false;
         std::vector<fp3d_shaderpacks::entry> shader_entries;
         cataimgui::bounds get_bounds() override {
             const auto size = ImGui::GetIO().DisplaySize;
@@ -401,16 +403,17 @@ class mode_settings : public cataimgui::window
             if( ImGui::Checkbox( "实验性近场太阳阴影", &experimental_shadows ) ) {
                 fp3d_shaderpacks::set_shadows_enabled( experimental_shadows );
             }
-            ImGui::TextWrapped( "内置光影及 MC 适配包在极高画质时可启用近场阴影；如投影异常可单独关闭。" );
+            ImGui::TextWrapped( "内置光影及 MC 适配包支持近场太阳阴影；如投影异常可单独关闭。" );
             bool ssr = fp3d_shaderpacks::wet_ssr_enabled();
             if( ImGui::Checkbox( "水面与雨天湿地 SSR 反射", &ssr ) ) {
                 fp3d_shaderpacks::set_wet_ssr_enabled( ssr );
             }
+            ImGui::TextWrapped( "Photon 水面在中档及以上读取本地包内水波与水色参数，替换原版水纹；极高档再启用场景倒影。关闭 SSR 仍保留水波与水色。水面低于岸边约 18 厘米。" );
             bool volume = fp3d_shaderpacks::shadow_volume_enabled();
             if( ImGui::Checkbox( "阴影遮挡体积太阳光", &volume ) ) {
                 fp3d_shaderpacks::set_shadow_volume_enabled( volume );
             }
-            ImGui::TextWrapped( "上述两项为 MC 视觉桥的极高档实验特性。SSR 仅渲染原版已可见的水面与下雨的道路，具有屏幕外反射缺失的限制。不影响 2D、原生光影和直接 final.fsh。" );
+            ImGui::TextWrapped( "上述两项为 MC 视觉桥的极高档实验特性。SSR 仅渲染原版已可见的水面与下雨的道路；水面倒影较清晰，粗糙湿路较柔和，屏幕边缘渐隐。屏幕外信息缺失时保留湿润光泽。不影响 2D、原生光影和直接 final.fsh。" );
             bool experimental_pbr = fp3d_shaderpacks::pbr_enabled();
             if( ImGui::Checkbox( "实验性 PBR 法线与材质高光（Ultra）", &experimental_pbr ) ) {
                 fp3d_shaderpacks::set_pbr_enabled( experimental_pbr );
@@ -424,7 +427,12 @@ class mode_settings : public cataimgui::window
             if( ImGui::Checkbox( "动态灯光（电网 / 手电筒 / 手机）", &local_lights ) ) {
                 fp3d_shaderpacks::set_local_lights_enabled( local_lights );
             }
-            ImGui::TextWrapped( "灯具必须在原版中确实通电、开启；便携设备必须正在发光。近距离色彩与光晕在 Photon/内置光影生效。最多 8 个邻近光源；暂不包含逐灯阴影。关闭以立即回退。" );
+            ImGui::TextWrapped( "灯具必须在原版中确实通电、开启；便携设备必须正在发光。近距离色彩与光晕在 Photon/内置光影生效，最多 8 个邻近光源。" );
+            bool local_shadows = fp3d_shaderpacks::local_shadows_enabled();
+            if( ImGui::Checkbox( "局部光源阴影（手持光束 / 重点灯具）", &local_shadows ) ) {
+                fp3d_shaderpacks::set_local_shadows_enabled( local_shadows );
+            }
+            ImGui::TextWrapped( "最多同时为一个手持光束和一盏重要固定灯生成阴影，使用已知墙体、门、楼板及车辆遮挡。其余灯保持原有照明；关闭此项可保留灯光和太阳阴影。" );
             ImGui::TextWrapped( "Minecraft 光影：简单 GLSL 1.20 final.fsh 可直接运行；Photon 等复杂光影使用 CDDA 视觉适配，暂不支持完整 Iris 多阶段效果。" );
             ImGui::EndChild();
 
@@ -450,7 +458,40 @@ class mode_settings : public cataimgui::window
                                  "光影包请放在 EXE 同目录的 shaderpacks 文件夹中。" :
                                  status.c_str() );
         }
+        void draw_hud_page() {
+            ImGui::TextUnformatted( "现代 UI 大小" );
+            ImGui::TextWrapped( "各面板独立缩放（含文字和图标），每档 25%，范围 25%～200%。修改自动保存，重新打开游戏后仍然生效。" );
+            ImGui::Separator();
+            ImGui::BeginChild( "hud_sizes", ImVec2( 0, -ImGui::GetFrameHeightWithSpacing() ), true );
+            for( const auto &panel : fp3d_hud::panel_settings ) {
+                ImGui::PushID( panel.option );
+                int step = get_option<int>( panel.option ) / 25;
+                const std::string format = std::to_string( step * 25 ) + "%%";
+                ImGui::SetNextItemWidth( ImGui::GetContentRegionAvail().x * .60f );
+                if( ImGui::SliderInt( panel.label, &step, 1, 8, format.c_str(),
+                                     ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp ) ) {
+                    get_options().get_option( panel.option ).setValue( std::to_string( step * 25 ) );
+                    get_options().save();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            if( ImGui::Button( "恢复默认大小" ) ) {
+                for( const auto &panel : fp3d_hud::panel_settings ) {
+                    get_options().get_option( panel.option ).setValue( std::string( "100" ) );
+                }
+                get_options().save();
+            }
+            ImGui::SameLine();
+            if( ImGui::Button( "返回" ) ) {
+                hud_page = false;
+            }
+        }
         void draw_controls() override {
+            if( hud_page ) {
+                draw_hud_page();
+                return;
+            }
             if( shader_page ) {
                 draw_shader_page();
                 return;
@@ -490,6 +531,10 @@ class mode_settings : public cataimgui::window
                 result = 2;
                 is_open = false;
             }
+            ImGui::SameLine();
+            if( ImGui::Button( "现代 UI 大小..." ) ) {
+                hud_page = true;
+            }
             ImGui::SetCursorPos( ImVec2( width - font * 6, top + height - font * 4.5f ) );
             if( ImGui::Button( "完成", ImVec2( font * 5, font * 2 ) ) ) {
                 result = 1;
@@ -517,8 +562,11 @@ class mode_settings : public cataimgui::window
                 }
                 const auto action = input.handle_input( 16 );
                 if( action == "QUIT" ) {
-                    if( shader_page ) { shader_page = false; }
+                    if( hud_page ) { hud_page = false; }
+                    else if( shader_page ) { shader_page = false; }
                     else { is_open = false; }
+                } else if( hud_page ) {
+                    if( action == "CONFIRM" ) { hud_page = false; }
                 } else if( shader_page ) {
                     if( action == "CONFIRM" ) { shader_page = false; }
                 } else if( action == "CONFIRM" ) {

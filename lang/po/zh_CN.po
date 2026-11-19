@@ -706215,3 +706215,19 @@ msgstr "未命名世界"
 
 msgid "Advanced options were changed; the preset levels no longer match."
 msgstr "高级设置已修改，预设档位不再相符。"
+
+#, c-format
+msgid "Aiming at: %s"
+msgstr "当前瞄准目标：%s"
+
+msgid "Aiming method"
+msgstr "选择瞄准方式"
+
+msgid "Continue aiming"
+msgstr "继续瞄准"
+
+msgid "Select nearest target"
+msgstr "选择最近目标"
+
+msgid "Switch firing mode"
+msgstr "切换射击模式"

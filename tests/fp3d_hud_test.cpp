@@ -3,17 +3,23 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <array>
 #include <algorithm>
+#include <sstream>
 
 #include "avatar.h"
 #include "bodypart.h"
 #include "calendar.h"
 #include "cata_catch.h"
+#include "catacharset.h"
 #include "cata_scope_helpers.h"
 #include "debug.h"
 #include "display.h"
 #include "item.h"
+#include "json.h"
+#include "json_loader.h"
 #include "effect.h"
 #include "output.h"
+#include "options.h"
+#include "options_helpers.h"
 #include "fp3d_entry.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_targeting.h"
@@ -22,6 +28,72 @@
 #include "player_helpers.h"
 #include "rng.h"
 #include "translations.h"
+
+TEST_CASE( "fp3d_hud_log_uses_available_rows_and_preserves_long_messages", "[fp3d][hud]" )
+{
+    using entry = fp3d_hud::data::message_entry;
+    const std::string long_line( 150, 'x' );
+    const std::vector<entry> messages{ { "old", c_red }, { long_line, c_yellow },
+        { "最新消息", c_green } };
+    const auto wide = fp3d_hud::message_rows( messages, 160, 6 );
+    REQUIRE( wide.size() == 3 );
+    CHECK( wide[1].text == long_line );
+    CHECK( wide[1].color == c_yellow );
+    const auto narrow = fp3d_hud::message_rows( messages, 30, 3 );
+    REQUIRE( narrow.size() == 3 );
+    CHECK( narrow.back().text == "最新消息" );
+    CHECK( narrow.back().color == c_green );
+    CHECK( narrow.front().text != "old" );
+    for( const auto &row : narrow ) {
+        CHECK( utf8_width( row.text ) <= 30 );
+    }
+    std::vector<entry> history;
+    for( int i = 0; i < 12; ++i ) {
+        history.push_back( { std::to_string( i ), c_white } );
+    }
+    const auto filled = fp3d_hud::message_rows( history, 80, 6 );
+    REQUIRE( filled.size() == 6 );
+    CHECK( filled.front().text == "6" );
+    CHECK( filled.back().text == "11" );
+    CHECK( fp3d_hud::message_rows( messages, 0, 6 ).empty() );
+    CHECK( fp3d_hud::message_rows( messages, 80, 0 ).empty() );
+}
+
+TEST_CASE( "fp3d_hud_panel_options_use_only_quarter_size_steps", "[fp3d][hud][options]" )
+{
+    for( const auto &panel : fp3d_hud::panel_settings ) {
+        CAPTURE( panel.option );
+        override_option restore( panel.option, "100" );
+        auto &option = get_options().get_option( panel.option );
+        CHECK( get_option<int>( panel.option ) == 100 );
+        option.setValue( std::string( "25" ) );
+        for( int percent = 25; percent <= 200; percent += 25 ) {
+            CHECK( get_option<int>( panel.option ) == percent );
+            option.setNext();
+        }
+        CHECK( get_option<int>( panel.option ) == 25 );
+        // Exercise the same JSON serialization and loading used by options.json.
+        option.setValue( std::string( "200" ) );
+        std::ostringstream stored;
+        JsonOut output( stored );
+        get_options().serialize( output );
+        const JsonArray saved = json_loader::from_string( stored.str() );
+        bool found = false;
+        for( const JsonObject row : saved ) {
+            row.allow_omitted_members();
+            if( row.get_string( "name" ) == panel.option ) {
+                found = true;
+                CHECK( row.get_string( "value" ) == "200" );
+                option.setValue( std::string( "100" ) );
+                const JsonArray reload = json_loader::from_string( string_format(
+                                             "[{\"name\":\"%s\",\"value\":\"%s\"}]", panel.option, row.get_string( "value" ) ) );
+                get_options().deserialize( reload );
+                CHECK( get_option<int>( panel.option ) == 200 );
+            }
+        }
+        CHECK( found );
+    }
+}
 
 TEST_CASE( "fp3d_hud_inspects_only_the_currently_visible_target", "[fp3d][hud]" )
 {

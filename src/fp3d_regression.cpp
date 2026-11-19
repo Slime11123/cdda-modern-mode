@@ -2,7 +2,9 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -11,6 +13,13 @@
 #include <vector>
 #include <cstring>
 #include <string>
+#include <sstream>
+
+#if defined(_MSC_VER) && defined(USE_VCPKG)
+#include <SDL2/SDL_opengl.h>
+#else
+#include <SDL_opengl.h>
+#endif
 
 #include "avatar.h"
 #include "calendar.h"
@@ -18,6 +27,8 @@
 #include "fp3d_compositor.h"
 #include "fp3d_materials.h"
 #include "game.h"
+#include "monster.h"
+#include "npc.h"
 #include "options.h"
 #include "rng.h"
 #include "sdl_wrappers.h"
@@ -64,6 +75,13 @@ struct frame_sample_state {
     std::vector<double> capture_tails;
     std::vector<double> material_costs;
     std::vector<double> scene_cpu;
+    // Building geometry: the static index/regroup block and the chunk pass,
+    // also split by whether a vehicle was in view, because the two halves of a
+    // city route exercise different invalidation paths.
+    std::vector<double> scene_index;
+    std::vector<double> scene_chunk_pass;
+    std::vector<double> scene_index_vehicles;
+    std::vector<double> scene_chunk_pass_vehicles;
     // Whole-step accounting: how much synchronous work one presented frame pays.
     unsigned long presents = 0;
     unsigned long prepare_calls = 0;
@@ -77,10 +95,99 @@ struct frame_sample_state {
     unsigned long scene_rebuilt = 0;
     unsigned long landscape_chunks = 0;
     unsigned long landscape_rebuilt = 0;
+    unsigned long scene_draws_vehicles = 0;
+    unsigned long scene_forced_rebuilds = 0;
+    unsigned long scene_changed_rebuilds = 0;
+    unsigned long scene_index_rebuilds = 0;
+    double scene_index_ms = 0;
+    double scene_chunk_pass_ms = 0;
     std::map<std::string, std::vector<double>> stage_costs;
+    std::map<std::string, std::vector<double>> gpu_costs;
+    struct trace_entry {
+        std::string stage;
+        double milliseconds;
+        Uint64 at;
+        unsigned long action;
+        unsigned long frame;
+        unsigned long generation;
+        tripoint_abs_ms position;
+        int turn;
+    };
+    unsigned long action = 0;
+    std::vector<trace_entry> trace;
+    std::vector<std::string> native_states;
 };
 frame_sample_state frame_samples;
 bool world_ready = false;
+
+bool gpu_sampling_requested()
+{
+    static const bool enabled = []() {
+        const char *value = std::getenv( "CDDA_FP3D_GPU_SELFTEST" );
+        return value && std::strcmp( value, "1" ) == 0;
+    }();
+    return frame_sampling_requested() && enabled;
+}
+struct gpu_query_slot {
+    const char *name = nullptr;
+    bool finished = false;
+};
+struct gpu_query_state {
+    SDL_GLContext context = nullptr;
+    bool supported = false;
+    std::array<GLuint, 512> queries = {};
+    std::array<gpu_query_slot, 256> slots = {};
+    unsigned dropped = 0;
+    PFNGLGENQUERIESPROC gen = nullptr;
+    PFNGLDELETEQUERIESPROC remove = nullptr;
+    PFNGLQUERYCOUNTERPROC timestamp = nullptr;
+    PFNGLGETQUERYIVPROC bits = nullptr;
+    PFNGLGETQUERYOBJECTIVPROC available = nullptr;
+    PFNGLGETQUERYOBJECTUI64VPROC result = nullptr;
+} gpu_queries;
+
+bool gpu_initialize()
+{
+    const SDL_GLContext current = SDL_GL_GetCurrentContext();
+    if( !current ) {
+        return false;
+    }
+    if( gpu_queries.context == current ) {
+        return gpu_queries.supported;
+    }
+    // Query names belong to the old context; never delete them in a new one.
+    gpu_queries = {};
+    auto &q = gpu_queries;
+    q.context = current;
+    int major = 0;
+    int minor = 0;
+    const auto *version = reinterpret_cast<const char *>( glGetString( GL_VERSION ) );
+    if( version ) {
+        std::sscanf( version, "%d.%d", &major, &minor );
+    }
+    if( major > 3 || ( major == 3 && minor >= 3 ) ||
+        SDL_GL_ExtensionSupported( "GL_ARB_timer_query" ) ) {
+        q.gen = reinterpret_cast<PFNGLGENQUERIESPROC>( SDL_GL_GetProcAddress( "glGenQueries" ) );
+        q.remove = reinterpret_cast<PFNGLDELETEQUERIESPROC>( SDL_GL_GetProcAddress( "glDeleteQueries" ) );
+        q.timestamp = reinterpret_cast<PFNGLQUERYCOUNTERPROC>( SDL_GL_GetProcAddress( "glQueryCounter" ) );
+        q.bits = reinterpret_cast<PFNGLGETQUERYIVPROC>( SDL_GL_GetProcAddress( "glGetQueryiv" ) );
+        q.available = reinterpret_cast<PFNGLGETQUERYOBJECTIVPROC>( SDL_GL_GetProcAddress( "glGetQueryObjectiv" ) );
+        q.result = reinterpret_cast<PFNGLGETQUERYOBJECTUI64VPROC>( SDL_GL_GetProcAddress( "glGetQueryObjectui64v" ) );
+        GLint bits = 0;
+        if( q.gen && q.remove && q.timestamp && q.bits && q.available && q.result ) {
+            q.bits( GL_TIMESTAMP, GL_QUERY_COUNTER_BITS, &bits );
+            q.supported = bits > 0;
+        }
+        if( q.supported ) {
+            q.gen( static_cast<GLsizei>( q.queries.size() ), q.queries.data() );
+        }
+    }
+    DebugLog( D_INFO, D_MAIN ) << "fp3d: GPU_SELFTEST status="
+                               << ( q.supported ? "available" : "unavailable" )
+                               << ", renderer=" << reinterpret_cast<const char *>( glGetString( GL_RENDERER ) )
+                               << ", version=" << ( version ? version : "unknown" );
+    return q.supported;
+}
 
 void log_frame_distribution( const char *name, std::vector<double> values )
 {
@@ -152,6 +259,69 @@ turn_probe::turn_probe( const char *initial_stage ) : current( initial_stage )
         started = SDL_GetPerformanceCounter();
     }
 }
+gpu_probe::gpu_probe( const char *name )
+{
+    if( !gpu_sampling_requested() || !frame_samples.started || frame_samples.done ||
+        !gpu_initialize() ) {
+        return;
+    }
+    auto &q = gpu_queries;
+    for( size_t i = 0; i < q.slots.size(); ++i ) {
+        if( !q.slots[i].name ) {
+            slot = static_cast<int>( i );
+            q.slots[i] = { name, false };
+            q.timestamp( q.queries[2 * i], GL_TIMESTAMP );
+            return;
+        }
+    }
+    ++q.dropped;
+}
+gpu_probe::~gpu_probe()
+{
+    finish();
+}
+void gpu_probe::finish()
+{
+    if( slot >= 0 && gpu_queries.context == SDL_GL_GetCurrentContext() ) {
+        gpu_queries.timestamp( gpu_queries.queries[2 * slot + 1], GL_TIMESTAMP );
+        gpu_queries.slots[slot].finished = true;
+    }
+    slot = -1;
+}
+void gpu_collect()
+{
+    // Initialize during the existing warmup, before measured frames begin.
+    if( !gpu_sampling_requested() || frame_samples.done || !gpu_initialize() ) {
+        return;
+    }
+    auto &q = gpu_queries;
+    for( size_t i = 0; i < q.slots.size(); ++i ) {
+        auto &entry = q.slots[i];
+        if( !entry.finished ) {
+            continue;
+        }
+        GLint ready = GL_FALSE;
+        q.available( q.queries[2 * i + 1], GL_QUERY_RESULT_AVAILABLE, &ready );
+        if( ready ) {
+            GLuint64 begin = 0;
+            GLuint64 end = 0;
+            q.result( q.queries[2 * i], GL_QUERY_RESULT, &begin );
+            q.result( q.queries[2 * i + 1], GL_QUERY_RESULT, &end );
+            if( end >= begin ) {
+                frame_samples.gpu_costs[entry.name].push_back( ( end - begin ) / 1000000.0 );
+            }
+            entry = {};
+        }
+    }
+}
+void gpu_release()
+{
+    if( gpu_queries.supported && gpu_queries.context == SDL_GL_GetCurrentContext() ) {
+        gpu_queries.remove( static_cast<GLsizei>( gpu_queries.queries.size() ),
+                            gpu_queries.queries.data() );
+    }
+    gpu_queries = {};
+}
 turn_probe::~turn_probe()
 {
     stage( "end" );
@@ -164,7 +334,7 @@ void turn_probe::stage( const char *name )
     const auto now = SDL_GetPerformanceCounter();
     const double milliseconds = ( now - started ) * 1000.0 / SDL_GetPerformanceFrequency();
     if( frame_samples.started && !frame_samples.done && started >= frame_samples.started ) {
-        frame_samples.stage_costs[current].push_back( milliseconds );
+        stage_sample( current, milliseconds );
     }
     if( milliseconds >= 50 && g && !g->new_game ) {
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST native_stage=" << current
@@ -185,6 +355,47 @@ void action_boundary()
                                        << ", queued_steps=" << get_avatar().get_auto_move_route().size();
         }
     }
+}
+void action_started()
+{
+    if( frame_sampling_requested() && !frame_samples.done ) {
+        ++frame_samples.action;
+        stage_sample( "native_action_start", 0 );
+    }
+}
+void native_turn_finished()
+{
+    if( !frame_sampling_requested() || !frame_samples.started || frame_samples.done ) {
+        return;
+    }
+    stage_sample( "native_turn_complete", 0 );
+    const avatar &you = get_avatar();
+    // Copying/streaming the engine observes its state without consuming RNG.
+    std::ostringstream state;
+    const auto p = you.pos_abs();
+    state << frame_samples.action << ',' << to_turn<int>( calendar::turn ) << ','
+          << p.x() << ',' << p.y() << ',' << p.z() << ',' << you.get_moves() << ','
+          << you.get_stamina() << ',' << you.get_hp() << ',' << rng_get_engine();
+    std::vector<std::array<int, 5>> creatures;
+    const auto add = [&]( const Creature &critter ) {
+        const auto pos = critter.pos_abs();
+        creatures.push_back( { pos.x(), pos.y(), pos.z(), critter.get_hp(), critter.get_moves() } );
+    };
+    for( const monster &mon : g->all_monsters() ) {
+        add( mon );
+    }
+    for( const npc &who : g->all_npcs() ) {
+        add( who );
+    }
+    std::sort( creatures.begin(), creatures.end() );
+    uint64_t digest = 14695981039346656037ULL;
+    for( const auto &critter : creatures ) {
+        for( const int value : critter ) {
+            digest = ( digest ^ static_cast<uint32_t>( value ) ) * 1099511628211ULL;
+        }
+    }
+    state << ',' << creatures.size() << ',' << digest;
+    frame_samples.native_states.push_back( state.str() );
 }
 void snapshot_costs( double detail_ms, double distant_ms, double perception_ms, double cells_ms )
 {
@@ -258,16 +469,47 @@ void scene_draw( double cpu_ms, int indexed_cells, int chunks, int rebuilt, int 
         frame_samples.landscape_rebuilt += static_cast<unsigned long>( landscape_rebuilt );
     }
 }
+void scene_geometry( double index_ms, double chunk_pass_ms, int forced_rebuilds,
+                     int changed_rebuilds, int visible_vehicles )
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        auto &state = frame_samples;
+        state.scene_index.push_back( index_ms );
+        state.scene_chunk_pass.push_back( chunk_pass_ms );
+        state.scene_index_ms += index_ms;
+        state.scene_chunk_pass_ms += chunk_pass_ms;
+        state.scene_forced_rebuilds += static_cast<unsigned long>( forced_rebuilds );
+        state.scene_changed_rebuilds += static_cast<unsigned long>( changed_rebuilds );
+        if( forced_rebuilds > 0 ) {
+            ++state.scene_index_rebuilds;
+        }
+        if( visible_vehicles > 0 ) {
+            ++state.scene_draws_vehicles;
+            state.scene_index_vehicles.push_back( index_ms );
+            state.scene_chunk_pass_vehicles.push_back( chunk_pass_ms );
+        }
+    }
+}
+void stage_sample( const char *name, double milliseconds )
+{
+    if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
+        frame_samples.stage_costs[name].push_back( milliseconds );
+        frame_samples.trace.push_back( { name, milliseconds, SDL_GetPerformanceCounter(),
+                                        frame_samples.action, frame_samples.presents,
+                                        frame_samples.publish_calls, get_avatar().pos_abs(),
+                                        to_turn<int>( calendar::turn ) } );
+    }
+}
 void presented( SDL_Renderer *renderer )
 {
     if( !frame_sampling_requested() || frame_samples.done ) {
         return;
     }
     auto &state = frame_samples;
-    if( !world_ready || !g || g->new_game || !fp3d_compositor::turn_based() ) {
+    if( !world_ready || !g || g->new_game ) {
         if( state.started ) {
             state.done = true;
-            DebugLog( D_WARNING, D_MAIN ) << "fp3d: FRAME_SELFTEST aborted: left loaded 3D game";
+            DebugLog( D_WARNING, D_MAIN ) << "fp3d: FRAME_SELFTEST aborted: left loaded game";
         }
         state.warmup = 0;
         return;
@@ -282,7 +524,14 @@ void presented( SDL_Renderer *renderer )
     if( !state.warmup ) {
         state.warmup = now;
     }
-    if( ( now - state.warmup ) * 1000.0 / frequency < 2000 ) {
+    // A fixed native action prefix makes route benchmarks independent of load
+    // time and throughput. Ordinary interactive sampling retains the 2 s warmup.
+    static const unsigned long start_action = []() -> unsigned long {
+        const char *value = std::getenv( "CDDA_FP3D_FRAME_START_ACTION" );
+        return value ? std::strtoul( value, nullptr, 10 ) : 0;
+    }();
+    if( start_action ? state.action < start_action :
+        ( now - state.warmup ) * 1000.0 / frequency < 2000 ) {
         return;
     }
     int width = 0;
@@ -306,12 +555,14 @@ void presented( SDL_Renderer *renderer )
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST begin, duration_ms=60000, warmup_ms=2000"
                                    << ", width=" << width << ", height=" << height
                                    << ", viewport_width=" << viewport[2] << ", viewport_height=" << viewport[3]
+                                   << ", action=" << state.action
                                    << ", queued_steps=" << get_avatar().get_auto_move_route().size();
         return;
     }
     const double interval = ( now - state.previous ) * 1000.0 / frequency;
     state.intervals.push_back( interval );
     ++state.presents;
+    stage_sample( "present", interval );
     if( interval >= 50 ) {
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST slow_present, ms=" << interval
                                    << ", index=" << state.intervals.size() << ", turn=" << to_turn<int>( calendar::turn )
@@ -348,6 +599,10 @@ void presented( SDL_Renderer *renderer )
     log_frame_distribution( "prepare_visibility", state.prepare_visibility );
     log_frame_distribution( "materials_prepare", state.material_costs );
     log_frame_distribution( "scene_draw", state.scene_cpu );
+    log_frame_distribution( "scene_index", state.scene_index );
+    log_frame_distribution( "scene_chunk_pass", state.scene_chunk_pass );
+    log_frame_distribution( "scene_index_vehicles", state.scene_index_vehicles );
+    log_frame_distribution( "scene_chunk_pass_vehicles", state.scene_chunk_pass_vehicles );
     DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST step_accounting, presents=" << state.presents
                                << ", prepare_calls=" << state.prepare_calls
                                << ", prepare_extra_layer_calls=" << state.prepare_extra_calls
@@ -359,9 +614,24 @@ void presented( SDL_Renderer *renderer )
                                << ", scene_chunks=" << state.scene_chunks
                                << ", scene_rebuilt=" << state.scene_rebuilt
                                << ", landscape_chunks=" << state.landscape_chunks
-                               << ", landscape_rebuilt=" << state.landscape_rebuilt;
+                               << ", landscape_rebuilt=" << state.landscape_rebuilt
+                               << ", draws_with_vehicles=" << state.scene_draws_vehicles
+                               << ", index_rebuilds=" << state.scene_index_rebuilds
+                               << ", forced_rebuilds=" << state.scene_forced_rebuilds
+                               << ", changed_rebuilds=" << state.scene_changed_rebuilds
+                               << ", index_ms=" << state.scene_index_ms
+                               << ", chunk_pass_ms=" << state.scene_chunk_pass_ms;
     for( const auto &entry : state.stage_costs ) {
         log_frame_distribution( ( "stage_" + entry.first ).c_str(), entry.second );
+    }
+    for( const auto &entry : state.gpu_costs ) {
+        log_frame_distribution( ( "gpu_" + entry.first ).c_str(), entry.second );
+    }
+    if( gpu_sampling_requested() ) {
+        const auto pending = std::count_if( gpu_queries.slots.begin(), gpu_queries.slots.end(),
+        []( const gpu_query_slot &entry ) { return entry.name != nullptr; } );
+        DebugLog( D_INFO, D_MAIN ) << "fp3d: GPU_SELFTEST complete, supported=" << gpu_queries.supported
+                                   << ", dropped=" << gpu_queries.dropped << ", pending=" << pending;
     }
     if( const char *path = std::getenv( "CDDA_FP3D_FRAME_REPORT" ) ) {
         std::ofstream report( path );
@@ -385,10 +655,31 @@ void presented( SDL_Renderer *renderer )
         write_samples( "prepare_visibility", state.prepare_visibility );
         write_samples( "materials_prepare", state.material_costs );
         write_samples( "scene_draw", state.scene_cpu );
+        write_samples( "scene_index", state.scene_index );
+        write_samples( "scene_chunk_pass", state.scene_chunk_pass );
+        write_samples( "scene_index_vehicles", state.scene_index_vehicles );
+        write_samples( "scene_chunk_pass_vehicles", state.scene_chunk_pass_vehicles );
         for( const auto &entry : state.stage_costs ) {
             write_samples( ( "stage_" + entry.first ).c_str(), entry.second );
         }
+        for( const auto &entry : state.gpu_costs ) {
+            write_samples( ( "gpu_" + entry.first ).c_str(), entry.second );
+        }
         report.close();
+        std::ofstream states( std::string( path ) + ".states.csv" );
+        states << "action,turn,x,y,z,moves,stamina,hp,rng,creatures,creature_digest\n";
+        for( const auto &entry : state.native_states ) {
+            states << entry << '\n';
+        }
+        std::ofstream trace( std::string( path ) + ".trace.csv" );
+        trace << std::setprecision( 15 ) << "stage,milliseconds,elapsed_ms,action,frame,publish,turn,x,y,z\n";
+        for( const auto &entry : state.trace ) {
+            trace << entry.stage << ',' << entry.milliseconds << ','
+                  << ( entry.at - state.started ) * 1000.0 / frequency << ','
+                  << entry.action << ',' << entry.frame << ',' << entry.generation << ','
+                  << entry.turn << ',' << entry.position.x() << ',' << entry.position.y() << ','
+                  << entry.position.z() << '\n';
+        }
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST raw_report=" << path
                                    << ", written=" << !report.fail();
     }

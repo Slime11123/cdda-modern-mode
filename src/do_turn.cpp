@@ -813,6 +813,10 @@ bool do_turn()
     u.power_balance = u.get_power_level() - u.power_prev_turn;
     u.power_prev_turn = u.get_power_level();
 
+#if defined(TILES) && defined(ENABLE_FP3D)
+    fp3d_regression::native_turn_finished();
+#endif
+
 #if defined(EMSCRIPTEN)
     // This will cause a prompt to be shown if the window is closed, until the
     // game is saved.

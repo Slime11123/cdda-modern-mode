@@ -26,6 +26,54 @@ uniform int u_native_local_count;
 uniform vec4 u_native_local_pos[8];
 uniform vec4 u_native_local_color[8];
 uniform float u_native_local_beam[8];
+uniform sampler2D u_native_beam_shadow;
+uniform int u_native_beam_shadow_index;
+uniform samplerCube u_native_point_shadow;
+uniform int u_native_point_shadow_index;
+vec3 native_lamp_view(vec3 world);
+
+float native_beam_visibility(vec3 world,vec4 source) {
+    vec3 v=native_lamp_view(world)-native_lamp_view(source.xyz);
+    float dist=-v.z;
+    const float near_plane=0.05;
+    if(dist<=near_plane) { return 1.0; }
+    // Match the 0.67 outer cone and the portable light's perspective pass.
+    vec2 uv=0.5+v.xy/(2.216*dist);
+    if(min(uv.x,uv.y)<0.0 || max(uv.x,uv.y)>1.0) { return 0.0; }
+    float depth=source.w/(source.w-near_plane)-
+                source.w*near_plane/((source.w-near_plane)*dist);
+    float bias=0.00008+0.0015/max(1.0,dist*dist);
+    float visibility=0.0;
+    for(int x=-1;x<=1;++x) {
+        for(int y=-1;y<=1;++y) {
+            float blocker=texture2D(u_native_beam_shadow,
+                clamp(uv+vec2(float(x),float(y))/1024.0,0.0,1.0)).r;
+            visibility+=step(depth-bias,blocker);
+        }
+    }
+    return visibility/9.0;
+}
+
+float native_point_visibility(vec3 world,vec4 source) {
+    vec3 ray=world-source.xyz;
+    float dist=max(max(abs(ray.x),abs(ray.y)),abs(ray.z));
+    const float near_plane=0.05;
+    if(dist<=near_plane) { return 1.0; }
+    float depth=source.w/(source.w-near_plane)-
+                source.w*near_plane/((source.w-near_plane)*dist);
+    float bias=0.00015+0.0015/max(1.0,dist*dist);
+    // A small cross filter samples across cube seams without clamped 2D edges.
+    vec3 direction=normalize(ray);
+    vec3 axis=abs(direction.y)<0.9 ? vec3(0,1,0) : vec3(1,0,0);
+    vec3 side=normalize(cross(direction,axis))*dist/256.0;
+    vec3 up=cross(direction,normalize(side))*dist/256.0;
+    float visible=step(depth-bias,textureCube(u_native_point_shadow,ray).r);
+    visible+=step(depth-bias,textureCube(u_native_point_shadow,ray+side).r);
+    visible+=step(depth-bias,textureCube(u_native_point_shadow,ray-side).r);
+    visible+=step(depth-bias,textureCube(u_native_point_shadow,ray+up).r);
+    visible+=step(depth-bias,textureCube(u_native_point_shadow,ray-up).r);
+    return visible*0.2;
+}
 
 float native_lamp_depth(float z) {
     const float n=0.2;
@@ -95,9 +143,14 @@ vec3 native_local_lighting(vec2 uv) {
                     // feathered edge, only a small spill behind the aim.
                     cone=0.04+0.96*smoothstep(0.67,0.93,facing);
                 }
-                // Reject lamps behind the actual facing wall/floor, rather
-                // than making walls across a room glow through solid panels.
-                // Full per-light shadowmaps are a separate future feature.
+                if(i==u_native_beam_shadow_index) {
+                    cone=smoothstep(0.67,0.93,dot(-tolight/r,forward))*
+                         native_beam_visibility(world+receiver*0.015,source);
+                }
+                // The receiving face must still face the light.
+                if(i==u_native_point_shadow_index) {
+                    cone*=native_point_visibility(world+receiver*0.015,source);
+                }
                 float front=n_length>0.0000001 ?
                     smoothstep(-0.06,0.23,dot(receiver,tolight/r)) : 0.48;
                 // Directional sources and powered fixtures do not disappear
@@ -180,6 +233,8 @@ std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
                       cold ? std::array<float,4>{ .77f,.87f,1.0f,strength } :
                              std::array<float,4>{ 1.0f,.81f,.57f,strength };
         light.beam = source.kind == fp3d_snapshot::light_kind::beam ? 1.0f : 0.0f;
+        light.held_beam = held_beam;
+        light.fixture = source.kind == fp3d_snapshot::light_kind::fixture;
         ranked.push_back( { strength * radius / ( 3.0f + distance ), light } );
     }
     std::sort( ranked.begin(), ranked.end(), []( const ranked_light &a,

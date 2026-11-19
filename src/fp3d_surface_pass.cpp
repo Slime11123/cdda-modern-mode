@@ -334,7 +334,7 @@ result render( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitc
                               cell.kind == fp3d_snapshot::terrain_kind::glass;
             const std::string floor_key = door || cell.kind == fp3d_snapshot::terrain_kind::window ?
                                           "t_floor" : cell.metal_deck_railing ?
-                                          "t_metal_floor_no_roof" : cell.terrain;
+                                          "t_metal_floor_no_roof" : fp3d_materials::terrain_key( cell );
             if( auto uv = fp3d_materials::lookup_auxiliary_uv( floor_key ) ) {
                 draw_floor( x, y, z, *uv );
                 ++last.floors;
