@@ -11,6 +11,7 @@
 #include "overmap.h"
 #include "overmapbuffer.h"
 #include "fp3d_snapshot.h"
+#include "fp3d_shaderpacks.h"
 #include "options_helpers.h"
 #include "sdl_wrappers.h"
 #include "sdl_geometry.h"
@@ -22,8 +23,8 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "fp3d_quick_menu.h"
-#include "imgui/imgui_impl_sdl2.h"
-#include "imgui/imgui_impl_sdlrenderer2.h"
+#include "imgui/imgui_impl_sdl3.h"
+#include "imgui/imgui_impl_sdlrenderer3.h"
 #include "map.h"
 #include "map_helpers.h"
 #include "player_helpers.h"
@@ -40,13 +41,11 @@
 TEST_CASE( "survival_map_uses_native_overmap_tiles_without_changing_renderer_or_world",
            "[.survival_map_render]" )
 {
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
-    SDL_Window_Ptr window( SDL_CreateWindow( "Overmap regression", SDL_WINDOWPOS_UNDEFINED,
-                           SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_HIDDEN ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Overmap regression", 640, 480, SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
-                               SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE ) );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "software" ) );
     REQUIRE( renderer );
     GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
     tileset_cache cache;
@@ -85,24 +84,24 @@ TEST_CASE( "survival_map_uses_native_overmap_tiles_without_changing_renderer_or_
     SDL_Texture_Ptr target( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
                             SDL_TEXTUREACCESS_TARGET, 640, 480 ) );
     REQUIRE( target );
-    REQUIRE( SDL_SetRenderTarget( renderer.get(), target.get() ) == 0 );
+    REQUIRE( SDL_SetRenderTarget( renderer.get(), target.get() ) );
     SDL_Rect viewport{ 7, 11, 300, 240 };
     const SDL_Rect clip{ 2, 3, 170, 130 };
-    SDL_RenderSetViewport( renderer.get(), &viewport );
-    SDL_RenderSetScale( renderer.get(), 1.5f, 1.5f );
-    SDL_RenderSetClipRect( renderer.get(), &clip );
-    SDL_RenderGetViewport( renderer.get(), &viewport );
+    SDL_SetRenderViewport( renderer.get(), &viewport );
+    SDL_SetRenderScale( renderer.get(), 1.5f, 1.5f );
+    SDL_SetRenderClipRect( renderer.get(), &clip );
+    SDL_GetRenderViewport( renderer.get(), &viewport );
     SDL_SetRenderDrawColor( renderer.get(), 12, 34, 56, 78 );
     auto image = tiles.overmap_texture( center, 8 );
     REQUIRE( image );
     CHECK( SDL_GetRenderTarget( renderer.get() ) == target.get() );
     SDL_Rect actual;
-    SDL_RenderGetViewport( renderer.get(), &actual );
-    CHECK( SDL_RectEquals( &actual, &viewport ) );
-    SDL_RenderGetClipRect( renderer.get(), &actual );
-    CHECK( SDL_RectEquals( &actual, &clip ) );
+    SDL_GetRenderViewport( renderer.get(), &actual );
+    CHECK( SDL_RectsEqual( &actual, &viewport ) );
+    SDL_GetRenderClipRect( renderer.get(), &actual );
+    CHECK( SDL_RectsEqual( &actual, &clip ) );
     float sx, sy;
-    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    SDL_GetRenderScale( renderer.get(), &sx, &sy );
     CHECK( sx == 1.5f );
     CHECK( sy == 1.5f );
     Uint8 r, green, b, a;
@@ -112,25 +111,25 @@ TEST_CASE( "survival_map_uses_native_overmap_tiles_without_changing_renderer_or_
     CHECK( b == 56 );
     CHECK( a == 78 );
     int width, height;
-    REQUIRE( SDL_QueryTexture( image.get(), nullptr, nullptr, &width, &height ) == 0 );
+    REQUIRE( QueryTexturePixels( image.get(), nullptr, nullptr, &width, &height ) == 0 );
     CHECK( width == 17 * tiles.get_tile_width() );
     CHECK( height == 17 * tiles.get_tile_height() );
     SDL_SetRenderTarget( renderer.get(), image.get() );
-    SDL_RenderSetViewport( renderer.get(), nullptr );
-    SDL_RenderSetScale( renderer.get(), 1, 1 );
-    SDL_RenderSetClipRect( renderer.get(), nullptr );
+    SDL_SetRenderViewport( renderer.get(), nullptr );
+    SDL_SetRenderScale( renderer.get(), 1, 1 );
+    SDL_SetRenderClipRect( renderer.get(), nullptr );
     std::vector<Uint32> pixels( width * height );
-    REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+    REQUIRE( ReadRenderPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
                                   pixels.data(), width * 4 ) == 0 );
     CHECK( std::count_if( pixels.begin(), pixels.end(), []( Uint32 pixel ) {
         return ( pixel >> 8 ) != 0;
     } ) > width * height * .1 );
     if( const char *directory = std::getenv( "CDDA_2D_PANEL_QA_DIR" ) ) {
-        SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), width, height,
+        SDL_Surface_Ptr surface( CreateSurfaceFromPixels( pixels.data(), width, height,
                                  32, width * 4, SDL_PIXELFORMAT_RGBA8888 ) );
         REQUIRE( surface );
         REQUIRE( SDL_SaveBMP( surface.get(), ( std::filesystem::path( directory ) /
-                             "native-overmap.bmp" ).string().c_str() ) == 0 );
+                             "native-overmap.bmp" ).string().c_str() ) );
     }
     const tripoint_abs_omt remote( 2000000, 2000000, 0 );
     REQUIRE_FALSE( static_cast<bool>( overmap_buffer.get_existing_om_global( remote ) ) );
@@ -145,21 +144,12 @@ TEST_CASE( "survival_map_uses_native_overmap_tiles_without_changing_renderer_or_
 TEST_CASE( "fp3d_ui_style_is_independent_of_view_and_controls", "[.fp3d_ui_style]" )
 {
     REQUIRE( fp3d_compositor::requested() );
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
-    SDL_Window_Ptr window( SDL_CreateWindow( "UI style regression", SDL_WINDOWPOS_UNDEFINED,
-                           SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "UI style regression", 640, 480, SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    int driver = -1;
-    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
-        SDL_RendererInfo info{};
-        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
-            driver = i;
-        }
-    }
-    REQUIRE( driver >= 0 );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
-                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "gpu" ) );
     REQUIRE( renderer );
     on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );
     fp3d_compositor::attach( renderer.get(), window.get() );
@@ -189,14 +179,14 @@ TEST_CASE( "fp3d_ui_style_is_independent_of_view_and_controls", "[.fp3d_ui_style
             if( is_3d && style == "classic" ) {
                 fp3d_compositor::set_viewport( 0, 0, 480, 480, 640, 480 );
                 SDL_SetRenderDrawColor( renderer.get(), 71, 93, 117, 255 );
-                REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+                REQUIRE( SDL_RenderClear( renderer.get() ) );
                 const SDL_Rect sidebar_pixel{ 600, 240, 1, 1 };
                 Uint32 before = 0;
                 Uint32 after = 0;
-                REQUIRE( SDL_RenderReadPixels( renderer.get(), &sidebar_pixel,
+                REQUIRE( ReadRenderPixels( renderer.get(), &sidebar_pixel,
                                               SDL_PIXELFORMAT_RGBA8888, &before, 4 ) == 0 );
                 fp3d_compositor::compose();
-                REQUIRE( SDL_RenderReadPixels( renderer.get(), &sidebar_pixel,
+                REQUIRE( ReadRenderPixels( renderer.get(), &sidebar_pixel,
                                               SDL_PIXELFORMAT_RGBA8888, &after, 4 ) == 0 );
                 CHECK( after == before );
             }
@@ -225,8 +215,8 @@ TEST_CASE( "fp3d_ui_style_is_independent_of_view_and_controls", "[.fp3d_ui_style
                 CHECK( fp3d_compositor::controls() == expected );
                 CHECK( fp3d_compositor::uses_hud() == ( style == "hud" ) );
                 SDL_Event settings_key{};
-                settings_key.type = SDL_KEYDOWN;
-                settings_key.key.keysym.sym = SDLK_F5;
+                settings_key.type = SDL_EVENT_KEY_DOWN;
+                settings_key.key.key = SDLK_F5;
                 // F5 reaches the input dispatcher; it no longer changes modes directly.
                 CHECK_FALSE( fp3d_compositor::process_event( settings_key ) );
                 CHECK( fp3d_compositor::view_3d() == three_d );
@@ -241,15 +231,14 @@ TEST_CASE( "fp3d_ui_style_is_independent_of_view_and_controls", "[.fp3d_ui_style
 }
 TEST_CASE( "modern_2d_edge_pan_uses_scaled_renderer_coordinates", "[.modern_2d_edge_coordinates]" )
 {
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
-    SDL_Window_Ptr window( SDL_CreateWindow( "2D edge coordinates regression", SDL_WINDOWPOS_UNDEFINED,
-                           SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_HIDDEN ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "2D edge coordinates regression", 640, 480, SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1, SDL_RENDERER_SOFTWARE ) );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "software" ) );
     REQUIRE( renderer );
     for( const int scale : { 1, 2, 4 } ) {
-        REQUIRE( SDL_RenderSetLogicalSize( renderer.get(), 640 * scale, 480 * scale ) == 0 );
+        REQUIRE( SetLogicalRenderSize( renderer.get(), 640 * scale, 480 * scale ) == 0 );
         const point origin( 80 * scale, 24 * scale );
         const point size( 480 * scale, 432 * scale );
         for( const point mouse : { point( 80, 240 ), point( 559, 240 ), point( 320, 24 ),
@@ -258,7 +247,7 @@ TEST_CASE( "modern_2d_edge_pan_uses_scaled_renderer_coordinates", "[.modern_2d_e
             CAPTURE( scale, mouse );
             float x = 0;
             float y = 0;
-            SDL_RenderWindowToLogical( renderer.get(), mouse.x, mouse.y, &x, &y );
+            SDL_RenderCoordinatesFromWindow( renderer.get(), mouse.x, mouse.y, &x, &y );
             const point local = point( std::floor( x ), std::floor( y ) ) - origin;
             modern_2d_camera camera;
             for( int frame = 0; frame < 180; ++frame ) {
@@ -277,19 +266,41 @@ TEST_CASE( "modern_2d_edge_pan_uses_scaled_renderer_coordinates", "[.modern_2d_e
     }
 }
 
+TEST_CASE( "fp3d_shader_list_rescan_finds_added_pack_without_selecting_it",
+           "[fp3d][shader_list]" )
+{
+    const std::string selected = fp3d_shaderpacks::selected();
+    std::string error;
+    const auto initial = fp3d_shaderpacks::scan( &error );
+    REQUIRE( error.empty() );
+    const std::string fixture_id = "fp3d-ui-rescan-test-" + std::to_string( SDL_GetTicksNS() );
+    const auto matches = [&]( const fp3d_shaderpacks::entry &pack ) {
+        return pack.id == fixture_id;
+    };
+    CHECK( std::none_of( initial.begin(), initial.end(), matches ) );
+    const auto path = std::filesystem::u8path( fp3d_shaderpacks::directory() ) / fixture_id;
+    REQUIRE( std::filesystem::create_directory( path ) );
+    on_out_of_scope cleanup( [&]() {
+        std::error_code remove_error;
+        std::filesystem::remove( path, remove_error );
+    } );
+    const auto refreshed = fp3d_shaderpacks::scan( &error );
+    CHECK( error.empty() );
+    CHECK( std::any_of( refreshed.begin(), refreshed.end(), matches ) );
+    CHECK( fp3d_shaderpacks::selected() == selected );
+}
+
 TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_panel]" )
 {
     override_option view_mode( "FP3D_VIEW", "2d" );
     override_option control_mode( "FP3D_CONTROLS", "classic" );
     REQUIRE( fp3d_compositor::requested() );
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
-    SDL_SetHint( SDL_HINT_RENDER_DRIVER, "opengl" );
-    SDL_Window_Ptr window( SDL_CreateWindow( "2D survival panel regression", SDL_WINDOWPOS_UNDEFINED,
-                           SDL_WINDOWPOS_UNDEFINED, 1280, 720, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "2D survival panel regression", 1280, 720, SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), -1,
-                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "gpu" ) );
     REQUIRE( renderer );
     GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
     tileset_cache cache;
@@ -318,11 +329,11 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     color_loader<SDL_Color>().load( windowsPalette );
     init_colors();
     ImGui::CreateContext();
-    REQUIRE( ImGui_ImplSDL2_InitForSDLRenderer( window.get(), renderer.get() ) );
-    REQUIRE( ImGui_ImplSDLRenderer2_Init( renderer.get() ) );
+    REQUIRE( ImGui_ImplSDL3_InitForSDLRenderer( window.get(), renderer.get() ) );
+    REQUIRE( ImGui_ImplSDLRenderer3_Init( renderer.get() ) );
     on_out_of_scope gui_cleanup( []() {
-        ImGui_ImplSDLRenderer2_Shutdown();
-        ImGui_ImplSDL2_Shutdown();
+        ImGui_ImplSDLRenderer3_Shutdown();
+        ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
     } );
     ImGui::GetIO().IniFilename = nullptr;
@@ -337,27 +348,27 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
         CAPTURE( page );
         auto panel = fp3d_modern_ui::create( you, here, 100, false, page );
         for( int frame = 0; frame < 3; ++frame ) {
-            REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 18, 22, 18, 255 ) == 0 );
-            REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
-            ImGui_ImplSDLRenderer2_NewFrame();
-            ImGui_ImplSDL2_NewFrame();
+            REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 18, 22, 18, 255 ) );
+            REQUIRE( SDL_RenderClear( renderer.get() ) );
+            ImGui_ImplSDLRenderer3_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             panel->draw();
             ImGui::Render();
             REQUIRE( ImGui::GetDrawData()->TotalVtxCount > 0 );
-            ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+            ImGui_ImplSDLRenderer3_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
             if( frame == 2 ) {
                 if( const char *directory = std::getenv( "CDDA_2D_PANEL_QA_DIR" ) ) {
                     std::filesystem::create_directories( directory );
                     std::vector<Uint32> pixels( 1280 * 720 );
-                    REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                    REQUIRE( ReadRenderPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
                                                   pixels.data(), 1280 * 4 ) == 0 );
-                    SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), 1280,
+                    SDL_Surface_Ptr picture( CreateSurfaceFromPixels( pixels.data(), 1280,
                                              720, 32, 1280 * 4, SDL_PIXELFORMAT_RGBA8888 ) );
                     REQUIRE( picture );
                     const auto filename = std::filesystem::path( directory ) /
                                           ( "page-" + std::to_string( page ) + ".png" );
-                    CHECK( IMG_SavePNG( picture.get(), filename.u8string().c_str() ) == 0 );
+                    CHECK( IMG_SavePNG( picture.get(), filename.u8string().c_str() ) );
                 }
             }
             SDL_RenderPresent( renderer.get() );
@@ -381,23 +392,23 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
             SDL_SetRenderDrawColor( renderer.get(), 18, 22, 18, 255 );
             SDL_RenderClear( renderer.get() );
         }
-        ImGui_ImplSDLRenderer2_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         menu.draw();
         ImGui::Render();
-        ImGui_ImplSDLRenderer2_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
+        ImGui_ImplSDLRenderer3_RenderDrawData( ImGui::GetDrawData(), renderer.get() );
     };
     const auto save_menu = [&]( const char *filename ) {
         if( const char *directory = std::getenv( "CDDA_2D_PANEL_QA_DIR" ) ) {
             std::vector<Uint32> pixels( 1280 * 720 );
-            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+            REQUIRE( ReadRenderPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
                                           pixels.data(), 1280 * 4 ) == 0 );
-            SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(), 1280,
+            SDL_Surface_Ptr picture( CreateSurfaceFromPixels( pixels.data(), 1280,
                                      720, 32, 1280 * 4, SDL_PIXELFORMAT_RGBA8888 ) );
             REQUIRE( picture );
             const auto path = std::filesystem::path( directory ) / filename;
-            CHECK( IMG_SavePNG( picture.get(), path.u8string().c_str() ) == 0 );
+            CHECK( IMG_SavePNG( picture.get(), path.u8string().c_str() ) );
         }
     };
     int selected_view = 1;
@@ -408,22 +419,106 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     save_menu( "mode-settings.png" );
     ImGuiWindow *settings_window = nullptr;
     for( auto *candidate : GImGui->Windows ) {
-        if( candidate->WasActive && std::string( candidate->Name ).find( "模式设置##" ) == 0 ) {
+        if( candidate->WasActive && !( candidate->Flags & ImGuiWindowFlags_ChildWindow ) &&
+            std::string( candidate->Name ).find( "模式设置##" ) == 0 ) {
             settings_window = candidate;
         }
     }
     REQUIRE( settings_window );
-    const ImVec2 classic_choice( settings_window->Pos.x + 45,
-                                settings_window->DC.CursorStartPos.y +
-                                ( settings_window->Size.y - 43 ) * .28f + 8 );
-    for( int frame = 0; frame < 3; ++frame ) {
-        ImGui::GetIO().AddMousePosEvent( classic_choice.x, classic_choice.y );
-        ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
-        draw_menu( *settings );
-    }
+    CHECK( settings_window->Size.x == Approx( 1280 * .85f ).margin( 1.f ) );
+    CHECK( settings_window->Size.y == Approx( 720 * .85f ).margin( 1.f ) );
+    CHECK( settings_window->Pos.x == Approx( ( 1280 - settings_window->Size.x ) / 2 ).margin( 1.f ) );
+    CHECK( settings_window->Pos.y == Approx( ( 720 - settings_window->Size.y ) / 2 ).margin( 1.f ) );
+    const auto find_child = []( const char *name ) -> ImGuiWindow * {
+        for( auto *candidate : GImGui->Windows ) {
+            if( candidate->WasActive && std::string( candidate->Name ).find( name ) != std::string::npos ) {
+                return candidate;
+            }
+        }
+        return nullptr;
+    };
+    const auto click_settings = [&]( const ImVec2 &position ) {
+        for( int frame = 0; frame < 4; ++frame ) {
+            ImGui::GetIO().AddMousePosEvent( position.x, position.y );
+            ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
+            draw_menu( *settings );
+        }
+    };
+    auto *body = find_child( "/##mode_content" );
+    auto *navigation = find_child( "/##mode_navigation" );
+    REQUIRE( body );
+    REQUIRE( navigation );
+    CHECK( navigation->Size.x == Approx( settings_window->InnerRect.GetWidth() * .24f ).margin( 9.f ) );
+    const ImVec2 classic_choice( body->DC.CursorStartPos.x + 25.f,
+                                body->DC.CursorStartPos.y + 3 * ( 18.f + 6.f ) - 6.f );
+    click_settings( classic_choice );
     CHECK( selected_view == 0 );
     CHECK( selected_keys == 1 );
     CHECK( selected_style == 1 );
+    const ImVec2 modern_choice( body->DC.CursorStartPos.x + body->WorkRect.GetWidth() * .75f,
+                                classic_choice.y );
+    click_settings( modern_choice );
+    CHECK( selected_view == 1 );
+
+    const auto open_combo = [&]( const ImVec2 &position ) {
+        click_settings( position );
+        REQUIRE( ImGui::IsPopupOpen( nullptr, ImGuiPopupFlags_AnyPopupId ) );
+        auto *popup = GImGui->OpenPopupStack.back().Window;
+        REQUIRE( popup );
+        return popup;
+    };
+    // The combo uses its own ImGui window. Opening it is insufficient if the
+    // settings window is then reordered above it and intercepts the click.
+    auto *camera_popup = open_combo( ImVec2( body->Pos.x + 100.f, body->Pos.y + 317.f ) );
+    const ImVec2 overhead_option( camera_popup->DC.CursorStartPos.x + 25.f,
+                                 camera_popup->DC.CursorStartPos.y + 18.f + 6.f + 8.f );
+    ImGui::GetIO().AddMousePosEvent( overhead_option.x, overhead_option.y );
+    draw_menu( *settings );
+    CHECK( GImGui->HoveredWindow == camera_popup );
+    click_settings( overhead_option );
+    CHECK_FALSE( ImGui::IsPopupOpen( nullptr, ImGuiPopupFlags_AnyPopupId ) );
+
+    const char *settings_captures[] = {
+        "mode-display.png", "mode-controls.png", "mode-interface.png", "mode-shaders.png",
+        "mode-performance.png"
+    };
+    const float button_height = ( 18.f + 2 * 5.f ) * 1.35f;
+    for( int page = 0; page < 5; ++page ) {
+        const ImVec2 item( navigation->DC.CursorStartPos.x + 35.f,
+                           navigation->DC.CursorStartPos.y + page * ( button_height + 6.f ) +
+                           button_height * .5f );
+        click_settings( item );
+        auto *active_body = find_child( "/##mode_content" );
+        REQUIRE( active_body );
+        if( page != 0 ) {
+            CHECK( active_body != body );
+        }
+        body = active_body;
+        CHECK( active_body->OuterRectClipped.Max.y < settings_window->InnerRect.Max.y );
+        save_menu( settings_captures[page] );
+        if( page == 3 ) {
+            for( float y : { 110.f, 198.f } ) {
+                auto *popup = open_combo( ImVec2( body->Pos.x + 100.f, body->Pos.y + y ) );
+                ImGui::GetIO().AddMousePosEvent( popup->DC.CursorStartPos.x + 20.f,
+                                                 popup->DC.CursorStartPos.y + 8.f );
+                draw_menu( *settings );
+                CHECK( GImGui->HoveredWindow == popup );
+                click_settings( ImVec2( settings_window->Pos.x - 10.f, settings_window->Pos.y + 20.f ) );
+                CHECK_FALSE( ImGui::IsPopupOpen( nullptr, ImGuiPopupFlags_AnyPopupId ) );
+            }
+        }
+    }
+    REQUIRE( SDL_SetWindowSize( window.get(), 1920, 1080 ) );
+    REQUIRE( SDL_SyncWindow( window.get() ) );
+    settings->mark_resized();
+    draw_menu( *settings );
+    CHECK( settings_window->Size.x == Approx( 1920 * .85f ).margin( 1.f ) );
+    CHECK( settings_window->Size.y == Approx( 1080 * .85f ).margin( 1.f ) );
+    REQUIRE( SDL_SetWindowSize( window.get(), 1280, 720 ) );
+    REQUIRE( SDL_SyncWindow( window.get() ) );
+    CHECK( calendar::turn == time );
+    CHECK( you.get_moves() == moves );
+    CHECK( you.pos_abs() == position );
     settings.reset();
     auto popup = fp3d_quick_menu::create_dropdown( choices, point( 1250, 710 ) );
     for( int frame = 0; frame < 3; ++frame ) { draw_menu( *popup ); }
@@ -456,7 +551,7 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     SDL_Texture_Ptr map_image( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
                               SDL_TEXTUREACCESS_STATIC, 1280, 720 ) );
     REQUIRE( map_image );
-    REQUIRE( SDL_UpdateTexture( map_image.get(), nullptr, map_pixels.data(), 1280 * 4 ) == 0 );
+    REQUIRE( SDL_UpdateTexture( map_image.get(), nullptr, map_pixels.data(), 1280 * 4 ) );
     auto retained = fp3d_quick_menu::create_dropdown( choices, point( 100, 100 ), 100,
                     std::move( map_image ) );
     for( int frame = 0; frame < 60; ++frame ) {
@@ -465,7 +560,7 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
         if( frame == 5 ) {
             const SDL_Rect stale_tooltip{ 500, 210, 200, 30 };
             SDL_SetRenderDrawColor( renderer.get(), 255, 255, 255, 255 );
-            SDL_RenderFillRect( renderer.get(), &stale_tooltip );
+            RenderFillRectPixels( renderer.get(), &stale_tooltip );
         }
         if( frame > 6 ) {
             for( const auto *window : GImGui->Windows ) {
@@ -473,7 +568,7 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
             }
         }
     }
-    REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+    REQUIRE( ReadRenderPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
                                   map_pixels.data(), 1280 * 4 ) == 0 );
     int stale_pixels = 0;
     for( int y = 0; y < 720; ++y ) {
@@ -499,10 +594,10 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     responsive.reset();
     // The SDL release arrives after the menu has already gone away.
     SDL_Event released{};
-    released.type = SDL_MOUSEBUTTONUP;
+    released.type = SDL_EVENT_MOUSE_BUTTON_UP;
     released.button.windowID = SDL_GetWindowID( window.get() );
     released.button.button = SDL_BUTTON_LEFT;
-    REQUIRE( ImGui_ImplSDL2_ProcessEvent( &released ) );
+    REQUIRE( ImGui_ImplSDL3_ProcessEvent( &released ) );
 
     {
         auto aiming = fp3d_quick_menu::create_dropdown( {

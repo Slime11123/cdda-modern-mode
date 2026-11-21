@@ -1,8 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ToolchainRoot,
-    [ValidateSet('ON', 'OFF')][string]$Feature = 'OFF',
+    [ValidateSet('ON', 'OFF')][string]$Feature = 'ON',
     [string]$BuildDir = '',
-    [string]$RuntimeDir = (Join-Path $PSScriptRoot '../../runtime/0i1'),
+    [string]$RuntimeDir = (Join-Path $PSScriptRoot '../../runtime/p7-sdl3'),
     [int]$Jobs = 12,
     [switch]$SkipBuild,
     [switch]$TestsOnly
@@ -14,7 +14,7 @@ $toolRoot = (Resolve-Path $ToolchainRoot).Path
 $oldPath = $env:PATH
 $oldMsystem = $env:MSYSTEM
 if (-not $BuildDir) {
-    $BuildDir = Join-Path $PSScriptRoot $(if ($TestsOnly) { '../../build/0i1-tests' } else { '../../build/0i1' })
+    $BuildDir = Join-Path $PSScriptRoot $(if ($TestsOnly) { '../../build/p7-sdl3-tests' } else { '../../build/p7-sdl3-gpu-only' })
 }
 try {
     $env:PATH = "$toolRoot/bin;$(Split-Path $toolRoot -Parent)/usr/bin;$oldPath"

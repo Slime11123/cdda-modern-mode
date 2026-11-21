@@ -33,7 +33,7 @@ std::unique_ptr<cataimgui::window> create_panel( const std::string &title,
 class scoped_theme
 {
     public:
-        scoped_theme();
+        explicit scoped_theme( bool apply = true );
         ~scoped_theme();
         scoped_theme( const scoped_theme & ) = delete;
         scoped_theme &operator=( const scoped_theme & ) = delete;

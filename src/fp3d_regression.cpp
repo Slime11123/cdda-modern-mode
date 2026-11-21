@@ -15,11 +15,6 @@
 #include <string>
 #include <sstream>
 
-#if defined(_MSC_VER) && defined(USE_VCPKG)
-#include <SDL2/SDL_opengl.h>
-#else
-#include <SDL_opengl.h>
-#endif
 
 #include "avatar.h"
 #include "calendar.h"
@@ -116,78 +111,15 @@ struct frame_sample_state {
     unsigned long action = 0;
     std::vector<trace_entry> trace;
     std::vector<std::string> native_states;
+    struct gpu_buffer_entry {
+        unsigned long action;
+        unsigned long frame;
+        gpu_buffer_frame data;
+    };
+    std::vector<gpu_buffer_entry> gpu_buffers;
 };
 frame_sample_state frame_samples;
 bool world_ready = false;
-
-bool gpu_sampling_requested()
-{
-    static const bool enabled = []() {
-        const char *value = std::getenv( "CDDA_FP3D_GPU_SELFTEST" );
-        return value && std::strcmp( value, "1" ) == 0;
-    }();
-    return frame_sampling_requested() && enabled;
-}
-struct gpu_query_slot {
-    const char *name = nullptr;
-    bool finished = false;
-};
-struct gpu_query_state {
-    SDL_GLContext context = nullptr;
-    bool supported = false;
-    std::array<GLuint, 512> queries = {};
-    std::array<gpu_query_slot, 256> slots = {};
-    unsigned dropped = 0;
-    PFNGLGENQUERIESPROC gen = nullptr;
-    PFNGLDELETEQUERIESPROC remove = nullptr;
-    PFNGLQUERYCOUNTERPROC timestamp = nullptr;
-    PFNGLGETQUERYIVPROC bits = nullptr;
-    PFNGLGETQUERYOBJECTIVPROC available = nullptr;
-    PFNGLGETQUERYOBJECTUI64VPROC result = nullptr;
-} gpu_queries;
-
-bool gpu_initialize()
-{
-    const SDL_GLContext current = SDL_GL_GetCurrentContext();
-    if( !current ) {
-        return false;
-    }
-    if( gpu_queries.context == current ) {
-        return gpu_queries.supported;
-    }
-    // Query names belong to the old context; never delete them in a new one.
-    gpu_queries = {};
-    auto &q = gpu_queries;
-    q.context = current;
-    int major = 0;
-    int minor = 0;
-    const auto *version = reinterpret_cast<const char *>( glGetString( GL_VERSION ) );
-    if( version ) {
-        std::sscanf( version, "%d.%d", &major, &minor );
-    }
-    if( major > 3 || ( major == 3 && minor >= 3 ) ||
-        SDL_GL_ExtensionSupported( "GL_ARB_timer_query" ) ) {
-        q.gen = reinterpret_cast<PFNGLGENQUERIESPROC>( SDL_GL_GetProcAddress( "glGenQueries" ) );
-        q.remove = reinterpret_cast<PFNGLDELETEQUERIESPROC>( SDL_GL_GetProcAddress( "glDeleteQueries" ) );
-        q.timestamp = reinterpret_cast<PFNGLQUERYCOUNTERPROC>( SDL_GL_GetProcAddress( "glQueryCounter" ) );
-        q.bits = reinterpret_cast<PFNGLGETQUERYIVPROC>( SDL_GL_GetProcAddress( "glGetQueryiv" ) );
-        q.available = reinterpret_cast<PFNGLGETQUERYOBJECTIVPROC>( SDL_GL_GetProcAddress( "glGetQueryObjectiv" ) );
-        q.result = reinterpret_cast<PFNGLGETQUERYOBJECTUI64VPROC>( SDL_GL_GetProcAddress( "glGetQueryObjectui64v" ) );
-        GLint bits = 0;
-        if( q.gen && q.remove && q.timestamp && q.bits && q.available && q.result ) {
-            q.bits( GL_TIMESTAMP, GL_QUERY_COUNTER_BITS, &bits );
-            q.supported = bits > 0;
-        }
-        if( q.supported ) {
-            q.gen( static_cast<GLsizei>( q.queries.size() ), q.queries.data() );
-        }
-    }
-    DebugLog( D_INFO, D_MAIN ) << "fp3d: GPU_SELFTEST status="
-                               << ( q.supported ? "available" : "unavailable" )
-                               << ", renderer=" << reinterpret_cast<const char *>( glGetString( GL_RENDERER ) )
-                               << ", version=" << ( version ? version : "unknown" );
-    return q.supported;
-}
 
 void log_frame_distribution( const char *name, std::vector<double> values )
 {
@@ -259,69 +191,7 @@ turn_probe::turn_probe( const char *initial_stage ) : current( initial_stage )
         started = SDL_GetPerformanceCounter();
     }
 }
-gpu_probe::gpu_probe( const char *name )
-{
-    if( !gpu_sampling_requested() || !frame_samples.started || frame_samples.done ||
-        !gpu_initialize() ) {
-        return;
-    }
-    auto &q = gpu_queries;
-    for( size_t i = 0; i < q.slots.size(); ++i ) {
-        if( !q.slots[i].name ) {
-            slot = static_cast<int>( i );
-            q.slots[i] = { name, false };
-            q.timestamp( q.queries[2 * i], GL_TIMESTAMP );
-            return;
-        }
-    }
-    ++q.dropped;
-}
-gpu_probe::~gpu_probe()
-{
-    finish();
-}
-void gpu_probe::finish()
-{
-    if( slot >= 0 && gpu_queries.context == SDL_GL_GetCurrentContext() ) {
-        gpu_queries.timestamp( gpu_queries.queries[2 * slot + 1], GL_TIMESTAMP );
-        gpu_queries.slots[slot].finished = true;
-    }
-    slot = -1;
-}
-void gpu_collect()
-{
-    // Initialize during the existing warmup, before measured frames begin.
-    if( !gpu_sampling_requested() || frame_samples.done || !gpu_initialize() ) {
-        return;
-    }
-    auto &q = gpu_queries;
-    for( size_t i = 0; i < q.slots.size(); ++i ) {
-        auto &entry = q.slots[i];
-        if( !entry.finished ) {
-            continue;
-        }
-        GLint ready = GL_FALSE;
-        q.available( q.queries[2 * i + 1], GL_QUERY_RESULT_AVAILABLE, &ready );
-        if( ready ) {
-            GLuint64 begin = 0;
-            GLuint64 end = 0;
-            q.result( q.queries[2 * i], GL_QUERY_RESULT, &begin );
-            q.result( q.queries[2 * i + 1], GL_QUERY_RESULT, &end );
-            if( end >= begin ) {
-                frame_samples.gpu_costs[entry.name].push_back( ( end - begin ) / 1000000.0 );
-            }
-            entry = {};
-        }
-    }
-}
-void gpu_release()
-{
-    if( gpu_queries.supported && gpu_queries.context == SDL_GL_GetCurrentContext() ) {
-        gpu_queries.remove( static_cast<GLsizei>( gpu_queries.queries.size() ),
-                            gpu_queries.queries.data() );
-    }
-    gpu_queries = {};
-}
+void gpu_collect() {}
 turn_probe::~turn_probe()
 {
     stage( "end" );
@@ -490,6 +360,18 @@ void scene_geometry( double index_ms, double chunk_pass_ms, int forced_rebuilds,
         }
     }
 }
+bool sampling_gpu_buffers()
+{
+    return frame_samples.started && !frame_samples.done;
+}
+
+void sample_gpu_buffers( const gpu_buffer_frame &frame )
+{
+    if( sampling_gpu_buffers() ) {
+        frame_samples.gpu_buffers.push_back( { frame_samples.action, frame_samples.presents, frame } );
+    }
+}
+
 void stage_sample( const char *name, double milliseconds )
 {
     if( frame_sampling_requested() && frame_samples.started && !frame_samples.done ) {
@@ -515,7 +397,7 @@ void presented( SDL_Renderer *renderer )
         return;
     }
     // Do not turn a background launch into an accepted foreground benchmark.
-    if( !state.started && SDL_GetKeyboardFocus() != SDL_RenderGetWindow( renderer ) ) {
+    if( !state.started && SDL_GetKeyboardFocus() != SDL_GetRenderWindow( renderer ) ) {
         state.warmup = 0;
         return;
     }
@@ -536,7 +418,7 @@ void presented( SDL_Renderer *renderer )
     }
     int width = 0;
     int height = 0;
-    if( SDL_GetRendererOutputSize( renderer, &width, &height ) != 0 ) {
+    if( !SDL_GetCurrentRenderOutputSize( renderer, &width, &height ) ) {
         return;
     }
     if( !state.started ) {
@@ -570,7 +452,7 @@ void presented( SDL_Renderer *renderer )
     }
     state.previous = now;
     state.resized = state.resized || width != state.width || height != state.height;
-    state.unfocused += SDL_GetKeyboardFocus() != SDL_RenderGetWindow( renderer );
+    state.unfocused += SDL_GetKeyboardFocus() != SDL_GetRenderWindow( renderer );
     const double elapsed = ( now - state.started ) * 1000.0 / frequency;
     if( elapsed < 60000 ) {
         return;
@@ -627,12 +509,6 @@ void presented( SDL_Renderer *renderer )
     for( const auto &entry : state.gpu_costs ) {
         log_frame_distribution( ( "gpu_" + entry.first ).c_str(), entry.second );
     }
-    if( gpu_sampling_requested() ) {
-        const auto pending = std::count_if( gpu_queries.slots.begin(), gpu_queries.slots.end(),
-        []( const gpu_query_slot &entry ) { return entry.name != nullptr; } );
-        DebugLog( D_INFO, D_MAIN ) << "fp3d: GPU_SELFTEST complete, supported=" << gpu_queries.supported
-                                   << ", dropped=" << gpu_queries.dropped << ", pending=" << pending;
-    }
     if( const char *path = std::getenv( "CDDA_FP3D_FRAME_REPORT" ) ) {
         std::ofstream report( path );
         report << std::setprecision( 15 ) << "kind,index,milliseconds\n";
@@ -679,6 +555,27 @@ void presented( SDL_Renderer *renderer )
                   << entry.action << ',' << entry.frame << ',' << entry.generation << ','
                   << entry.turn << ',' << entry.position.x() << ',' << entry.position.y() << ','
                   << entry.position.z() << '\n';
+        }
+        if( !state.gpu_buffers.empty() ) {
+            std::ofstream buffers( std::string( path ) + ".gpu-buffers.csv" );
+            buffers << "action,frame,resident_upload_bytes,dynamic_upload_bytes,instance_upload_bytes,"
+                    "resident_instance_upload_bytes,command_upload_bytes,upload_copies,resident_buffer_capacity,"
+                    "resident_instance_capacity,frame_slot_buffer_capacity,"
+                    "instances,indirect_commands,pbr_upload_bytes,compute_batches,compute_upload_bytes,"
+                    "compute_input_reused,compute_dispatch_reused,occlusion_candidates\n";
+            for( const auto &entry : state.gpu_buffers ) {
+                const auto &data = entry.data;
+                buffers << entry.action << ',' << entry.frame << ',' << data.resident_upload_bytes << ','
+                        << data.dynamic_upload_bytes << ',' << data.instance_upload_bytes << ','
+                        << data.resident_instance_upload_bytes << ',' << data.command_upload_bytes << ','
+                        << data.upload_copies << ','
+                        << data.resident_buffer_capacity << ',' << data.resident_instance_capacity << ','
+                        << data.frame_slot_buffer_capacity << ','
+                        << data.instances << ',' << data.indirect_commands << ','
+                        << data.pbr_upload_bytes << ',' << data.compute_batches << ','
+                        << data.compute_upload_bytes << ',' << data.compute_input_reused << ','
+                        << data.compute_dispatch_reused << ',' << data.occlusion_candidates << '\n';
+            }
         }
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST raw_report=" << path
                                    << ", written=" << !report.fail();

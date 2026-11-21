@@ -3,6 +3,7 @@
 #define CATA_SRC_FP3D_MATERIALS_H
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <cstddef>
 #include <array>
 #include <memory>
 #include <optional>
@@ -39,6 +40,7 @@ struct field_frame {
     std::optional<uv_rect> uv;
 };
 std::vector<field_frame> field_animation( const fp3d_snapshot::sprite &image );
+std::vector<field_frame> field_animation_gpu( const fp3d_snapshot::sprite &image );
 
 // Resource lookups only; never consult the map or consume gameplay RNG.
 const tile_type *resolve_terrain( const tileset &set, std::string id, season_type season );
@@ -87,30 +89,36 @@ SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image );
 // Unlike item_icon this has no fake/magenta placeholder on absent art.
 SDL_Texture_Ptr tileset_icon( const std::string &id );
 unsigned revision();
+std::size_t atlas_slot_count();
 bool ready();
 bool bind();
+// Borrow the exact existing colour atlas from its SDL GPU renderer.
+// The caller must wait for submission of atlas writes and preserve ownership
+// until GPU fences retire; never use the handle after a revision/reset.
+SDL_Texture *gpu_colour_atlas( SDL_Renderer *renderer );
+std::optional<uv_rect> lookup_gpu( const std::string &id );
 void unbind();
 std::optional<uv_rect> lookup( const std::string &id );
 // Same UVs as colour atlas, usable while the auxiliary shader owns GL textures.
-// Read-only; deliberately does not perform SDL_GL_BindTexture.
+// Read-only atlas coordinates for an already registered material.
 std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id );
 // Lazily generate and cache normal/ORM from the actual current tileset slot.
 // Does not alter the colour atlas or enable PBR lighting by itself.
 // Call only with the SDL renderer active, before binding the atlas to GL.
 const fp3d_material_aux::maps *auxiliary( const std::string &id );
-// Pixel generation must happen on the SDL side, before SDL_RenderFlush.
+// Pixel generation must happen on the SDL side, before SDL_FlushRenderer.
 // Runs at most 'budget' 64x64 tile readbacks; result is CPU-only.
 unsigned prefetch_auxiliary( unsigned budget );
-// Prefer native-visible surface artwork near the avatar, not arbitrary slots.
-// Bounded SDL-side readback; call before SDL_RenderFlush, not inside GL pass.
-unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
-                                     unsigned budget );
+// Requests use current atlas slots and prioritize nearby visible surfaces.
+inline constexpr unsigned auxiliary_read_limit = 2;
+std::vector<unsigned> visible_auxiliary_slots( const fp3d_snapshot::scene_snapshot &scene );
+void cache_auxiliary_readback( unsigned source_revision, unsigned slot, const Uint8 *pixels );
 struct auxiliary_tile {
     unsigned slot = 0;
     const fp3d_material_aux::maps *data = nullptr;
 };
-// Cached tile pixels and their exact colour-atlas slot indices for a later GL upload.
-std::vector<auxiliary_tile> auxiliary_tiles();
+// Borrow the generated maps in colour-atlas slot order until the next mutation.
+const std::vector<auxiliary_tile> &auxiliary_tiles();
 struct furniture_uv {
     std::optional<uv_rect> top;
     std::optional<uv_rect> front;
@@ -119,6 +127,7 @@ struct furniture_uv {
 };
 // Some packs combine a top and a front view in one pseudo-3D sprite.
 furniture_uv lookup_furniture( const std::string &id, unsigned part_index = 0 );
+furniture_uv lookup_furniture_gpu( const std::string &id, unsigned part_index );
 void release();
 } // namespace fp3d_materials
 #endif

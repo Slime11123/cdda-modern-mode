@@ -1,5 +1,7 @@
 #include "sounds.h"
 
+#include "sdlsound.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -48,9 +50,7 @@
 
 #if defined(SDL_SOUND)
 #   if defined(_MSC_VER) && defined(USE_VCPKG)
-#      include <SDL2/SDL_mixer.h>
 #   else
-#      include <SDL_mixer.h>
 #   endif
 #   include <thread>
 #   if defined(_WIN32) && !defined(_MSC_VER)
@@ -832,7 +832,7 @@ void sfx::fade_audio_group( group group, int duration )
     if( test_mode ) {
         return;
     }
-    Mix_FadeOutGroup( static_cast<int>( group ), duration );
+    fade_sound_group( static_cast<int>( group ), duration );
 }
 
 void sfx::fade_audio_channel( channel channel, int duration )
@@ -840,7 +840,7 @@ void sfx::fade_audio_channel( channel channel, int duration )
     if( test_mode ) {
         return;
     }
-    Mix_FadeOutChannel( static_cast<int>( channel ), duration );
+    fade_sound_channel( static_cast<int>( channel ), duration );
 }
 
 bool sfx::is_channel_playing( channel channel )
@@ -848,7 +848,7 @@ bool sfx::is_channel_playing( channel channel )
     if( test_mode ) {
         return false;
     }
-    return Mix_Playing( static_cast<int>( channel ) ) != 0;
+    return sound_channel_playing( static_cast<int>( channel ) ) != 0;
 }
 
 void sfx::stop_sound_effect_fade( channel channel, int duration )
@@ -856,9 +856,7 @@ void sfx::stop_sound_effect_fade( channel channel, int duration )
     if( test_mode ) {
         return;
     }
-    if( Mix_FadeOutChannel( static_cast<int>( channel ), duration ) == -1 ) {
-        dbg( D_ERROR ) << "Failed to stop sound effect: " << Mix_GetError();
-    }
+    fade_sound_channel( static_cast<int>( channel ), duration );
 }
 
 void sfx::stop_sound_effect_timed( channel channel, int time )
@@ -866,7 +864,7 @@ void sfx::stop_sound_effect_timed( channel channel, int time )
     if( test_mode ) {
         return;
     }
-    Mix_ExpireChannel( static_cast<int>( channel ), time );
+    expire_sound_channel( static_cast<int>( channel ), time );
 }
 
 int sfx::set_channel_volume( channel channel, int volume )
@@ -875,13 +873,13 @@ int sfx::set_channel_volume( channel channel, int volume )
         return 0;
     }
     int ch = static_cast<int>( channel );
-    if( !Mix_Playing( ch ) ) {
+    if( !sound_channel_playing( ch ) ) {
         return -1;
     }
-    if( Mix_FadingChannel( ch ) != MIX_NO_FADING ) {
+    if( sound_channel_fading( ch ) ) {
         return -1;
     }
-    return Mix_Volume( ch, volume );
+    return sound_channel_volume( ch, volume );
 }
 
 void sfx::do_vehicle_engine_sfx()
@@ -1013,7 +1011,7 @@ void sfx::do_vehicle_engine_sfx()
     }
 
     if( !veh->is_autodriving && current_speed != previous_speed ) {
-        Mix_HaltChannel( static_cast<int>( ch ) );
+        fade_sound_channel( static_cast<int>( ch ), 0 );
         add_msg_debug( debugmode::DF_SOUND, "STOP speed %d =/= %d", current_speed, previous_speed );
         play_ambient_variant_sound( id_and_variant.first, id_and_variant.second,
                                     seas_str, indoors, night,
@@ -1069,7 +1067,7 @@ void sfx::do_vehicle_exterior_engine_sfx()
         return;
     }
 
-    vol = MIX_MAX_VOLUME * noise_factor / veh->vehicle_noise;
+    vol = max_sound_channel_volume * noise_factor / veh->vehicle_noise;
     std::pair<std::string, std::string> id_and_variant;
     const season_type seas = season_of_year( calendar::turn );
     const std::string seas_str = season_str( seas );
@@ -1098,33 +1096,33 @@ void sfx::do_vehicle_exterior_engine_sfx()
 
     if( is_channel_playing( ch ) ) {
         if( engine_external_id_and_variant == id_and_variant ) {
-            Mix_SetPosition( ch_int, to_degrees( get_heard_angle( veh->pos_bub( here ) ) ), 0 );
+            position_sound_channel( ch_int, to_degrees( get_heard_angle( veh->pos_bub( here ) ) ) );
             set_channel_volume( ch, vol );
             add_msg_debug( debugmode::DF_SOUND, "PLAYING exterior_engine_sound, vol: ex:%d true:%d", vol,
-                           Mix_Volume( ch_int, -1 ) );
+                           sound_channel_volume( ch_int, -1 ) );
         } else {
             engine_external_id_and_variant = id_and_variant;
-            Mix_HaltChannel( ch_int );
+            fade_sound_channel( ch_int, 0 );
             add_msg_debug( debugmode::DF_SOUND, "STOP exterior_engine_sound, change id/var" );
             play_ambient_variant_sound( id_and_variant.first, id_and_variant.second,
                                         seas_str, indoors, night, 128, ch, 0 );
-            Mix_SetPosition( ch_int, to_degrees( get_heard_angle( veh->pos_bub( here ) ) ), 0 );
+            position_sound_channel( ch_int, to_degrees( get_heard_angle( veh->pos_bub( here ) ) ) );
             set_channel_volume( ch, vol );
             add_msg_debug( debugmode::DF_SOUND, "START exterior_engine_sound %s %s vol: %d",
                            id_and_variant.first,
                            id_and_variant.second,
-                           Mix_Volume( ch_int, -1 ) );
+                           sound_channel_volume( ch_int, -1 ) );
         }
     } else {
         play_ambient_variant_sound( id_and_variant.first, id_and_variant.second,
                                     seas_str, indoors, night, 128, ch, 0 );
-        add_msg_debug( debugmode::DF_SOUND, "Vol: %d %d", vol, Mix_Volume( ch_int, -1 ) );
-        Mix_SetPosition( ch_int, to_degrees( get_heard_angle( veh->pos_bub( here ) ) ), 0 );
-        add_msg_debug( debugmode::DF_SOUND, "Vol: %d %d", vol, Mix_Volume( ch_int, -1 ) );
+        add_msg_debug( debugmode::DF_SOUND, "Vol: %d %d", vol, sound_channel_volume( ch_int, -1 ) );
+        position_sound_channel( ch_int, to_degrees( get_heard_angle( veh->pos_bub( here ) ) ) );
+        add_msg_debug( debugmode::DF_SOUND, "Vol: %d %d", vol, sound_channel_volume( ch_int, -1 ) );
         set_channel_volume( ch, vol );
         add_msg_debug( debugmode::DF_SOUND, "START exterior_engine_sound NEW %s %s vol: ex:%d true:%d",
                        id_and_variant.first,
-                       id_and_variant.second, vol, Mix_Volume( ch_int, -1 ) );
+                       id_and_variant.second, vol, sound_channel_volume( ch_int, -1 ) );
     }
 }
 

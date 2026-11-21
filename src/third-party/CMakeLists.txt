@@ -72,10 +72,10 @@ if (TILES)
                 imgui/imgui_draw.cpp
                 imgui/imgui_freetype.cpp
                 imgui/imgui_freetype.h
-                imgui/imgui_impl_sdl2.cpp
-                imgui/imgui_impl_sdl2.h
-                imgui/imgui_impl_sdlrenderer2.cpp
-                imgui/imgui_impl_sdlrenderer2.h
+                imgui/imgui_impl_sdl3.cpp
+                imgui/imgui_impl_sdl3.h
+                imgui/imgui_impl_sdlrenderer3.cpp
+                imgui/imgui_impl_sdlrenderer3.h
                 imgui/imgui_internal.h
                 imgui/imgui_stdlib.cpp
                 imgui/imgui_stdlib.h
@@ -97,7 +97,6 @@ if (TILES)
                 imgui
                 SYSTEM
                 PRIVATE
-                ${SDL2_INCLUDE_DIR}/..
                 /usr/include/freetype2
                 )
 
@@ -107,16 +106,7 @@ if (TILES)
                 -w
                 )
 
-        if (NOT DYNAMIC_LINKING)
-            target_link_libraries(imgui PUBLIC
-                SDL2::SDL2-static
-            )
-        else()
-            target_link_libraries(imgui PUBLIC
-                SDL2::SDL2
-                freetype
-            )
-        endif ()
+        target_link_libraries(imgui PUBLIC SDL3::SDL3 Freetype::Freetype)
 
 
         target_link_libraries(

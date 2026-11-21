@@ -46,7 +46,7 @@ ColorModulatedGeometryRenderer::ColorModulatedGeometryRenderer( const SDL_Render
         return;
     }
 
-    FillRect( alt_surf, nullptr, SDL_MapRGB( alt_surf->format, 255, 255, 255 ) );
+    FillRect( alt_surf, nullptr, SDL_MapSurfaceRGB( alt_surf.get(), 255, 255, 255 ) );
 
     tex.reset( SDL_CreateTextureFromSurface( renderer.get(), alt_surf.get() ) );
     alt_surf.reset();

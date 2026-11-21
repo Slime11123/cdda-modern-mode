@@ -1,6 +1,7 @@
 #pragma once
 #ifndef CATA_SRC_FP3D_REGRESSION_H
 #define CATA_SRC_FP3D_REGRESSION_H
+#include <cstdint>
 struct SDL_Renderer;
 namespace fp3d_regression
 {
@@ -48,6 +49,28 @@ void scene_geometry( double index_ms, double chunk_pass_ms, int forced_rebuilds,
 // as stage_<name> so a per-frame overlay cost can be attributed. Sampled only
 // while FRAME_SELFTEST is on.
 void stage_sample( const char *name, double milliseconds );
+// CPU-side upload and capacity counters for accepted native submissions.
+struct gpu_buffer_frame {
+    std::uint64_t resident_upload_bytes = 0;
+    std::uint64_t dynamic_upload_bytes = 0;
+    unsigned instance_upload_bytes = 0;
+    unsigned resident_instance_upload_bytes = 0;
+    unsigned command_upload_bytes = 0;
+    unsigned upload_copies = 0;
+    std::uint64_t resident_buffer_capacity = 0;
+    unsigned resident_instance_capacity = 0;
+    std::uint64_t frame_slot_buffer_capacity = 0;
+    unsigned instances = 0;
+    unsigned indirect_commands = 0;
+    unsigned pbr_upload_bytes = 0;
+    unsigned compute_batches = 0;
+    unsigned compute_upload_bytes = 0;
+    bool compute_input_reused = false;
+    bool compute_dispatch_reused = false;
+    unsigned occlusion_candidates = 0;
+};
+bool sampling_gpu_buffers();
+void sample_gpu_buffers( const gpu_buffer_frame &frame );
 // Default-off timestamp queries. Results are polled on later frames, never waited on.
 class gpu_probe
 {

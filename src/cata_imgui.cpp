@@ -242,8 +242,8 @@ RGBTuple color_loader<RGBTuple>::from_rgb( const int r, const int g, const int b
 #include "sdltiles.h"
 #include "font_loader.h"
 #include "wcwidth.h"
-#include <imgui/imgui_impl_sdl2.h>
-#include <imgui/imgui_impl_sdlrenderer2.h>
+#include <imgui/imgui_impl_sdl3.h>
+#include <imgui/imgui_impl_sdlrenderer3.h>
 
 ImVec4 cataimgui::imvec4_from_color( nc_color &color )
 {
@@ -277,8 +277,8 @@ cataimgui::client::client( const SDL_Renderer_Ptr &sdl_renderer, const SDL_Windo
     // Default cellPadding is {4, 2}. We reduce this to {3, 2}.
     ImGui::PushStyleVar( ImGuiStyleVar_CellPadding, ImVec2( 3, style.CellPadding.y ) );
 
-    ImGui_ImplSDL2_InitForSDLRenderer( sdl_window.get(), sdl_renderer.get() );
-    ImGui_ImplSDLRenderer2_Init( sdl_renderer.get() );
+    ImGui_ImplSDL3_InitForSDLRenderer( sdl_window.get(), sdl_renderer.get() );
+    ImGui_ImplSDLRenderer3_Init( sdl_renderer.get() );
 }
 
 // this function QUEUES a character to be drawn
@@ -454,7 +454,7 @@ void cataimgui::client::load_fonts( UNUSED const Font_Ptr &gui_font,
         check_font( io.Fonts->Fonts[0] );
         check_font( io.Fonts->Fonts[1] );
         ImGui::SetCurrentFont( ImGui::GetDefaultFont() );
-        ImGui_ImplSDLRenderer2_SetFallbackGlyphDrawCallback( [&]( const ImFontGlyphToDraw & glyph ) {
+        ImGui_ImplSDLRenderer3_SetFallbackGlyphDrawCallback( [&]( const ImFontGlyphToDraw & glyph ) {
             std::string uni_string = std::string( glyph.uni_str );
             point p( int( glyph.pos.x ), int( glyph.pos.y - 3 ) );
             // Custom ImGui text colours need not exist in the terminal palette.
@@ -474,7 +474,7 @@ void cataimgui::client::load_fonts( UNUSED const Font_Ptr &gui_font,
 
 cataimgui::client::~client()
 {
-    ImGui_ImplSDL2_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
 }
 
 #if 0 and not TUI
@@ -570,12 +570,12 @@ void cataimgui::client::new_frame()
 #if 0 and not TUI
     if( freetype_test.PreNewFrame() ) {
         // REUPLOAD FONT TEXTURE TO GPU
-        ImGui_ImplSDLRenderer2_DestroyDeviceObjects();
-        ImGui_ImplSDLRenderer2_CreateDeviceObjects();
+        ImGui_ImplSDLRenderer3_DestroyDeviceObjects();
+        ImGui_ImplSDLRenderer3_CreateDeviceObjects();
     }
 #endif
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
+    ImGui_ImplSDLRenderer3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
 
     ImGui::NewFrame();
 #if 0 and not TUI
@@ -592,13 +592,13 @@ bool cataimgui::client::render_overlay( ImDrawData *draw_data, SDL_Texture *back
     SDL_Renderer *renderer = sdl_renderer.get();
     int width = 0;
     int height = 0;
-    if( SDL_QueryTexture( background, nullptr, nullptr, &width, &height ) != 0 ) {
+    if( QueryTexturePixels( background, nullptr, nullptr, &width, &height ) != 0 ) {
         return false;
     }
     int overlay_width = 0;
     int overlay_height = 0;
     if( overlay ) {
-        SDL_QueryTexture( overlay.get(), nullptr, nullptr, &overlay_width, &overlay_height );
+        QueryTexturePixels( overlay.get(), nullptr, nullptr, &overlay_width, &overlay_height );
     }
     if( width != overlay_width || height != overlay_height ) {
         overlay.reset( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_ARGB8888,
@@ -607,37 +607,37 @@ bool cataimgui::client::render_overlay( ImDrawData *draw_data, SDL_Texture *back
         const SDL_BlendMode blend = SDL_ComposeCustomBlendMode(
                                         SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
                                         SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD );
-        if( !overlay || SDL_SetTextureBlendMode( overlay.get(), blend ) != 0 ) {
+        if( !overlay || !SDL_SetTextureBlendMode( overlay.get(), blend ) ) {
             overlay.reset();
             return false;
         }
     }
     SDL_Rect viewport;
     SDL_Rect clip;
-    SDL_RenderGetViewport( renderer, &viewport );
-    SDL_RenderGetClipRect( renderer, &clip );
-    const bool clipped = SDL_RenderIsClipEnabled( renderer );
+    SDL_GetRenderViewport( renderer, &viewport );
+    SDL_GetRenderClipRect( renderer, &clip );
+    const bool clipped = SDL_RenderClipEnabled( renderer );
     float scale_x;
     float scale_y;
-    SDL_RenderGetScale( renderer, &scale_x, &scale_y );
+    SDL_GetRenderScale( renderer, &scale_x, &scale_y );
     Uint8 r, g, b, a;
     SDL_GetRenderDrawColor( renderer, &r, &g, &b, &a );
-    if( SDL_SetRenderTarget( renderer, overlay.get() ) != 0 ) {
+    if( !SDL_SetRenderTarget( renderer, overlay.get() ) ) {
         return false;
     }
     on_out_of_scope restore( [&]() {
         SDL_SetRenderTarget( renderer, background );
-        SDL_RenderSetScale( renderer, scale_x, scale_y );
-        SDL_RenderSetViewport( renderer, &viewport );
-        SDL_RenderSetClipRect( renderer, clipped ? &clip : nullptr );
+        SDL_SetRenderScale( renderer, scale_x, scale_y );
+        SDL_SetRenderViewport( renderer, &viewport );
+        SDL_SetRenderClipRect( renderer, clipped ? &clip : nullptr );
         SDL_SetRenderDrawColor( renderer, r, g, b, a );
     } );
-    SDL_RenderSetScale( renderer, scale_x, scale_y );
+    SDL_SetRenderScale( renderer, scale_x, scale_y );
     SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
-    if( SDL_RenderClear( renderer ) != 0 ) {
+    if( !SDL_RenderClear( renderer ) ) {
         return false;
     }
-    ImGui_ImplSDLRenderer2_RenderDrawData( draw_data, renderer );
+    ImGui_ImplSDLRenderer3_RenderDrawData( draw_data, renderer );
     overlay_ready = true;
     return true;
 }
@@ -646,7 +646,7 @@ void cataimgui::client::present_overlay()
 {
     if( overlay_ready && ( fp3d_compositor::turn_based() || fp3d_compositor::aiming::active() ) &&
         ui_adaptor::has_imgui() ) {
-        SDL_RenderCopy( sdl_renderer.get(), overlay.get(), nullptr, nullptr );
+        RenderTexturePixels( sdl_renderer.get(), overlay.get(), nullptr, nullptr );
     }
 }
 #endif
@@ -662,7 +662,7 @@ void cataimgui::client::end_frame()
         !render_overlay( draw_data, background ) )
 #endif
     {
-        ImGui_ImplSDLRenderer2_RenderDrawData( draw_data, sdl_renderer.get() );
+        ImGui_ImplSDLRenderer3_RenderDrawData( draw_data, sdl_renderer.get() );
     }
     ImGuiIO &io = ImGui::GetIO();
     for( const int &code : cata_input_trail ) {
@@ -676,19 +676,19 @@ void cataimgui::client::process_input( void *input )
     const SDL_Event *evt = static_cast<const SDL_Event *>( input );
     // Menus may close on press. Still deliver the later release so both ImGui
     // and SDL's backend drop held-button/capture state before the next menu.
-    const bool releasing_mouse = evt->type == SDL_MOUSEBUTTONUP;
+    const bool releasing_mouse = evt->type == SDL_EVENT_MOUSE_BUTTON_UP;
     if( any_window_shown() || releasing_mouse ) {
         bool no_mouse = ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouse;
         if( no_mouse && !releasing_mouse ) {
             switch( evt->type ) {
-                case SDL_MOUSEMOTION:
-                case SDL_MOUSEWHEEL:
-                case SDL_MOUSEBUTTONDOWN:
-                case SDL_MOUSEBUTTONUP:
+                case SDL_EVENT_MOUSE_MOTION:
+                case SDL_EVENT_MOUSE_WHEEL:
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                case SDL_EVENT_MOUSE_BUTTON_UP:
                     return;
             }
         }
-        ImGui_ImplSDL2_ProcessEvent( evt );
+        ImGui_ImplSDL3_ProcessEvent( evt );
     }
 }
 
@@ -1043,7 +1043,7 @@ void cataimgui::window::draw()
         return;
     }
 #if defined(TILES) && defined(ENABLE_FP3D)
-    const fp3d_simple_ui::scoped_theme survival_theme;
+    const fp3d_simple_ui::scoped_theme survival_theme( use_default_theme );
     const bool simple_view = fp3d_simple_ui::active();
 #endif
     bool handled_resize = false;

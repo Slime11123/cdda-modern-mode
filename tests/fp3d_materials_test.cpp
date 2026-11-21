@@ -1,6 +1,7 @@
 #include "fp3d_materials.h"
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <array>
 #include <utility>
 #include <vector>
 
@@ -28,7 +29,7 @@ TEST_CASE( "fp3d_materials_resolve_season_and_native_looks_like", "[fp3d][materi
     CHECK( fp3d_materials::resolve_terrain( set, "t_thconc_y", WINTER ) == winter );
     CHECK_FALSE( fp3d_materials::resolve_terrain( set, "fp3d_unknown_terrain", SPRING ) );
     CHECK_FALSE( fp3d_materials::resolve_terrain( set, "", SPRING ) );
-    CHECK_FALSE( fp3d_materials::lookup( "fp3d_unknown_terrain" ) );
+    CHECK_FALSE( fp3d_materials::lookup_gpu( "fp3d_unknown_terrain" ) );
     for( const auto &id : { "t_floor", "t_concrete", "t_vitrified_floor", "t_stairs_up" } ) {
         set.create_tile_type( id, tile_type{} );
     }
@@ -150,10 +151,10 @@ TEST_CASE( "fp3d_materials_sprite_cache_keys_follow_appearance", "[fp3d][materia
     CHECK( fp3d_materials::sprite_key( image ) != male );
 }
 
-TEST_CASE( "fp3d_materials_fallback_preserves_renderer_and_handles_no_gl", "[fp3d][materials]" )
+TEST_CASE( "fp3d_materials_atlas_preserves_renderer_without_native_gpu_interop", "[fp3d][materials]" )
 {
     // Offscreen CPU renderer: no desktop window or GPU readback is involved.
-    SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormat( 0, 128, 128, 32,
+    SDL_Surface_Ptr surface( CreateSurfaceWithFormat( 0, 128, 128, 32,
                              SDL_PIXELFORMAT_RGBA8888 ) );
     REQUIRE( surface );
     SDL_Renderer_Ptr renderer( SDL_CreateSoftwareRenderer( surface.get() ) );
@@ -161,17 +162,17 @@ TEST_CASE( "fp3d_materials_fallback_preserves_renderer_and_handles_no_gl", "[fp3
     SDL_Texture_Ptr target( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
                             SDL_TEXTUREACCESS_TARGET, 256, 256 ) );
     REQUIRE( target );
-    REQUIRE( SDL_SetRenderTarget( renderer.get(), target.get() ) == 0 );
-    SDL_RenderSetLogicalSize( renderer.get(), 200, 200 );
+    REQUIRE( SDL_SetRenderTarget( renderer.get(), target.get() ) );
+    SetLogicalRenderSize( renderer.get(), 200, 200 );
     const SDL_Rect viewport{ 4, 6, 180, 170 };
     const SDL_Rect clip{ 2, 3, 50, 40 };
-    SDL_RenderSetViewport( renderer.get(), &viewport );
-    SDL_RenderSetClipRect( renderer.get(), &clip );
+    SDL_SetRenderViewport( renderer.get(), &viewport );
+    SDL_SetRenderClipRect( renderer.get(), &clip );
     SDL_SetRenderDrawColor( renderer.get(), 17, 33, 51, 99 );
     SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_ADD );
     float old_scale_x = 0;
     float old_scale_y = 0;
-    SDL_RenderGetScale( renderer.get(), &old_scale_x, &old_scale_y );
+    SDL_GetRenderScale( renderer.get(), &old_scale_x, &old_scale_y );
     auto set = std::make_shared<tileset>();
     fp3d_materials::set_tileset( set, renderer );
     on_out_of_scope cleanup( []() {
@@ -188,19 +189,19 @@ TEST_CASE( "fp3d_materials_fallback_preserves_renderer_and_handles_no_gl", "[fp3
     REQUIRE( fp3d_materials::ready() );
     CHECK( SDL_GetRenderTarget( renderer.get() ) == target.get() );
     SDL_Rect restored;
-    SDL_RenderGetViewport( renderer.get(), &restored );
-    CHECK( SDL_RectEquals( &restored, &viewport ) == SDL_TRUE );
-    SDL_RenderGetClipRect( renderer.get(), &restored );
-    CHECK( SDL_RectEquals( &restored, &clip ) == SDL_TRUE );
-    CHECK( SDL_RenderIsClipEnabled( renderer.get() ) == SDL_TRUE );
+    SDL_GetRenderViewport( renderer.get(), &restored );
+    CHECK( SDL_RectsEqual( &restored, &viewport ) == true );
+    SDL_GetRenderClipRect( renderer.get(), &restored );
+    CHECK( SDL_RectsEqual( &restored, &clip ) == true );
+    CHECK( SDL_RenderClipEnabled( renderer.get() ) == true );
     float scale_x = 0;
     float scale_y = 0;
-    SDL_RenderGetScale( renderer.get(), &scale_x, &scale_y );
+    SDL_GetRenderScale( renderer.get(), &scale_x, &scale_y );
     CHECK( scale_x == old_scale_x );
     CHECK( scale_y == old_scale_y );
     int width = 0;
     int height = 0;
-    SDL_RenderGetLogicalSize( renderer.get(), &width, &height );
+    GetLogicalRenderSize( renderer.get(), &width, &height );
     CHECK( width == 200 );
     CHECK( height == 200 );
     Uint8 r, g, b, a;
@@ -212,13 +213,68 @@ TEST_CASE( "fp3d_materials_fallback_preserves_renderer_and_handles_no_gl", "[fp3
     SDL_BlendMode blend;
     SDL_GetRenderDrawBlendMode( renderer.get(), &blend );
     CHECK( blend == SDL_BLENDMODE_ADD );
-    // Unsupported interop must safely retain the untextured presentation.
-    CHECK_FALSE( fp3d_materials::bind() );
-    CHECK_FALSE( fp3d_materials::ready() );
-    CHECK_FALSE( fp3d_materials::lookup( unknown.terrain ) );
+    // Atlas coordinates remain available on the software renderer, but
+    // the texture cannot be borrowed as a native GPU sampler.
+    CHECK( fp3d_materials::lookup_gpu( unknown.terrain ) );
+    CHECK( fp3d_materials::gpu_colour_atlas( renderer.get() ) == nullptr );
     fp3d_materials::set_tileset( std::make_shared<tileset>(), renderer );
     CHECK_FALSE( fp3d_materials::ready() );
     fp3d_materials::prepare( scene );
     CHECK( fp3d_materials::ready() );
+
+    const auto sprite_key = fp3d_materials::sprite_key( absent_sprite );
+    const auto *sprite_maps = fp3d_materials::auxiliary( sprite_key );
+    const auto *terrain_maps = fp3d_materials::auxiliary( unknown.terrain );
+    REQUIRE( sprite_maps );
+    REQUIRE( terrain_maps );
+    REQUIRE( fp3d_materials::auxiliary_tiles().size() == 2 );
+    CHECK( fp3d_materials::auxiliary_tiles()[0].data == terrain_maps );
+    CHECK( fp3d_materials::auxiliary_tiles()[1].data == sprite_maps );
+    CHECK( fp3d_materials::auxiliary( unknown.terrain ) == terrain_maps );
+    CHECK( fp3d_materials::auxiliary_tiles().size() == 2 );
+
+    for( int i = 0; i < 1024; ++i ) {
+        auto &cell = scene.cells.emplace_back();
+        cell.terrain = "fp3d_fill_atlas_" + std::to_string( i );
+    }
+    fp3d_materials::prepare( scene );
+    REQUIRE( fp3d_materials::atlas_slot_count() == 1024 );
+    const unsigned full_revision = fp3d_materials::revision();
+
+    fp3d_snapshot::scene_snapshot replacement;
+    replacement.cells.push_back( unknown );
+    replacement.held_item = absent_sprite;
+    replacement.held_item->id = "fp3d_new_priority_item";
+    fp3d_materials::prepare( replacement );
+    CHECK( fp3d_materials::revision() != full_revision );
+    CHECK( fp3d_materials::atlas_slot_count() == 2 );
+    CHECK( fp3d_materials::auxiliary_tiles().empty() );
+    std::array<Uint8, 64 * 64 * 4> pixels{};
+    pixels.fill( 255 );
+    fp3d_materials::cache_auxiliary_readback( full_revision, 1, pixels.data() );
+    CHECK( fp3d_materials::auxiliary_tiles().empty() );
+    const auto current_revision = fp3d_materials::revision();
+    fp3d_materials::cache_auxiliary_readback( current_revision, 1, pixels.data() );
+    fp3d_materials::cache_auxiliary_readback( current_revision, 1, pixels.data() );
+    REQUIRE( fp3d_materials::auxiliary_tiles().size() == 1 );
+    CHECK( fp3d_materials::auxiliary_tiles().front().slot == 1 );
+    const auto expected = fp3d_material_aux::generate( unknown.terrain, pixels.data(), 64, 64, 256 );
+    CHECK( fp3d_materials::auxiliary_tiles().front().data->normal_rgba == expected.normal_rgba );
+    CHECK( fp3d_materials::auxiliary_tiles().front().data->orm_rgba == expected.orm_rgba );
+
+    replacement.cells.emplace_back().terrain = "t_pavement";
+    replacement.cells.back().known = fp3d_snapshot::knowledge::visible;
+    replacement.cells.emplace_back().terrain = "t_wall";
+    replacement.cells.back().known = fp3d_snapshot::knowledge::visible;
+    replacement.cells.back().kind = fp3d_snapshot::terrain_kind::wall;
+    fp3d_materials::prepare( replacement );
+    const auto requested = fp3d_materials::visible_auxiliary_slots( replacement );
+    REQUIRE( requested.size() == 2 );
+    CHECK( requested[0] == 3 );
+    CHECK( requested[1] == 2 );
+    fp3d_materials::cache_auxiliary_readback( current_revision, requested[0], pixels.data() );
+    const auto remaining = fp3d_materials::visible_auxiliary_slots( replacement );
+    REQUIRE( remaining.size() == 1 );
+    CHECK( remaining.front() == requested[1] );
 }
 #endif

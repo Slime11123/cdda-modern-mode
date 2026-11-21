@@ -454,7 +454,7 @@ static SDL_Surface_Ptr apply_color_filter( const SDL_Surface_Ptr &original,
     cata_assert( original );
     SDL_Surface_Ptr surf = create_surface_32( original->w, original->h );
     cata_assert( surf );
-    throwErrorIf( SDL_BlitSurface( original.get(), nullptr, surf.get(), nullptr ) != 0,
+    throwErrorIf( !SDL_BlitSurface( original.get(), nullptr, surf.get(), nullptr ),
                   "SDL_BlitSurface failed" );
 
     SDL_Color *pix = static_cast<SDL_Color *>( surf->pixels );
@@ -550,63 +550,65 @@ void tileset_cache::loader::load_tileset( const cata_path &img_path, const bool 
     tile_atlas_width = tile_atlas->w;
 
     if( R >= 0 && R <= 255 && G >= 0 && G <= 255 && B >= 0 && B <= 255 ) {
-        const Uint32 key = SDL_MapRGB( tile_atlas->format, 0, 0, 0 );
-        throwErrorIf( SDL_SetColorKey( tile_atlas.get(), SDL_TRUE, key ) != 0,
-                      "SDL_SetColorKey failed" );
-        throwErrorIf( SDL_SetSurfaceRLE( tile_atlas.get(), 1 ), "SDL_SetSurfaceRLE failed" );
+        const Uint32 key = SDL_MapSurfaceRGB( tile_atlas.get(), 0, 0, 0 );
+        throwErrorIf( !SDL_SetSurfaceColorKey( tile_atlas.get(), true, key ),
+                      "SDL_SetSurfaceColorKey failed" );
+        throwErrorIf( !SDL_SetSurfaceRLE( tile_atlas.get(), 1 ), "SDL_SetSurfaceRLE failed" );
     }
 
-    SDL_RendererInfo info;
-    throwErrorIf( SDL_GetRendererInfo( renderer.get(), &info ) != 0, "SDL_GetRendererInfo failed" );
+    const int max_texture_size = SDL_GetNumberProperty( SDL_GetRendererProperties( renderer.get() ),
+                                 SDL_PROP_RENDERER_MAX_TEXTURE_SIZE_NUMBER, 0 );
+    int max_texture_width = max_texture_size;
+    int max_texture_height = max_texture_size;
     // Software rendering stores textures as surfaces with run-length encoding, which makes
     // extracting a part in the middle of the texture slow. Therefore this "simulates" that the
     // renderer only supports one tile
     // per texture. Each tile will go on its own texture object.
-    if( info.flags & SDL_RENDERER_SOFTWARE ) {
-        info.max_texture_width = sprite_width;
-        info.max_texture_height = sprite_height;
+    if( std::string_view( SDL_GetRendererName( renderer.get() ) ) == "software" ) {
+        max_texture_width = sprite_width;
+        max_texture_height = sprite_height;
     }
     // for debugging only: force a very small maximal texture size, as to trigger
     // splitting the tile atlas.
 #if 0
     // +1 to check correct rounding
-    info.max_texture_width = sprite_width * 10 + 1;
-    info.max_texture_height = sprite_height * 20 + 1;
+    max_texture_width = sprite_width * 10 + 1;
+    max_texture_height = sprite_height * 20 + 1;
 #endif
 
     const int min_tile_xcount = 128;
     const int min_tile_ycount = min_tile_xcount * 2;
 
-    if( info.max_texture_width == 0 ) {
-        info.max_texture_width = sprite_width * min_tile_xcount;
+    if( max_texture_width == 0 ) {
+        max_texture_width = sprite_width * min_tile_xcount;
         DebugLog( D_INFO, DC_ALL ) << "SDL_RendererInfo max_texture_width was set to 0. " <<
-                                   " Changing it to " << info.max_texture_width;
+                                   " Changing it to " << max_texture_width;
     } else {
-        throwErrorIf( info.max_texture_width < sprite_width,
+        throwErrorIf( max_texture_width < sprite_width,
                       "Maximal texture width is smaller than tile width" );
     }
 
-    if( info.max_texture_height == 0 ) {
-        info.max_texture_height = sprite_height * min_tile_ycount;
+    if( max_texture_height == 0 ) {
+        max_texture_height = sprite_height * min_tile_ycount;
         DebugLog( D_INFO, DC_ALL ) << "SDL_RendererInfo max_texture_height was set to 0. " <<
-                                   " Changing it to " << info.max_texture_height;
+                                   " Changing it to " << max_texture_height;
     } else {
-        throwErrorIf( info.max_texture_height < sprite_height,
+        throwErrorIf( max_texture_height < sprite_height,
                       "Maximal texture height is smaller than tile height" );
     }
 
     // Number of tiles in each dimension that fits into a (maximal) SDL texture.
     // If the tile atlas contains more than that, we have to split it.
-    const int max_tile_xcount = info.max_texture_width / sprite_width;
-    const int max_tile_ycount = info.max_texture_height / sprite_height;
+    const int max_tile_xcount = max_texture_width / sprite_width;
+    const int max_tile_ycount = max_texture_height / sprite_height;
     // Range over the tile atlas, wherein each rectangle fits into the maximal
     // SDL texture size. In other words: a range over the parts into which the
     // tile atlas needs to be split.
     const rect_range<SDL_Rect> output_range(
         max_tile_xcount * sprite_width,
         max_tile_ycount * sprite_height,
-        point( divide_round_up( tile_atlas->w, info.max_texture_width ),
-               divide_round_up( tile_atlas->h, info.max_texture_height ) ) );
+        point( divide_round_up( tile_atlas->w, max_texture_width ),
+               divide_round_up( tile_atlas->h, max_texture_height ) ) );
 
     const int expected_tilecount = ( tile_atlas->w / sprite_width ) *
                                    ( tile_atlas->h / sprite_height );
@@ -633,8 +635,8 @@ void tileset_cache::loader::load_tileset( const cata_path &img_path, const bool 
             smaller_surf = ::create_surface_32( w, h );
             cata_assert( smaller_surf );
             const SDL_Rect inp{ sub_rect.x, sub_rect.y, w, h };
-            throwErrorIf( SDL_BlitSurface( tile_atlas.get(), &inp, smaller_surf.get(),
-                                           nullptr ) != 0, "SDL_BlitSurface failed" );
+            throwErrorIf( !SDL_BlitSurface( tile_atlas.get(), &inp, smaller_surf.get(),
+                                           nullptr ), "SDL_BlitSurface failed" );
         }
         const SDL_Surface_Ptr &surf_to_use = smaller_surf ? smaller_surf : tile_atlas;
         cata_assert( surf_to_use );
@@ -1378,8 +1380,8 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
     if( !skip_covered_map ) {
         //set clipping to prevent drawing over stuff we shouldn't
         SDL_Rect clipRect = {dest.x, dest.y, width, height};
-        printErrorIf( SDL_RenderSetClipRect( renderer.get(), &clipRect ) != 0,
-                      "SDL_RenderSetClipRect failed" );
+        printErrorIf( !SDL_SetRenderClipRect( renderer.get(), &clipRect ),
+                      "SDL_SetRenderClipRect failed" );
 
         //fill render area with black to prevent artifacts where no new pixels are drawn
         geometry->rect( renderer, clipRect, SDL_Color() );
@@ -2066,8 +2068,8 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
         }
     }
 
-    printErrorIf( SDL_RenderSetClipRect( renderer.get(), nullptr ) != 0,
-                  "SDL_RenderSetClipRect failed" );
+    printErrorIf( !SDL_SetRenderClipRect( renderer.get(), nullptr ),
+                  "SDL_SetRenderClipRect failed" );
 }
 
 void cata_tiles::set_draw_cache_dirty()
@@ -3191,7 +3193,7 @@ bool cata_tiles::draw_sprite_at(
             // flip horizontally
             ret = sprite_tex->render_copy_ex(
                       renderer, &destination, 0, nullptr,
-                      static_cast<SDL_RendererFlip>( SDL_FLIP_HORIZONTAL ) );
+                      static_cast<SDL_FlipMode>( SDL_FLIP_HORIZONTAL ) );
         } else {
             switch( rota % 4 ) {
                 default:
@@ -3224,7 +3226,7 @@ bool cata_tiles::draw_sprite_at(
                         // never flip isometric tiles vertically
                         ret = sprite_tex->render_copy_ex(
                                   renderer, &destination, 0, nullptr,
-                                  static_cast<SDL_RendererFlip>( SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL ) );
+                                  static_cast<SDL_FlipMode>( SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL ) );
                     } else {
                         ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr,
                                                           SDL_FLIP_NONE );
@@ -3255,7 +3257,7 @@ bool cata_tiles::draw_sprite_at(
         ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr, SDL_FLIP_NONE );
     }
 
-    printErrorIf( ret != 0, "SDL_RenderCopyEx() failed" );
+    printErrorIf( ret != 0, "RenderTextureRotatedPixels() failed" );
     // this reference passes all the way back up the call chain back to
     // cata_tiles::draw() here.draw_points_cache[z][row][col].com.height_3d
     // where we are accumulating the height of every sprite stacked up in a tile
@@ -4610,11 +4612,11 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
     const float origin_y = bounds.y + ( bounds.h - image_h * scale ) / 2;
 
     SDL_Rect previous_clip{};
-    const SDL_bool had_clip = SDL_RenderIsClipEnabled( renderer.get() );
+    const bool had_clip = SDL_RenderClipEnabled( renderer.get() );
     if( had_clip ) {
-        SDL_RenderGetClipRect( renderer.get(), &previous_clip );
+        SDL_GetRenderClipRect( renderer.get(), &previous_clip );
     }
-    SDL_RenderSetClipRect( renderer.get(), &bounds );
+    SDL_SetRenderClipRect( renderer.get(), &bounds );
     for( const preview_sprite &sprite : sprites ) {
         const SDL_Rect dest = {
             static_cast<int>( std::lround( origin_x + ( sprite.x - min_x ) * scale ) ),
@@ -4624,7 +4626,7 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
         };
         sprite.image->render_copy_ex( renderer, &dest, 0, nullptr, SDL_FLIP_NONE );
     }
-    SDL_RenderSetClipRect( renderer.get(), had_clip ? &previous_clip : nullptr );
+    SDL_SetRenderClipRect( renderer.get(), had_clip ? &previous_clip : nullptr );
 }
 
 void cata_tiles::draw_entity_with_overlays( const Character &ch, const tripoint_bub_ms &p,
@@ -4762,8 +4764,8 @@ void tileset_cache::loader::ensure_default_item_highlight()
 
     const SDL_Surface_Ptr surface = create_surface_32( ts.tile_width, ts.tile_height );
     cata_assert( surface );
-    throwErrorIf( SDL_FillRect( surface.get(), nullptr, SDL_MapRGBA( surface->format, 0, 0, 127,
-                                highlight_alpha ) ) != 0, "SDL_FillRect failed" );
+    throwErrorIf( !SDL_FillSurfaceRect( surface.get(), nullptr, SDL_MapSurfaceRGBA( surface.get(), 0, 0, 127,
+                                highlight_alpha ) ), "SDL_FillSurfaceRect failed" );
     ts.tile_values.emplace_back( CreateTextureFromSurface( renderer, surface ),
                                  SDL_Rect{ 0, 0, ts.tile_width, ts.tile_height } );
     ts.tile_ids[ITEM_HIGHLIGHT].fg.add( std::vector<int>( {index} ), 1 );
@@ -5839,25 +5841,26 @@ void cata_tiles::tile_loading_report_count( const size_t count, TILE_CATEGORY ca
 
 std::vector<options_manager::id_and_option> cata_tiles::build_renderer_list()
 {
+#if defined(_WIN32)
+    return { { "gpu", no_translation( "SDL3 GPU (Direct3D 12)" ) } };
+#else
     std::vector<options_manager::id_and_option> renderer_names;
     std::vector<options_manager::id_and_option> default_renderer_names = {
-#   if defined(_WIN32)
-        { "direct3d", to_translation( "direct3d" ) },
-#   endif
         { "software", to_translation( "software" ) },
-        { "opengl", to_translation( "opengl" ) },
-        { "opengles2", to_translation( "opengles2" ) },
     };
     int numRenderDrivers = SDL_GetNumRenderDrivers();
     for( int ii = 0; ii < numRenderDrivers; ii++ ) {
-        SDL_RendererInfo ri;
-        SDL_GetRenderDriverInfo( ii, &ri );
+        const char *name = SDL_GetRenderDriver( ii );
+        const std::string_view driver( name );
+        if( driver.compare( 0, 6, "opengl" ) == 0 ) {
+            continue;
+        }
         // First default renderer name we will put first on the list. We can use it later as
         // default value.
-        if( ri.name == default_renderer_names.front().first ) {
+        if( name == default_renderer_names.front().first ) {
             renderer_names.emplace( renderer_names.begin(), default_renderer_names.front() );
         } else {
-            renderer_names.emplace_back( ri.name, no_translation( ri.name ) );
+            renderer_names.emplace_back( name, no_translation( name ) );
         }
     }
     DebugLog( D_INFO, DC_ALL ) << "SDL render devices: " << enumerate_as_string( renderer_names,
@@ -5866,6 +5869,7 @@ std::vector<options_manager::id_and_option> cata_tiles::build_renderer_list()
     }, enumeration_conjunction::none );
 
     return renderer_names.empty() ? default_renderer_names : renderer_names;
+#endif
 }
 
 std::vector<options_manager::id_and_option> cata_tiles::build_display_list()
@@ -5875,13 +5879,15 @@ std::vector<options_manager::id_and_option> cata_tiles::build_display_list()
         { "0", to_translation( "Display 0" ) }
     };
 
-    int numdisplays = SDL_GetNumVideoDisplays();
+    int numdisplays = 0;
+    SDL_DisplayID *displays = SDL_GetDisplays( &numdisplays );
     display_names.reserve( numdisplays );
     for( int i = 0 ; i < numdisplays ; i++ ) {
         display_names.emplace_back( std::to_string( i ),
-                                    no_translation( SDL_GetDisplayName( i ) ) );
+                                    no_translation( SDL_GetDisplayName( displays[i] ) ) );
     }
 
+    SDL_free( displays );
     return display_names.empty() ? default_display_names : display_names;
 }
 

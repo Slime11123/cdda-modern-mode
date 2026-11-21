@@ -1,6 +1,6 @@
 param(
-    [ValidateSet('Original', 'Probe', 'SelfTest')][string]$Mode = 'Original',
-    [string]$UserDir = (Join-Path $PSScriptRoot '../../runtime/0i1/user'),
+    [ValidateSet('Original', 'Probe', 'SelfTest')][string]$Mode = 'Probe',
+    [string]$UserDir = '',
     [switch]$StartIn2D,
     [string]$RuntimeDir = '',
     [ValidatePattern('^cataclysm-tiles(?:-[a-z0-9-]+)?\.exe$')][string]$ExecutableName = 'cataclysm-tiles.exe'
@@ -8,10 +8,17 @@ param(
 $ErrorActionPreference = 'Stop'
 $sourceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $projectRoot = Split-Path $sourceRoot -Parent
-$runtime = if ($Mode -eq 'Original') { 'runtime/p0-0i1' } else { 'runtime/0i1' }
+$runtime = if ($Mode -eq 'Original') { 'runtime/p0-0i1' } else { 'runtime/p6-sdl3' }
 $runtimeRoot = if ($RuntimeDir) { $RuntimeDir } else { Join-Path $projectRoot $runtime }
-$exe = Join-Path $runtimeRoot $ExecutableName
-if ($ExecutableName -eq 'cataclysm-tiles.exe' -and -not (Test-Path -LiteralPath $exe)) {
+$exe = if (-not $RuntimeDir -and $Mode -ne 'Original' -and $ExecutableName -eq 'cataclysm-tiles.exe') {
+    Join-Path $projectRoot 'build/p7-sdl3-gpu-only/src/cataclysm-tiles.exe'
+} else {
+    Join-Path $runtimeRoot $ExecutableName
+}
+if (-not $UserDir) {
+    $UserDir = Join-Path $runtimeRoot 'user'
+}
+if ($Mode -eq 'Original' -and $ExecutableName -eq 'cataclysm-tiles.exe' -and -not (Test-Path -LiteralPath $exe)) {
     $exe = Join-Path $runtimeRoot 'cataclysm-tiles-worldgen.exe'
 }
 if (-not (Test-Path -LiteralPath $exe)) { throw "Build first: $exe" }
@@ -20,7 +27,7 @@ $userRoot = (Resolve-Path $UserDir).Path
 $options = Join-Path $userRoot 'config/options.json'
 if (-not (Test-Path -LiteralPath $options)) {
     $defaults = @{
-        USE_LANG='zh_CN'; FULLSCREEN='no'; RENDERER='opengl'; TILES='UNDEAD_PEOPLE_BASE'
+        USE_LANG='zh_CN'; FULLSCREEN='no'; RENDERER='gpu'; TILES='UNDEAD_PEOPLE_BASE'
         FONT_WIDTH='12'; FONT_HEIGHT='24'; FONT_SIZE='20'; FONT_BLENDING='true'
         TERMINAL_X='100'; TERMINAL_Y='32'
     }
@@ -53,11 +60,14 @@ try {
     $env:CDDA_FP3D = if ($Mode -eq 'Original') { '0' } else { '1' }
     $env:CDDA_FP3D_SELFTEST = if ($Mode -eq 'SelfTest') { '1' } else { '0' }
     $env:CDDA_FP3D_START_ACTIVE = if ($Mode -eq 'Probe' -and -not $StartIn2D) { '1' } else { '0' }
-    # This is the interactive game the user launched, rather than a background helper.
-    $arguments = @('--basepath', ('"' + $sourceRoot.Replace('\','/') + '/"'),
+    $previousPath = $env:PATH
+    $env:PATH = "$runtimeRoot;$previousPath"
+    $dataRoot = if ($Mode -eq 'Original') { $sourceRoot } else { Join-Path $projectRoot 'runtime/0i1' }
+    $arguments = @('--basepath', ('"' + $dataRoot.Replace('\','/') + '/"'),
                    '--userdir', ('"' + $userRoot.Replace('\','/') + '/"'))
-    Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $projectRoot -WindowStyle Normal
+    Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $runtimeRoot -WindowStyle Normal
 } finally {
+    if ($null -ne $previousPath) { $env:PATH = $previousPath }
     foreach ($name in $previous.Keys) {
         [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
     }

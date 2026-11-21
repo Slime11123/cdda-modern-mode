@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 #include "avatar.h"
 #include "calendar.h"
 #include "cata_imgui.h"
@@ -49,39 +49,39 @@ bool screenshot( const cata_path &path )
     const bool three_d = fp3d_compositor::view_3d();
     auto image = three_d ? fp3d_compositor::copy_view() : copy_2d_display_buffer();
     int width = 0, height = 0;
-    if( !image || SDL_QueryTexture( image.get(), nullptr, nullptr, &width, &height ) != 0 ||
+    if( !image || QueryTexturePixels( image.get(), nullptr, nullptr, &width, &height ) != 0 ||
         width <= 0 || height <= 0 ) { return false; }
     const float scale = std::min( 1.f, 640.f / width );
     width = std::max( 1, static_cast<int>( width * scale ) );
     height = std::max( 1, static_cast<int>( height * scale ) );
     SDL_Texture_Ptr target( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA32,
                            SDL_TEXTUREACCESS_TARGET, width, height ) );
-    SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormat( 0, width, height, 32,
+    SDL_Surface_Ptr surface( CreateSurfaceWithFormat( 0, width, height, 32,
                              SDL_PIXELFORMAT_RGBA32 ) );
     if( !target || !surface ) { return false; }
     auto *previous = SDL_GetRenderTarget( renderer );
     SDL_Rect viewport, clip;
-    SDL_RenderGetViewport( renderer, &viewport );
-    SDL_RenderGetClipRect( renderer, &clip );
-    const bool clipped = SDL_RenderIsClipEnabled( renderer );
+    SDL_GetRenderViewport( renderer, &viewport );
+    SDL_GetRenderClipRect( renderer, &clip );
+    const bool clipped = SDL_RenderClipEnabled( renderer );
     float sx = 1, sy = 1;
-    SDL_RenderGetScale( renderer, &sx, &sy );
+    SDL_GetRenderScale( renderer, &sx, &sy );
     on_out_of_scope restore( [&]() {
         SDL_SetRenderTarget( renderer, previous );
-        SDL_RenderSetScale( renderer, sx, sy );
-        SDL_RenderSetViewport( renderer, &viewport );
-        SDL_RenderSetClipRect( renderer, clipped ? &clip : nullptr );
+        SDL_SetRenderScale( renderer, sx, sy );
+        SDL_SetRenderViewport( renderer, &viewport );
+        SDL_SetRenderClipRect( renderer, clipped ? &clip : nullptr );
     } );
-    if( SDL_SetRenderTarget( renderer, target.get() ) != 0 ) { return false; }
-    SDL_RenderSetScale( renderer, 1, 1 );
-    SDL_RenderSetViewport( renderer, nullptr );
-    SDL_RenderSetClipRect( renderer, nullptr );
-    if( SDL_RenderCopyEx( renderer, image.get(), nullptr, nullptr, 0, nullptr,
+    if( !SDL_SetRenderTarget( renderer, target.get() ) ) { return false; }
+    SDL_SetRenderScale( renderer, 1, 1 );
+    SDL_SetRenderViewport( renderer, nullptr );
+    SDL_SetRenderClipRect( renderer, nullptr );
+    if( RenderTextureRotatedPixels( renderer, image.get(), nullptr, nullptr, 0, nullptr,
                          three_d ? SDL_FLIP_VERTICAL : SDL_FLIP_NONE ) != 0 ||
-        SDL_RenderReadPixels( renderer, nullptr, surface->format->format,
+        ReadRenderPixels( renderer, nullptr, surface->format,
                               surface->pixels, surface->pitch ) != 0 ) { return false; }
     const cata_path temporary = path + ".tmp";
-    return IMG_SavePNG( surface.get(), temporary.generic_u8string().c_str() ) == 0 &&
+    return IMG_SavePNG( surface.get(), temporary.generic_u8string().c_str() ) &&
            rename_file( temporary, path );
 }
 

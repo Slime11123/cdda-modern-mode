@@ -219,7 +219,9 @@ TEST_CASE( "fp3d_hotbar_and_modifier_commands_are_independent", "[fp3d][input]" 
     CHECK( input.event( input_event( SDLK_LSHIFT, input_event_t::keyboard_code ), true, 0 ) );
     CHECK( input.poll( 0 ) == action_ident( ACTION_TOGGLE_RUN ) );
     input.cancel();
-    CHECK( input.event( input_event( SDLK_LCTRL, input_event_t::keyboard_code ), true, 0 ) );
+    const auto &crouch_bindings = inp_mngr.get_input_for_action( "FP3D_CROUCH", "FP3D" );
+    REQUIRE_FALSE( crouch_bindings.empty() );
+    CHECK( input.event( crouch_bindings.front(), true, 0 ) );
     CHECK( input.poll( 0 ) == action_ident( ACTION_TOGGLE_CROUCH ) );
     input.cancel();
     CHECK( input.event( input_event( SDLK_LALT, input_event_t::keyboard_code ), true, 0 ) );

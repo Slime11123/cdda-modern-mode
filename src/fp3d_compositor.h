@@ -15,7 +15,7 @@
 #include "coordinates.h"
 #include "point.h"
 
-// Windows/SDL2/OpenGL phase-1 probe, called only from the existing game thread.
+// SDL3 GPU compositor, called only from the existing game thread.
 namespace fp3d_snapshot
 {
 struct scene_snapshot;
@@ -37,6 +37,8 @@ void add_map_overlay( map_overlay overlay );
 const std::vector<map_overlay> &map_overlays();
 bool requested();
 bool view_3d();
+bool default_view_3d();
+bool default_modern_controls( bool three_d );
 void apply_modes( bool three_d, bool modern );
 // Exercise the legacy three presets in renderer regression checks.
 void cycle_mode();
@@ -44,6 +46,7 @@ fp3d_input::mode controls();
 // The 3D camera type is its own axis, independent of "3D rendering is on".
 // F6 flips it inside the 3D world; nothing here is a 2D mode.
 bool overhead();
+bool preferred_overhead();
 void toggle_camera();
 // Per-character save preference, independent of global rendering defaults.
 std::string saved_view_mode();
@@ -100,6 +103,11 @@ void set_viewport( int x, int y, int width, int height, int display_width, int d
 void set_input_context( const std::string &category );
 void publish( fp3d_snapshot::scene_snapshot scene );
 void publish_camera( avatar &you, const map &here, bool cut_overhead );
+// Explicit native GPU migration QA; never changes the normal render mode.
+bool gpu_world_qa_requested();
+void capture_gpu_world_qa( avatar &you, const map &here );
+void gpu_world_qa_after_present( bool presented );
+void gpu_world_qa_capture_composite();
 void begin_action();
 void melee_swing();
 struct hit_feedback {

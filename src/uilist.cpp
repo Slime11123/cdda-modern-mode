@@ -30,8 +30,8 @@
 
 #if defined(__ANDROID__)
 #include <jni.h>
-#include <SDL_keyboard.h>
-#include <SDL_mouse.h>
+#include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_mouse.h>
 #include "options.h"
 #endif
 
@@ -88,7 +88,7 @@ void uilist_impl::draw_controls()
 #if defined(TILES)
     hide_if_hidden();
     using cata::options::mouse;
-    bool cursor_shown = SDL_ShowCursor( SDL_QUERY ) == SDL_ENABLE;
+    bool cursor_shown = SDL_CursorVisible();
     if( mouse.hidekb && !cursor_shown ) {
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
     } else {
@@ -1019,8 +1019,8 @@ shared_ptr_fast<uilist_impl> uilist::query( bool loop, int timeout,
             calc_data();
             started = true;
         }
-        JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-        jobject activity = ( jobject )SDL_AndroidGetActivity();
+        JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+        jobject activity = ( jobject )SDL_GetAndroidActivity();
         jclass clazz( env->GetObjectClass( activity ) );
         jmethodID get_nativeui_method_id = env->GetMethodID( clazz, "getNativeUI",
                                            "()Lcom/cleverraven/cataclysmdda/NativeUI;" );

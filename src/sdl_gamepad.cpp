@@ -19,12 +19,12 @@ static constexpr int max_sticks = 2;
 static constexpr int max_buttons = 30;
 
 static std::array<int, max_triggers> triggers_axis = {
-    SDL_CONTROLLER_AXIS_TRIGGERLEFT,
-    SDL_CONTROLLER_AXIS_TRIGGERRIGHT
+    SDL_GAMEPAD_AXIS_LEFT_TRIGGER,
+    SDL_GAMEPAD_AXIS_RIGHT_TRIGGER
 };
 static std::array<std::array<int, 2>, max_sticks> sticks_axis = { {
-        { {SDL_CONTROLLER_AXIS_LEFTX,  SDL_CONTROLLER_AXIS_LEFTY}  },
-        { {SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY} }
+        { {SDL_GAMEPAD_AXIS_LEFTX,  SDL_GAMEPAD_AXIS_LEFTY}  },
+        { {SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY} }
     }
 };
 
@@ -59,9 +59,9 @@ static int diagonal_detect_delay = 250;
 
 // SDL related stuff
 static SDL_TimerID timer_id;
-static SDL_GameController *controller = nullptr;
+static SDL_Gamepad *controller = nullptr;
 
-static Uint32 timer_func( Uint32 interval, void * )
+static Uint32 SDLCALL timer_func( void *, SDL_TimerID, Uint32 interval )
 {
     SDL_Event event;
     SDL_UserEvent userevent;
@@ -110,27 +110,24 @@ void init()
         task.counter = 0;
     }
 
-    int ret = SDL_Init( SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER );
-    if( ret < 0 ) {
-        printErrorIf( ret != 0, "Init gamecontroller+timer failed" );
+    if( !SDL_InitSubSystem( SDL_INIT_GAMEPAD ) ) {
+        printErrorIf( true, "Init gamepad failed" );
         return;
     }
-    int numjoy = SDL_NumJoysticks();
-    if( numjoy >= 1 ) {
-        if( numjoy > 1 ) {
-            dbg( D_WARNING ) <<
-                             "You have more than one gamepads/joysticks plugged in, only the first will be used.";
+    int count = 0;
+    SDL_JoystickID *gamepads = SDL_GetGamepads( &count );
+    if( gamepads && count > 0 ) {
+        if( count > 1 ) {
+            dbg( D_WARNING ) << "Only the first connected gamepad will be used.";
         }
-        controller = SDL_GameControllerOpen( 0 );
-        printErrorIf( controller == nullptr, "SDL_GameControllerOpen failed" );
-        if( controller ) {
-            printErrorIf( SDL_GameControllerEventState( SDL_ENABLE ) < 0,
-                          "SDL_GameControllerEventState(SDL_ENABLE) failed" );
-        }
-    } else {
-        controller = nullptr;
+        controller = SDL_OpenGamepad( gamepads[0] );
+        printErrorIf( controller == nullptr, "SDL_OpenGamepad failed" );
+    }
+    SDL_free( gamepads );
+    if( !controller ) {
         return;
     }
+    SDL_SetGamepadEventsEnabled( true );
 
     timer_id = SDL_AddTimer( 50, timer_func, nullptr );
     printErrorIf( timer_id == 0, "SDL_AddTimer failed" );
@@ -143,12 +140,12 @@ void quit()
         timer_id = 0;
     }
     if( controller ) {
-        SDL_GameControllerClose( controller );
+        SDL_CloseGamepad( controller );
         controller = nullptr;
     }
 }
 
-SDL_GameController *get_controller()
+SDL_Gamepad *get_controller()
 {
     return controller;
 }
@@ -227,13 +224,13 @@ static void dpad_changes( task_t &task, const std::array<int, 16> &m, Uint32 now
 
 void handle_axis_event( SDL_Event &event )
 {
-    if( event.type != SDL_CONTROLLERAXISMOTION ) {
+    if( event.type != SDL_EVENT_GAMEPAD_AXIS_MOTION ) {
         return;
     }
 
-    int axis = event.caxis.axis;
-    int value = event.caxis.value;
-    Uint32 now = event.caxis.timestamp;
+    int axis = event.gaxis.axis;
+    int value = event.gaxis.value;
+    Uint32 now = event.gaxis.timestamp;
 
     // check triggers
     int idx = one_of_two( triggers_axis, axis );
@@ -293,30 +290,30 @@ void handle_axis_event( SDL_Event &event )
 void handle_button_event( SDL_Event &event )
 {
     switch( event.type ) {
-        case SDL_CONTROLLERBUTTONDOWN:
-        case SDL_CONTROLLERBUTTONUP: {
-            int button = event.cbutton.button;
-            int state = event.cbutton.state;
-            Uint32 now = event.cbutton.timestamp;
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+            int button = event.gbutton.button;
+            int state = event.gbutton.down;
+            Uint32 now = event.gbutton.timestamp;
             task_t &task = all_tasks[button];
             if( state ) {
                 switch( button ) {
-                    case SDL_CONTROLLER_BUTTON_BACK:    // BACK -> Escape
+                    case SDL_GAMEPAD_BUTTON_BACK:    // BACK -> Escape
                         send_input( KEY_ESCAPE, input_event_t::keyboard_code );
                         break;
-                    case SDL_CONTROLLER_BUTTON_START:   // START -> Enter
+                    case SDL_GAMEPAD_BUTTON_START:   // START -> Enter
                         send_input( '\n', input_event_t::keyboard_char );
                         break;
-                    case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                    case SDL_GAMEPAD_BUTTON_DPAD_UP:
                         send_input( KEY_UP, input_event_t::keyboard_char );
                         break;
-                    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
                         send_input( KEY_DOWN, input_event_t::keyboard_char );
                         break;
-                    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
                         send_input( KEY_LEFT, input_event_t::keyboard_char );
                         break;
-                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
                         send_input( KEY_RIGHT, input_event_t::keyboard_char );
                         break;
                     default:

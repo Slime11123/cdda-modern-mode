@@ -1,10 +1,12 @@
 #include "fp3d_input.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <array>
 #include "fp3d_camera.h"
 #include "fp3d_compositor.h"
 #include "fp3d_hud.h"
 #include "fp3d_shaderpacks.h"
+#include "fp3d_simple_ui.h"
 #include "cata_scope_helpers.h"
 #include "avatar.h"
 #include "game.h"
@@ -325,72 +327,101 @@ class mode_settings : public cataimgui::window
         int &view;
         int &keys;
         int &style;
-        int column = 0;
-        int result = -1;
-        bool shader_page = false;
-        bool hud_page = false;
+        enum result_code { cancel = -1, apply = 1, edit_classic, edit_modern_2d, edit_modern_3d,
+                           graphics_options };
+        static constexpr std::array<const char *, 3> mode_options = {
+            "FP3D_VIEW", "FP3D_CONTROLS", "FP3D_UI_STYLE"
+        };
+        int page = 0;
+        int result = cancel;
+        bool camera_overhead = fp3d_compositor::preferred_overhead();
+        bool focus_window = true;
+        std::array<bool, 3> use_defaults{};
         std::vector<fp3d_shaderpacks::entry> shader_entries;
+        std::string scan_message;
+
         cataimgui::bounds get_bounds() override {
-            const auto size = ImGui::GetIO().DisplaySize;
-            const float width = std::min( size.x * .9f, 820.0f );
-            const float height = std::min( size.y * .85f, 480.0f );
-            return { ( size.x - width ) / 2, ( size.y - height ) / 2, width, height };
+            return { -1, -1, .85f, .85f };
         }
-        void draw_shader_page() {
-            ImGui::TextUnformatted( "光影包" );
-            ImGui::SameLine();
-            ImGui::TextDisabled( "Minecraft 风格列表 / 只作用于 3D 世界" );
-            ImGui::Separator();
 
-            const float total_width = ImGui::GetContentRegionAvail().x;
-            const float content_height = std::max( 185.0f, ImGui::GetContentRegionAvail().y - 82.0f );
-            ImGui::BeginChild( "fp3d_shaderpack_list", ImVec2( total_width * .54f, content_height ), true );
-            ImGui::TextDisabled( "选择光影包" );
-            ImGui::Separator();
-            for( const auto &pack : shader_entries ) {
-                ImGui::PushID( pack.id.c_str() );
-                const bool chosen = pack.id == fp3d_shaderpacks::selected();
-                if( ImGui::Selectable( pack.title.c_str(), chosen ) ) {
-                    fp3d_shaderpacks::choose( pack.id );
-                }
-                if( !pack.compatible ) {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled( "不兼容" );
-                } else if( chosen ) {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled( "已选择" );
-                }
-                ImGui::TextDisabled( "%s", pack.note.c_str() );
-                ImGui::Separator();
-                ImGui::PopID();
+        void finish( result_code value ) {
+            result = value;
+            is_open = false;
+        }
+
+        void scan_shaders() {
+            shader_entries = fp3d_shaderpacks::scan( &scan_message );
+            if( scan_message.empty() ) {
+                scan_message = "光影包列表已刷新";
             }
-            ImGui::EndChild();
+        }
 
-            ImGui::SameLine();
-            ImGui::BeginChild( "fp3d_shaderpack_details", ImVec2( 0, content_height ), true );
-            ImGui::TextUnformatted( "光影包信息" );
-            ImGui::Separator();
-            const auto &active_id = fp3d_shaderpacks::selected();
-            const auto it = std::find_if( shader_entries.begin(), shader_entries.end(),
-            [&]( const fp3d_shaderpacks::entry & pack ) {
+        void draw_shader_page() {
+            if( shader_entries.empty() ) {
+                scan_shaders();
+                if( scan_message == "光影包列表已刷新" ) {
+                    scan_message.clear();
+                }
+            }
+            ImGui::TextWrapped( "光影只作用于 3D 世界。更改自动保存。" );
+            ImGui::Spacing();
+            ImGui::TextUnformatted( "光影包" );
+            const std::string active_id = fp3d_shaderpacks::selected();
+            const auto active_pack = std::find_if( shader_entries.begin(), shader_entries.end(),
+            [&]( const fp3d_shaderpacks::entry &pack ) {
                 return pack.id == active_id;
             } );
-            if( it != shader_entries.end() ) {
-                ImGui::TextWrapped( "%s", it->title.c_str() );
-                ImGui::TextDisabled( "%s", it->note.c_str() );
+            const float refresh_size = ImGui::GetFrameHeight();
+            ImGui::SetNextItemWidth( ImGui::GetContentRegionAvail().x - refresh_size -
+                                     ImGui::GetStyle().ItemSpacing.x );
+            if( ImGui::BeginCombo( "##shaderpack", active_pack == shader_entries.end() ?
+                                   active_id.c_str() : active_pack->title.c_str() ) ) {
+                for( const auto &pack : shader_entries ) {
+                    ImGui::PushID( pack.id.c_str() );
+                    const bool selected = pack.id == active_id;
+                    if( ImGui::Selectable( pack.title.c_str(), selected,
+                                           pack.compatible ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled ) ) {
+                        fp3d_shaderpacks::choose( pack.id );
+                    }
+                    ImGui::SetItemTooltip( "%s", pack.note.c_str() );
+                    if( selected ) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            const bool refresh = ImGui::Button( "##refresh_shader_list", ImVec2( refresh_size, refresh_size ) );
+            ImGui::SetItemTooltip( "刷新光影包列表" );
+            const ImVec2 corner = ImGui::GetItemRectMin();
+            const ImVec2 center( corner.x + refresh_size / 2, corner.y + refresh_size / 2 );
+            const float radius = refresh_size * .23f;
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const ImU32 gold = ImGui::GetColorU32( ImGuiCol_CheckMark );
+            draw->PathArcTo( center, radius, .15f, 5.25f, 22 );
+            draw->PathStroke( gold, ImDrawFlags_None, std::max( 1.f, refresh_size * .065f ) );
+            const ImVec2 tip( center.x + radius * .68f, center.y - radius * .7f );
+            draw->AddTriangleFilled( tip, ImVec2( tip.x - radius * .82f, tip.y ),
+                                     ImVec2( tip.x, tip.y - radius * .82f ), gold );
+            if( active_pack != shader_entries.end() ) {
+                ImGui::TextWrapped( "%s", active_pack->note.c_str() );
             } else {
-                ImGui::TextWrapped( "上次选择：%s", active_id.c_str() );
-                ImGui::TextDisabled( "文件已移动？请刷新列表并重新选择。" );
+                ImGui::TextWrapped( "找不到当前光影包。刷新列表或选择其他光影包。" );
+            }
+            if( refresh ) {
+                scan_shaders();
+            }
+            if( !scan_message.empty() ) {
+                ImGui::TextWrapped( "%s", scan_message.c_str() );
             }
             ImGui::Spacing();
-            ImGui::Separator();
             ImGui::TextUnformatted( "光影质量" );
             const char *qualities[] = { "低", "中", "高", "极高" };
-            for( int level = 0; level < 4; ++level ) {
-                if( level > 0 ) { ImGui::SameLine(); }
-                if( ImGui::RadioButton( qualities[level], fp3d_shaderpacks::quality() == level ) ) {
-                    fp3d_shaderpacks::set_quality( level );
-                }
+            int quality = fp3d_shaderpacks::quality();
+            ImGui::SetNextItemWidth( -1 );
+            if( ImGui::Combo( "##shader_quality", &quality, qualities, 4 ) ) {
+                fp3d_shaderpacks::set_quality( quality );
             }
             ImGui::Spacing();
             int mc_strength = fp3d_shaderpacks::mc_intensity_percent();
@@ -433,11 +464,9 @@ class mode_settings : public cataimgui::window
                 fp3d_shaderpacks::set_local_shadows_enabled( local_shadows );
             }
             ImGui::TextWrapped( "最多同时为一个手持光束和一盏重要固定灯生成阴影，使用已知墙体、门、楼板及车辆遮挡。其余灯保持原有照明；关闭此项可保留灯光和太阳阴影。" );
-            ImGui::TextWrapped( "Minecraft 光影：简单 GLSL 1.20 final.fsh 可直接运行；Photon 等复杂光影使用 CDDA 视觉适配，暂不支持完整 Iris 多阶段效果。" );
-            ImGui::EndChild();
-
+            ImGui::TextWrapped( "Minecraft 光影包需要 SDL3 GPU 适配。Photon 使用本游戏的原生光影实现。" );
             ImGui::Separator();
-            if( ImGui::Button( "打开光影文件夹" ) ) {
+            if( ImGui::Button( "打开光影包文件夹" ) ) {
                 fp3d_shaderpacks::open_folder();
             }
             ImGui::SameLine();
@@ -445,142 +474,284 @@ class mode_settings : public cataimgui::window
                 ImGui::SetClipboardText( fp3d_shaderpacks::directory().c_str() );
             }
             ImGui::SameLine();
-            if( ImGui::Button( "重新扫描/重载" ) ) {
-                shader_entries = fp3d_shaderpacks::scan();
+            if( ImGui::Button( "重载当前光影" ) ) {
                 fp3d_shaderpacks::request_reload();
             }
-            ImGui::SameLine();
-            if( ImGui::Button( "完成" ) ) {
-                shader_page = false;
+            const auto status = fp3d_shaderpacks::status();
+            if( !status.empty() && status != scan_message ) {
+                ImGui::TextWrapped( "%s", status.c_str() );
             }
-            const auto &status = fp3d_shaderpacks::status();
-            ImGui::TextDisabled( "%s", status.empty() ?
-                                 "光影包请放在 EXE 同目录的 shaderpacks 文件夹中。" :
-                                 status.c_str() );
         }
+
         void draw_hud_page() {
             ImGui::TextUnformatted( "现代 UI 大小" );
-            ImGui::TextWrapped( "各面板独立缩放（含文字和图标），每档 25%，范围 25%～200%。修改自动保存，重新打开游戏后仍然生效。" );
+            ImGui::TextWrapped( "%s", "各面板独立缩放（含文字和图标），每档 25%，范围 25%～200%。修改自动保存，重新打开游戏后仍然生效。" );
             ImGui::Separator();
-            ImGui::BeginChild( "hud_sizes", ImVec2( 0, -ImGui::GetFrameHeightWithSpacing() ), true );
             for( const auto &panel : fp3d_hud::panel_settings ) {
                 ImGui::PushID( panel.option );
                 int step = get_option<int>( panel.option ) / 25;
                 const std::string format = std::to_string( step * 25 ) + "%%";
-                ImGui::SetNextItemWidth( ImGui::GetContentRegionAvail().x * .60f );
-                if( ImGui::SliderInt( panel.label, &step, 1, 8, format.c_str(),
+                ImGui::TextUnformatted( panel.label );
+                ImGui::SetNextItemWidth( -1 );
+                if( ImGui::SliderInt( "##hud_size", &step, 1, 8, format.c_str(),
                                      ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp ) ) {
                     get_options().get_option( panel.option ).setValue( std::to_string( step * 25 ) );
                     get_options().save();
                 }
                 ImGui::PopID();
             }
-            ImGui::EndChild();
             if( ImGui::Button( "恢复默认大小" ) ) {
                 for( const auto &panel : fp3d_hud::panel_settings ) {
-                    get_options().get_option( panel.option ).setValue( std::string( "100" ) );
+                    auto &option = get_options().get_option( panel.option );
+                    option.setValue( option.getDefaultValue() );
                 }
                 get_options().save();
             }
-            ImGui::SameLine();
-            if( ImGui::Button( "返回" ) ) {
-                hud_page = false;
-            }
         }
-        void draw_controls() override {
-            if( hud_page ) {
-                draw_hud_page();
-                return;
+
+        bool selection_button( const char *label, bool selected, const ImVec2 &size ) {
+            if( selected ) {
+                const ImVec4 amber = ImGui::GetStyleColorVec4( ImGuiCol_CheckMark );
+                ImGui::PushStyleColor( ImGuiCol_Border, amber );
+                ImGui::PushStyleColor( ImGuiCol_Text, amber );
+                ImGui::PushStyleColor( ImGuiCol_Button, ImGui::GetStyleColorVec4( ImGuiCol_Header ) );
             }
-            if( shader_page ) {
-                draw_shader_page();
-                return;
+            const bool pressed = ImGui::Button( label, size );
+            if( selected ) {
+                ImGui::PopStyleColor( 3 );
             }
-            const float width = ImGui::GetContentRegionAvail().x;
-            const float height = ImGui::GetContentRegionAvail().y;
-            const float font = ImGui::GetFontSize();
-            const float top = ImGui::GetCursorPosY();
-            const char *titles[] = { "画面", "键位", "UI" };
-            const char *choices[][2] = { { "2D", "3D" }, { "经典", "现代" }, { "原版", "现代" } };
-            int *values[] = { &view, &keys, &style };
-            for( int col = 0; col < 3; ++col ) {
-                ImGui::PushID( col );
-                const float left = font + width * col / 3;
-                ImGui::SetCursorPos( ImVec2( left, top + font ) );
-                ImGui::Text( "%s%s", titles[col], column == col ? " <" : "" );
-                for( int row = 0; row < 2; ++row ) {
-                    ImGui::SetCursorPos( ImVec2( left, top + height * ( row == 0 ? .28f : .6f ) ) );
-                    if( ImGui::RadioButton( choices[col][row], values[col], row ) ) {
-                        column = col;
-                    }
+            return pressed;
+        }
+
+        void draw_mode_choice( int field, const char *title, const char *classic,
+                               const char *modern, int &value ) {
+            ImGui::PushID( field );
+            ImGui::TextUnformatted( title );
+            const float width = ( ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x ) / 2;
+            const ImVec2 size( width, ImGui::GetFrameHeight() * 1.2f );
+            if( selection_button( classic, value == 0, size ) ) {
+                value = 0;
+                use_defaults[field] = false;
+            }
+            ImGui::SameLine();
+            if( selection_button( modern, value == 1, size ) ) {
+                value = 1;
+                use_defaults[field] = false;
+            }
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+
+        void draw_view_page() {
+            draw_mode_choice( 0, "渲染模式", "2D", "3D", view );
+            if( use_defaults[1] && get_options().get_option( mode_options[1] ).getDefaultValue() == "auto" ) {
+                keys = fp3d_compositor::default_modern_controls( view != 0 );
+            }
+            if( use_defaults[2] && get_options().get_option( mode_options[2] ).getDefaultValue() == "auto" ) {
+                style = view;
+            }
+            draw_mode_choice( 1, "键位模式", "经典键位", "现代键位", keys );
+            draw_mode_choice( 2, "UI 模式", "经典 UI", "现代 UI", style );
+            if( view ) {
+                ImGui::Separator();
+                fp3d_simple_ui::accent_text( "3D 专属设置" );
+                ImGui::TextUnformatted( "视角" );
+                int camera = camera_overhead ? 1 : 0;
+                ImGui::SetNextItemWidth( -1 );
+                if( ImGui::Combo( "##camera", &camera, "第一人称\0上帝视角\0" ) ) {
+                    camera_overhead = camera != 0;
                 }
-                ImGui::PopID();
+                ImGui::TextWrapped( "游戏内按 F6 切换第一人称与上帝视角。" );
             }
-            ImGui::SetCursorPos( ImVec2( font, top + height - font * 4.5f ) );
-            if( ImGui::Button( "光影包..." ) ) {
-                shader_entries = fp3d_shaderpacks::scan();
-                shader_page = true;
-            }
-            ImGui::SameLine();
-            // Also accessible without navigating into the shaderpack submenu.
-            if( ImGui::Button( "打开光影包文件夹" ) ) {
-                fp3d_shaderpacks::open_folder();
-            }
-            ImGui::SameLine();
-            if( ImGui::Button( "编辑按键…" ) ) {
-                result = 2;
-                is_open = false;
-            }
-            ImGui::SameLine();
-            if( ImGui::Button( "现代 UI 大小..." ) ) {
-                hud_page = true;
-            }
-            ImGui::SetCursorPos( ImVec2( width - font * 6, top + height - font * 4.5f ) );
-            if( ImGui::Button( "完成", ImVec2( font * 5, font * 2 ) ) ) {
-                result = 1;
-                is_open = false;
-            }
-            ImGui::SetCursorPos( ImVec2( font, top + height - font * 2.6f ) );
-            ImGui::TextDisabled( "3D 世界中按 F6 切换第一人称 / 上帝视角（俯视）；俯视下滚轮缩放、中键旋转、右键地块菜单" );
-            ImGui::SetCursorPos( ImVec2( font, top + height - font * 1.5f ) );
-            ImGui::TextDisabled( "左右选列 / 上下选择 / Enter 完成 / Esc 取消" );
         }
+
+        void draw_controls() override {
+            constexpr const char *pages[] = { "画面模式", "操作键位", "界面风格", "光影设置", "性能设置" };
+            const ImVec4 gold = ImGui::GetStyleColorVec4( ImGuiCol_CheckMark );
+            ImGui::PushStyleVar( ImGuiStyleVar_FrameBorderSize, 1.f );
+            fp3d_simple_ui::accent_text( "模式设置" );
+            ImGui::Separator();
+            const float footer = 2 * ImGui::GetFrameHeightWithSpacing() +
+                                 ImGui::GetStyle().ItemSpacing.y;
+            const float nav_width = ImGui::GetContentRegionAvail().x * .24f;
+            const float icon_size = ImGui::GetFontSize() * .65f;
+            if( ImGui::BeginChild( "##mode_navigation", ImVec2( nav_width, -footer ),
+                                   ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
+                                   ImGuiWindowFlags_NoScrollbar ) ) {
+                ImGui::PushStyleVar( ImGuiStyleVar_ButtonTextAlign, ImVec2( 0, .5f ) );
+                for( int i = 0; i < 5; ++i ) {
+                    const bool selected = page == i;
+                    const std::string label = "     " + std::string( pages[i] );
+                    if( selection_button( label.c_str(), selected,
+                                          ImVec2( -1, ImGui::GetFrameHeight() * 1.35f ) ) ) {
+                        page = i;
+                    }
+                    if( selected ) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                    const ImVec2 min = ImGui::GetItemRectMin();
+                    const ImVec2 max = ImGui::GetItemRectMax();
+                    const ImVec2 center( min.x + ImGui::GetStyle().FramePadding.x + icon_size * .65f,
+                                         ( min.y + max.y ) / 2 );
+                    ImGui::GetWindowDrawList()->AddNgon( center, icon_size * .6f,
+                            ImGui::GetColorU32( selected ? ImGuiCol_CheckMark : ImGuiCol_TextDisabled ), 4 + i );
+                }
+                ImGui::PopStyleVar();
+            }
+            ImGui::EndChild();
+            ImGui::SameLine();
+            ImGui::PushID( page );
+            ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .095f, .092f, .080f, .97f ) );
+            if( ImGui::BeginChild( "##mode_content", ImVec2( 0, -footer ),
+                                   ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
+                                   ImGuiChildFlags_NavFlattened ) ) {
+                fp3d_simple_ui::accent_text( pages[page] );
+                ImGui::Spacing();
+                switch( page ) {
+                    case 0:
+                        draw_view_page();
+                        break;
+                    case 1:
+                        ImGui::TextWrapped( "当前选择：%s", keys ? "现代键位" : "经典键位" );
+                        ImGui::TextWrapped( "可独立编辑三套绑定，修改按键时由原有编辑器保存。" );
+                        if( ImGui::Button( "编辑经典原版键位", ImVec2( -1, 0 ) ) ) {
+                            finish( edit_classic );
+                        }
+                        if( ImGui::Button( "编辑 2D 现代键位", ImVec2( -1, 0 ) ) ) {
+                            finish( edit_modern_2d );
+                        }
+                        if( ImGui::Button( "编辑 3D 现代键位", ImVec2( -1, 0 ) ) ) {
+                            finish( edit_modern_3d );
+                        }
+                        break;
+                    case 2:
+                        ImGui::TextWrapped( "当前选择：%s", style ? "现代 UI" : "经典 UI" );
+                        draw_hud_page();
+                        break;
+                    case 3:
+                        draw_shader_page();
+                        break;
+                    case 4:
+                        ImGui::TextWrapped( "原版图形设置可调整缩放、窗口和图块。当前 SDL3 GPU 后端暂未提供独立的帧率限制、垂直同步或渲染距离选项。" );
+                        if( ImGui::Button( "打开原版设置" ) ) {
+                            finish( graphics_options );
+                        }
+                        break;
+                }
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::PopID();
+            ImGui::Separator();
+            ImGui::TextUnformatted( "基础模式与视角需应用。键位绑定、HUD 大小与光影设置自动保存。" );
+            if( ImGui::Button( "恢复基础模式默认" ) ) {
+                use_defaults.fill( true );
+                const auto value = []( int index ) {
+                    return get_options().get_option( mode_options[index] ).getDefaultValue();
+                };
+                const auto default_view = value( 0 );
+                view = default_view == "auto" ? fp3d_compositor::default_view_3d() : default_view == "3d";
+                const auto default_keys = value( 1 );
+                keys = default_keys == "auto" ? fp3d_compositor::default_modern_controls( view != 0 ) :
+                       default_keys == "modern";
+                const auto default_style = value( 2 );
+                style = default_style == "auto" ? view : default_style == "hud";
+            }
+            const float actions_width = ImGui::CalcTextSize( "取消" ).x +
+                                        ImGui::CalcTextSize( "应用设置" ).x +
+                                        4 * ImGui::GetStyle().FramePadding.x + ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SameLine( ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - actions_width );
+            if( ImGui::Button( "取消" ) ) {
+                finish( cancel );
+            }
+            ImGui::SameLine();
+            ImGui::PushStyleColor( ImGuiCol_Button, gold );
+            ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( .98f, .77f, .43f, 1 ) );
+            ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( .82f, .60f, .28f, 1 ) );
+            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( .10f, .075f, .035f, 1 ) );
+            if( ImGui::Button( "应用设置" ) ) {
+                finish( apply );
+            }
+            ImGui::PopStyleColor( 4 );
+            ImGui::PopStyleVar();
+        }
+
     public:
         mode_settings( int &v, int &k, int &s ) : cataimgui::window( "模式设置",
-                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar ),
-            view( v ), keys( k ), style( s ) {}
-        int run() {
-            input_context input( "FP3D_MODE_SETTINGS", keyboard_mode::keycode );
-            for( const char *action : { "QUIT", "CONFIRM", "UP", "DOWN", "LEFT", "RIGHT",
-                                       "SELECT", "MOUSE_MOVE", "ANY_INPUT" } ) {
-                input.register_action( action );
-            }
-            while( is_open ) {
-                ui_manager::redraw();
-                if( !is_open ) {
-                    break;
-                }
-                const auto action = input.handle_input( 16 );
-                if( action == "QUIT" ) {
-                    if( hud_page ) { hud_page = false; }
-                    else if( shader_page ) { shader_page = false; }
-                    else { is_open = false; }
-                } else if( hud_page ) {
-                    if( action == "CONFIRM" ) { hud_page = false; }
-                } else if( shader_page ) {
-                    if( action == "CONFIRM" ) { shader_page = false; }
-                } else if( action == "CONFIRM" ) {
-                    result = 1;
-                    is_open = false;
-                } else if( action == "LEFT" || action == "RIGHT" ) {
-                    column = ( column + ( action == "LEFT" ? 2 : 1 ) ) % 3;
-                } else if( action == "UP" || action == "DOWN" ) {
-                    int *values[] = { &view, &keys, &style };
-                    *values[column] = action == "UP" ? 0 : 1;
-                }
-            }
-            return result;
+                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar ),
+            view( v ), keys( k ), style( s ) {
+            // Let ImGui raise the settings window on focus and keep its combo popups above it.
+            force_to_back = true;
+            window_flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
         }
+
+        void draw() override {
+            if( is_open ) {
+                ImGui::SetNextWindowBgAlpha( .95f );
+                if( focus_window ) {
+                    ImGui::SetNextWindowFocus();
+                    focus_window = false;
+                }
+                cataimgui::window::draw();
+            }
+        }
+
+        void save() {
+            const char *values[] = { view ? "3d" : "2d", keys ? "modern" : "classic",
+                                     style ? "hud" : "classic" };
+            for( size_t i = 0; i < mode_options.size(); ++i ) {
+                auto &option = get_options().get_option( mode_options[i] );
+                option.setValue( use_defaults[i] ? option.getDefaultValue() : values[i] );
+            }
+            get_options().save();
+            fp3d_compositor::apply_modes( view != 0, keys != 0 );
+            if( view && fp3d_compositor::preferred_overhead() != camera_overhead ) {
+                fp3d_compositor::toggle_camera();
+            }
+        }
+
+        void run( input_context &original ) {
+            input_context input( "FP3D_MODE_SETTINGS", keyboard_mode::keycode );
+            input.register_action( "QUIT" );
+            input.register_action( "CONFIRM" );
+            do {
+                is_open = true;
+                focus_window = true;
+                result = cancel;
+                fp3d_compositor::set_input_context( "FP3D_MODE_SETTINGS" );
+                while( is_open ) {
+                    ui_manager::redraw();
+                    if( !is_open ) {
+                        break;
+                    }
+                    const bool combo_open = ImGui::IsPopupOpen( nullptr, ImGuiPopupFlags_AnyPopupId );
+                    const auto action = input.handle_input( 16 );
+                    if( action == "QUIT" && !combo_open ) {
+                        finish( cancel );
+                    } else if( action == "CONFIRM" && !combo_open && !ImGui::GetIO().NavActive ) {
+                        finish( apply );
+                    }
+                }
+                if( result == apply ) {
+                    save();
+                    return;
+                }
+                if( result == cancel ) {
+                    return;
+                }
+                if( result == graphics_options ) {
+                    get_options().show( true );
+                } else if( result == edit_classic ) {
+                    original.display_menu();
+                } else {
+                    restore_on_out_of_scope restore_editor( editing_modifiers );
+                    editing_modifiers = true;
+                    auto profile = result == edit_modern_3d ? context() : modern_2d_context();
+                    profile.display_menu();
+                }
+            } while( true );
+        }
+
 };
 }
 
@@ -594,31 +765,9 @@ action_id display_bindings( input_context &original )
     int view = fp3d_compositor::view_3d() ? 1 : 0;
     int keys = fp3d_compositor::controls() == mode::original_2d ? 0 : 1;
     int style = fp3d_compositor::uses_hud() ? 1 : 0;
-    while( true ) {
-        int result;
-        {
-            mode_settings settings( view, keys, style );
-            result = settings.run();
-        }
-        if( result == 1 ) {
-            get_options().get_option( "FP3D_VIEW" ).setValue( std::string( view ? "3d" : "2d" ) );
-            get_options().get_option( "FP3D_CONTROLS" ).setValue( std::string( keys ? "modern" : "classic" ) );
-            get_options().get_option( "FP3D_UI_STYLE" ).setValue( std::string( style ? "hud" : "classic" ) );
-            get_options().save();
-            fp3d_compositor::apply_modes( view != 0, keys != 0 );
-        }
-        if( result != 2 ) {
-            return ACTION_NULL;
-        }
-        if( keys == 0 ) {
-            original.display_menu();
-        } else {
-            restore_on_out_of_scope restore_editor( editing_modifiers );
-            editing_modifiers = true;
-            auto profile = view ? context() : modern_2d_context();
-            profile.display_menu();
-        }
-    }
+    mode_settings settings( view, keys, style );
+    settings.run( original );
+    return ACTION_NULL;
 }
 }
 #endif

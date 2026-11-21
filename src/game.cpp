@@ -4317,7 +4317,9 @@ void game::draw( ui_adaptor &ui )
     ter_view_p.z() = ( u.pos_bub() + u.view_offset ).z();
 #if defined(ENABLE_FP3D)
     const bool capture_3d = fp3d_compositor::active() && ter_view_p.z() == u.posz();
-    if( capture_3d ) {
+    const bool capture_gpu_qa = fp3d_compositor::gpu_world_qa_requested() &&
+                                ter_view_p.z() == u.posz();
+    if( capture_3d || capture_gpu_qa ) {
         // This also builds and updates the player's native view caches. Doing
         // the original preparation first would generate that lightmap twice.
         fp3d_snapshot::prepare_view( u, here );
@@ -4341,6 +4343,9 @@ void game::draw( ui_adaptor &ui )
     } else if( fp3d_compositor::uses_hud() &&
                fp3d_compositor::controls() != fp3d_input::mode::first_person_3d ) {
         fp3d_compositor::publish_hud( fp3d_hud::capture( u ) );
+    }
+    if( capture_gpu_qa ) {
+        fp3d_compositor::capture_gpu_world_qa( u, here );
     }
 #endif
     draw_ter();

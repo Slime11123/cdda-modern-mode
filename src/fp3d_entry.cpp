@@ -135,7 +135,7 @@ void draw( const SDL_Renderer_Ptr &renderer, const GeometryRenderer_Ptr &geometr
     }
     if( !backdrop ) {
         // A feathered shade, with no scene readback or full-screen blur pass.
-        SDL_Surface_Ptr shade( SDL_CreateRGBSurfaceWithFormat( 0, 256, 192, 32,
+        SDL_Surface_Ptr shade( CreateSurfaceWithFormat( 0, 256, 192, 32,
                                SDL_PIXELFORMAT_RGBA32 ) );
         if( !shade ) {
             return;
@@ -146,7 +146,7 @@ void draw( const SDL_Renderer_Ptr &renderer, const GeometryRenderer_Ptr &geometr
             for( int x = 0; x < shade->w; ++x ) {
                 const float edge_x = std::min( x, shade->w - 1 - x ) / 48.0f;
                 const float edge_y = std::min( y, shade->h - 1 - y ) / 38.0f;
-                pixels[x] = SDL_MapRGBA( shade->format, 0, 0, 0,
+                pixels[x] = SDL_MapSurfaceRGBA( shade.get(), 0, 0, 0,
                                          205 * smooth( edge_x ) * smooth( edge_y ) );
             }
         }
@@ -158,10 +158,10 @@ void draw( const SDL_Renderer_Ptr &renderer, const GeometryRenderer_Ptr &geometr
     }
 
     float old_scale_x, old_scale_y;
-    SDL_RenderGetScale( renderer.get(), &old_scale_x, &old_scale_y );
-    const SDL_bool was_clipped = SDL_RenderIsClipEnabled( renderer.get() );
+    SDL_GetRenderScale( renderer.get(), &old_scale_x, &old_scale_y );
+    const bool was_clipped = SDL_RenderClipEnabled( renderer.get() );
     SDL_Rect old_clip;
-    SDL_RenderGetClipRect( renderer.get(), &old_clip );
+    SDL_GetRenderClipRect( renderer.get(), &old_clip );
     SDL_BlendMode old_blend;
     SDL_GetRenderDrawBlendMode( renderer.get(), &old_blend );
     Uint8 r, green, b, a;
@@ -170,15 +170,15 @@ void draw( const SDL_Renderer_Ptr &renderer, const GeometryRenderer_Ptr &geometr
     const int width = 48 * font.width;
     const int height = 15 * font.height;
     const float scale = std::min( area[2] * 0.50f / width, area[3] * 0.50f / height );
-    SDL_RenderSetScale( renderer.get(), scale, scale );
+    SDL_SetRenderScale( renderer.get(), scale, scale );
     const SDL_Rect clip{ static_cast<int>( area[0] / scale ), static_cast<int>( area[1] / scale ),
                          static_cast<int>( area[2] / scale ), static_cast<int>( area[3] / scale ) };
-    SDL_RenderSetClipRect( renderer.get(), &clip );
+    SDL_SetRenderClipRect( renderer.get(), &clip );
     const int left = clip.x + ( clip.w - width ) / 2;
     const int top = clip.y + ( clip.h - height ) / 2;
     const SDL_Rect bounds{ left, top, width, height };
     SDL_SetTextureAlphaMod( backdrop.get(), animation.opacity() * 255 );
-    SDL_RenderCopy( renderer.get(), backdrop.get(), nullptr, &bounds );
+    RenderTexturePixels( renderer.get(), backdrop.get(), nullptr, &bounds );
 
     const auto text = [&]( const std::string & line, int x, int y, unsigned char color,
     float opacity ) {
@@ -197,7 +197,7 @@ void draw( const SDL_Renderer_Ptr &renderer, const GeometryRenderer_Ptr &geometr
     centered( content.day, top + 2 * font.height, 0 );
     SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_BLEND );
     SDL_SetRenderDrawColor( renderer.get(), 240, 240, 240, animation.opacity() * 230 );
-    SDL_RenderDrawLine( renderer.get(), left + 7 * font.width, top + 3 * font.height + 4,
+    SDL_RenderLine( renderer.get(), left + 7 * font.width, top + 3 * font.height + 4,
                         left + width - 7 * font.width, top + 3 * font.height + 4 );
     centered( content.date, top + 4 * font.height, 1 );
     for( size_t i = 0; i < content.rows.size(); ++i ) {
@@ -210,8 +210,8 @@ void draw( const SDL_Renderer_Ptr &renderer, const GeometryRenderer_Ptr &geometr
     }
     SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );
     SDL_SetRenderDrawBlendMode( renderer.get(), old_blend );
-    SDL_RenderSetScale( renderer.get(), old_scale_x, old_scale_y );
-    SDL_RenderSetClipRect( renderer.get(), was_clipped ? &old_clip : nullptr );
+    SDL_SetRenderScale( renderer.get(), old_scale_x, old_scale_y );
+    SDL_SetRenderClipRect( renderer.get(), was_clipped ? &old_clip : nullptr );
 }
 }
 #endif

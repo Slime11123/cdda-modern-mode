@@ -1,5 +1,7 @@
 # CDDA Modern Mode
 
+> **Source branches (2026-11-21):** `main` now contains the experimental **SDL3 / SDL GPU** source code. The previous **SDL2** source remains available on the [`sdl2` branch](https://github.com/Slime11123/cdda-modern-mode/tree/sdl2). Earlier GitHub Releases may still contain SDL2 builds.
+
 **An experimental first-person 3D and modern controls experience for Cataclysm: Dark Days Ahead.**
 
 > **AI-generated development:** This project was generated and developed with OpenAI GPT. It is an **unofficial** project based on CDDA **0.I-1 (Ito-1)**, not a release from OpenAI or the CDDA maintainers.

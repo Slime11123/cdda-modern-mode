@@ -57,7 +57,7 @@ extern int fontwidth;
 // may be displayed. Actually, this is supposed to be called from init.cpp,
 // and only from there.
 struct input_event;
-input_event sdl_keysym_to_keycode_evt( const SDL_Keysym &keysym );
+input_event sdl_keysym_to_keycode_evt( const SDL_KeyboardEvent &keysym );
 void load_tileset();
 void rescale_tileset( int size );
 bool save_screenshot( const std::string &file_path );

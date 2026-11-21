@@ -103,6 +103,7 @@ class options_manager
                 /// The translated currently selected option value.
                 std::string getValueName() const;
                 std::string getDefaultText( bool bTranslated = true ) const;
+                std::string getDefaultValue() const;
 
                 int getItemPos( const std::string &sSearch ) const;
                 std::vector<id_and_option> getItems() const;

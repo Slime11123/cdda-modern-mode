@@ -396,9 +396,8 @@ void pixel_minimap::set_screen_rect( const SDL_Rect &screen_rect )
         main_tex_clip_rect = SDL_Rect{ 0, 0, size_on_screen.x, size_on_screen.y };
         screen_clip_rect = fit_rect_inside( main_tex_clip_rect, screen_rect );
 
-        SDL_SetHint( SDL_HINT_RENDER_SCALE_QUALITY, "1" );
         main_tex = create_cache_texture( renderer, size_on_screen.x, size_on_screen.y );
-        SDL_SetHint( SDL_HINT_RENDER_SCALE_QUALITY, "0" );
+        SDL_SetTextureScaleMode( main_tex.get(), SDL_SCALEMODE_LINEAR );
 
     } else {
         const point d( ( size_on_screen.x - screen_rect.w ) / 2, ( size_on_screen.y - screen_rect.h ) / 2 );

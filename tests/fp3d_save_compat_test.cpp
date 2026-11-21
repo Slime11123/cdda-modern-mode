@@ -26,20 +26,13 @@
 TEST_CASE( "fp3d_character_save_restores_its_view_mode_after_renderer_restart",
            "[.fp3d_saved_view_gl]" )
 {
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
-    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden saved camera regression", 0, 0, 128, 128,
-                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Hidden saved camera regression", 128, 128,
+                           SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    int driver = -1;
-    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
-        SDL_RendererInfo info{};
-        SDL_GetRenderDriverInfo( i, &info );
-        if( std::string( info.name ) == "opengl" ) { driver = i; }
-    }
-    REQUIRE( driver >= 0 );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
-                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "gpu" ) );
     REQUIRE( renderer );
     fp3d_compositor::attach( renderer.get(), window.get() );
     on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );

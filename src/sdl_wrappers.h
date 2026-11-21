@@ -6,25 +6,37 @@
 #define SDL_MAIN_HANDLED
 #endif
 // IWYU pragma: begin_exports
-#if defined(_MSC_VER) && defined(USE_VCPKG)
-#   include <SDL2/SDL.h>
-#   include <SDL2/SDL_image.h>
-#   include <SDL2/SDL_ttf.h>
-#   include <SDL2/SDL_mouse.h>
-#else
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wold-style-cast"
-#   include <SDL.h>
-#pragma GCC diagnostic pop
-#   include <SDL_image.h>
-#   include <SDL_ttf.h>
-#   include <SDL_mouse.h>
-#endif
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <SDL3_ttf/SDL_ttf.h>
 // IWYU pragma: end_exports
 
 #include <memory>
 
 struct point;
+
+// UI layouts are still specified in whole pixels. Convert only at the SDL
+// renderer boundary so hitboxes and texture source rectangles agree.
+int RenderTexturePixels( SDL_Renderer *renderer, SDL_Texture *texture,
+                         const SDL_Rect *source, const SDL_Rect *destination );
+int RenderTextureRotatedPixels( SDL_Renderer *renderer, SDL_Texture *texture,
+                                const SDL_Rect *source, const SDL_Rect *destination,
+                                double angle, const SDL_Point *center, SDL_FlipMode flip );
+int RenderRectPixels( SDL_Renderer *renderer, const SDL_Rect *rect );
+int RenderFillRectPixels( SDL_Renderer *renderer, const SDL_Rect *rect );
+int RenderLinesPixels( SDL_Renderer *renderer, const SDL_Point *points, int count );
+int ReadRenderPixels( SDL_Renderer *renderer, const SDL_Rect *rect, SDL_PixelFormat format,
+                      void *pixels, int pitch );
+int QueryTexturePixels( SDL_Texture *texture, Uint32 *format, int *access, int *w, int *h );
+void GetLogicalRenderSize( SDL_Renderer *renderer, int *w, int *h );
+int SetLogicalRenderSize( SDL_Renderer *renderer, int w, int h );
+bool GetIntegerRenderScale( SDL_Renderer *renderer );
+int SetIntegerRenderScale( SDL_Renderer *renderer, bool enabled );
+SDL_Surface *CreateSurfaceWithFormat( Uint32 flags, int w, int h, int depth,
+                                      SDL_PixelFormat format );
+SDL_Surface *CreateSurfaceFromPixels( void *pixels, int w, int h, int depth, int pitch,
+                                      SDL_PixelFormat format );
+SDL_MouseButtonFlags MousePositionPixels( int *x, int *y );
 
 struct SDL_Renderer_deleter {
     void operator()( SDL_Renderer *const renderer ) {
@@ -40,13 +52,6 @@ struct SDL_Window_deleter {
 };
 using SDL_Window_Ptr = std::unique_ptr<SDL_Window, SDL_Window_deleter>;
 
-struct SDL_PixelFormat_deleter {
-    void operator()( SDL_PixelFormat *const format ) {
-        SDL_FreeFormat( format );
-    }
-};
-using SDL_PixelFormat_Ptr = std::unique_ptr<SDL_PixelFormat, SDL_PixelFormat_deleter>;
-
 struct SDL_Texture_deleter {
     void operator()( SDL_Texture *const ptr ) {
         SDL_DestroyTexture( ptr );
@@ -56,7 +61,7 @@ using SDL_Texture_Ptr = std::unique_ptr<SDL_Texture, SDL_Texture_deleter>;
 
 struct SDL_Surface_deleter {
     void operator()( SDL_Surface *const ptr ) {
-        SDL_FreeSurface( ptr );
+        SDL_DestroySurface( ptr );
     }
 };
 using SDL_Surface_Ptr = std::unique_ptr<SDL_Surface, SDL_Surface_deleter>;

@@ -3,7 +3,6 @@
 #define CATA_SRC_FP3D_LOCAL_LIGHTS_H
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <array>
-#include <string>
 #include <vector>
 #include "fp3d_snapshot.h"
 #include "fp3d_camera.h"
@@ -20,8 +19,6 @@ struct selected {
 };
 std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
                               fp3d_camera::offset camera );
-// Extends only the built-in CDDA/Photon visual bridge, never an imported final.fsh.
-std::string augment_fragment( const std::string &fragment );
 } // namespace fp3d_local_lights
 #endif
 #endif

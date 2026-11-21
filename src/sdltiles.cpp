@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -38,11 +39,9 @@
 #include <unordered_map>
 #include <vector>
 #if defined(_MSC_VER) && defined(USE_VCPKG)
-#   include <SDL2/SDL_image.h>
-#   include <SDL2/SDL_syswm.h>
+#   include <SDL3_image/SDL_image.h>
 #else
 #ifdef _WIN32
-#   include <SDL_syswm.h>
 #endif
 #endif
 
@@ -179,7 +178,7 @@ static void draw_fp3d_hud();
 
 static SDL_Window_Ptr window;
 static SDL_Renderer_Ptr renderer;
-static SDL_PixelFormat_Ptr format;
+static SDL_PixelFormat format = SDL_PIXELFORMAT_UNKNOWN;
 static SDL_Texture_Ptr display_buffer;
 #if defined(ENABLE_FP3D)
 static bool main_menu_demo_active = false;
@@ -242,11 +241,10 @@ static void ClearScreen()
 
 static void InitSDL()
 {
-    int init_flags = SDL_INIT_VIDEO | SDL_INIT_TIMER;
+    int init_flags = SDL_INIT_VIDEO;
 #if defined(SDL_SOUND)
     init_flags |= SDL_INIT_AUDIO;
 #endif
-    int ret;
 
 #if defined(SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING)
     // Requires SDL 2.0.5. Disables thread naming so that gdb works correctly
@@ -278,7 +276,7 @@ static void InitSDL()
 
 #if defined(__linux__)
     // https://bugzilla.libsdl.org/show_bug.cgi?id=3472#c5
-    if( SDL_COMPILEDVERSION == SDL_VERSIONNUM( 2, 0, 5 ) ) {
+    if( SDL_VERSION == SDL_VERSIONNUM( 2, 0, 5 ) ) {
         const char *xmod = getenv( "XMODIFIERS" );
         if( xmod && strstr( xmod, "@im=ibus" ) != nullptr ) {
             setenv( "XMODIFIERS", "@im=none", 1 );
@@ -286,20 +284,8 @@ static void InitSDL()
     }
 #endif
 
-    ret = SDL_Init( init_flags );
-    throwErrorIf( ret != 0, "SDL_Init failed" );
-
-    ret = TTF_Init();
-    throwErrorIf( ret != 0, "TTF_Init failed" );
-
-    // cata_tiles won't be able to load the tiles, but the normal SDL
-    // code will display fine.
-    ret = IMG_Init( IMG_INIT_PNG );
-    printErrorIf( ( ret & IMG_INIT_PNG ) != IMG_INIT_PNG,
-                  "IMG_Init failed to initialize PNG support, tiles won't work" );
-
-    //SDL2 has no functionality for INPUT_DELAY, we would have to query it manually, which is expensive
-    //SDL2 instead uses the OS's Input Delay.
+    throwErrorIf( !SDL_Init( init_flags ), "SDL_Init failed" );
+    throwErrorIf( !TTF_Init(), "TTF_Init failed" );
 
     if( atexit( SDL_Quit ) ) {
         debugmsg( "atexit failed to register SDL_Quit" );
@@ -319,7 +305,7 @@ static bool SetupRenderTarget()
     SDL_SetTextureBlendMode( display_buffer.get(), main_menu_demo_active ?
                              SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE );
 #endif
-    if( printErrorIf( SDL_SetRenderTarget( renderer.get(), display_buffer.get() ) != 0,
+    if( printErrorIf( !SDL_SetRenderTarget( renderer.get(), display_buffer.get() ),
                       "SDL_SetRenderTarget failed" ) ) {
         return false;
     }
@@ -328,56 +314,75 @@ static bool SetupRenderTarget()
     return true;
 }
 
+static void set_default_texture_filter( SDL_Renderer *renderer )
+{
+    const auto mode = get_option<std::string>( "SCALING_MODE" );
+    SDL_SetDefaultTextureScaleMode( renderer, mode == "linear" ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST );
+}
+
+static SDL_DisplayID display_for_index( int index )
+{
+    int count = 0;
+    SDL_DisplayID *displays = SDL_GetDisplays( &count );
+    const SDL_DisplayID display = displays && index >= 0 && index < count ?
+                                  displays[index] : SDL_GetPrimaryDisplay();
+    SDL_free( displays );
+    return display;
+}
+
+static SDL_Window *create_window_on_display( const char *title, SDL_DisplayID display, int width,
+        int height, SDL_WindowFlags flags )
+{
+    const SDL_PropertiesID window_properties = SDL_CreateProperties();
+    SDL_SetStringProperty( window_properties, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title );
+    SDL_SetNumberProperty( window_properties, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, flags );
+    SDL_SetNumberProperty( window_properties, SDL_PROP_WINDOW_CREATE_X_NUMBER,
+                           SDL_WINDOWPOS_CENTERED_DISPLAY( display ) );
+    SDL_SetNumberProperty( window_properties, SDL_PROP_WINDOW_CREATE_Y_NUMBER,
+                           SDL_WINDOWPOS_CENTERED_DISPLAY( display ) );
+    SDL_SetNumberProperty( window_properties, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width );
+    SDL_SetNumberProperty( window_properties, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height );
+    SDL_Window *result = SDL_CreateWindowWithProperties( window_properties );
+    SDL_DestroyProperties( window_properties );
+    return result;
+}
+
 //Registers, creates, and shows the Window!!
 static void WinCreate()
 {
     // Common flags used for fulscreen and for windowed
-    int window_flags = 0;
+    SDL_WindowFlags window_flags = 0;
     WindowWidth = TERMINAL_WIDTH * fontwidth * scaling_factor;
     WindowHeight = TERMINAL_HEIGHT * fontheight * scaling_factor;
-    window_flags |= SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
-
-    if( get_option<std::string>( "SCALING_MODE" ) != "none" ) {
-        SDL_SetHint( SDL_HINT_RENDER_SCALE_QUALITY, get_option<std::string>( "SCALING_MODE" ).c_str() );
-    }
+    window_flags |= SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
 #if !defined(__ANDROID__) && !defined(EMSCRIPTEN)
-    if( get_option<std::string>( "FULLSCREEN" ) == "fullscreen" ) {
-        window_flags |= SDL_WINDOW_FULLSCREEN;
+    const auto fullscreen_mode = get_option<std::string>( "FULLSCREEN" );
+    if( fullscreen_mode == "fullscreen" ) {
         fullscreen = true;
         // It still minimizes, but the screen size is not set to 0 to cause
         // division by zero
         SDL_SetHint( SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0" );
-    } else if( get_option<std::string>( "FULLSCREEN" ) == "windowedbl" ) {
-        window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    } else if( fullscreen_mode == "windowedbl" ) {
         fullscreen = true;
         // So you can switch to desktop without the game window obscuring it.
         SDL_SetHint( SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "1" );
-    } else if( get_option<std::string>( "FULLSCREEN" ) == "maximized" ) {
+    } else if( fullscreen_mode == "maximized" ) {
         window_flags |= SDL_WINDOW_MAXIMIZED;
     }
 #endif
 #if defined(EMSCRIPTEN)
     // Without this, the game only displays in the top-left 1/4 of the window.
-    window_flags &= ~SDL_WINDOW_ALLOW_HIGHDPI;
+    window_flags &= ~SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #endif
 #if defined(__ANDROID__)
     // Without this, the game only displays in the top-left 1/4 of the window.
-    window_flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_MAXIMIZED;
+    window_flags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_MAXIMIZED;
 #endif
 
-    int display = std::stoi( get_option<std::string>( "DISPLAY" ) );
-    if( display < 0 || display >= SDL_GetNumVideoDisplays() ) {
-        display = 0;
-    }
+    const auto display = display_for_index( std::stoi( get_option<std::string>( "DISPLAY" ) ) );
 
 #if defined(__ANDROID__)
-    // Bugfix for red screen on Samsung S3/Mali
-    // https://forums.libsdl.org/viewtopic.php?t=11445
-    SDL_GL_SetAttribute( SDL_GL_RED_SIZE, 5 );
-    SDL_GL_SetAttribute( SDL_GL_GREEN_SIZE, 6 );
-    SDL_GL_SetAttribute( SDL_GL_BLUE_SIZE, 5 );
-
     // Fix Back button crash on Android 9
 #if defined(SDL_HINT_ANDROID_TRAP_BACK_BUTTON )
     const bool trap_back_button = get_option<bool>( "ANDROID_TRAP_BACK_BUTTON" );
@@ -393,20 +398,30 @@ static void WinCreate()
 #endif
 #endif
 
-    ::window.reset( SDL_CreateWindow( "",
-                                      SDL_WINDOWPOS_CENTERED_DISPLAY( display ),
-                                      SDL_WINDOWPOS_CENTERED_DISPLAY( display ),
-                                      WindowWidth,
-                                      WindowHeight,
-                                      window_flags
-                                    ) );
+    ::window.reset( create_window_on_display( "", display, WindowWidth, WindowHeight, window_flags ) );
     throwErrorIf( !::window, "SDL_CreateWindow failed" );
 
 #if !defined(__ANDROID__) && !defined(EMSCRIPTEN)
+    if( fullscreen ) {
+        if( fullscreen_mode == "fullscreen" ) {
+            SDL_DisplayMode mode{};
+            if( SDL_GetClosestFullscreenDisplayMode( display, WindowWidth, WindowHeight,
+                    0.f, true, &mode ) ) {
+                printErrorIf( !SDL_SetWindowFullscreenMode( ::window.get(), &mode ),
+                              "Unable to use the requested fullscreen display mode" );
+            }
+        }
+        fullscreen = SDL_SetWindowFullscreen( ::window.get(), true );
+        printErrorIf( !fullscreen, "Unable to enter fullscreen" );
+        SDL_SyncWindow( ::window.get() );
+        if( fullscreen ) {
+            window_flags |= SDL_WINDOW_FULLSCREEN;
+        }
+    }
     // On Android SDL seems janky in windowed mode so we're fullscreen all the time.
     // Fullscreen mode is now modified so it obeys terminal width/height, rather than
     // overwriting it with this calculation.
-    if( window_flags & SDL_WINDOW_FULLSCREEN || window_flags & SDL_WINDOW_FULLSCREEN_DESKTOP
+    if( window_flags & SDL_WINDOW_FULLSCREEN
         || window_flags & SDL_WINDOW_MAXIMIZED ) {
         SDL_GetWindowSize( ::window.get(), &WindowWidth, &WindowHeight );
         // Ignore previous values, use the whole window, but nothing more.
@@ -414,42 +429,22 @@ static void WinCreate()
         TERMINAL_HEIGHT = WindowHeight / fontheight / scaling_factor;
     }
 #endif
-    const Uint32 wformat = SDL_GetWindowPixelFormat( ::window.get() );
-    format.reset( SDL_AllocFormat( wformat ) );
-    throwErrorIf( !format, "SDL_AllocFormat failed" );
-
-    int renderer_id = -1;
-#if !defined(__ANDROID__)
-    bool software_renderer = get_option<std::string>( "RENDERER" ).empty();
+    format = SDL_GetWindowPixelFormat( ::window.get() );
+    throwErrorIf( format == SDL_PIXELFORMAT_UNKNOWN, "SDL_GetWindowPixelFormat failed" );
     std::string renderer_name;
-    if( software_renderer ) {
-        renderer_name = "software";
-    } else {
-        renderer_name = get_option<std::string>( "RENDERER" );
-    }
-
-#if defined(ENABLE_FP3D)
-    if( fp3d_compositor::requested() ) {
-        renderer_name = "opengl";
-        software_renderer = false;
-    }
-#endif
-
-    if( renderer_name == "direct3d" ) {
-        direct3d_mode = true;
-    }
-
-    const int numRenderDrivers = SDL_GetNumRenderDrivers();
-    for( int i = 0; i < numRenderDrivers; i++ ) {
-        SDL_RendererInfo ri;
-        SDL_GetRenderDriverInfo( i, &ri );
-        if( renderer_name == ri.name ) {
-            renderer_id = i;
-            DebugLog( D_INFO, DC_ALL ) << "Active renderer: " << renderer_id << "/" << ri.name;
-            break;
-        }
-    }
+#if defined(_WIN32)
+    constexpr bool use_gpu_renderer = true;
+    bool software_renderer = false;
+    renderer_name = "gpu";
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+#elif !defined(__ANDROID__)
+    constexpr bool use_gpu_renderer = false;
+    renderer_name = get_option<std::string>( "RENDERER" );
+    bool software_renderer = renderer_name.empty() || renderer_name == "software" ||
+                             renderer_name.compare( 0, 6, "opengl" ) == 0;
 #else
+    constexpr bool use_gpu_renderer = false;
+    renderer_name = "gpu";
     bool software_renderer = get_option<bool>( "SOFTWARE_RENDERING" );
 #endif
 
@@ -459,12 +454,21 @@ static void WinCreate()
     if( !software_renderer ) {
         dbg( D_INFO ) << "Attempting to initialize accelerated SDL renderer.";
 
-        renderer.reset( SDL_CreateRenderer( ::window.get(), renderer_id, SDL_RENDERER_ACCELERATED |
-                                            SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_TARGETTEXTURE ) );
+        renderer.reset( SDL_CreateRenderer( ::window.get(),
+                                           renderer_name.c_str() ) );
+        if( use_gpu_renderer ) {
+            throwErrorIf( !renderer || !SDL_GetGPURendererDevice( renderer.get() ),
+                          "SDL3 GPU renderer initialization failed" );
+        }
+        if( renderer ) {
+            SDL_SetRenderVSync( renderer.get(), 1 );
+            set_default_texture_filter( renderer.get() );
+        }
         if( printErrorIf( !renderer,
                           "Failed to initialize accelerated renderer, falling back to software rendering" ) ) {
             software_renderer = true;
         } else if( !SetupRenderTarget() ) {
+            throwErrorIf( use_gpu_renderer, "SDL3 GPU display target initialization failed" );
             dbg( D_ERROR ) <<
                            "Failed to initialize display buffer under accelerated rendering, falling back to software rendering.";
             software_renderer = true;
@@ -477,9 +481,9 @@ static void WinCreate()
         if( get_option<bool>( "FRAMEBUFFER_ACCEL" ) ) {
             SDL_SetHint( SDL_HINT_FRAMEBUFFER_ACCELERATION, "1" );
         }
-        renderer.reset( SDL_CreateRenderer( ::window.get(), -1,
-                                            SDL_RENDERER_SOFTWARE | SDL_RENDERER_TARGETTEXTURE ) );
+        renderer.reset( SDL_CreateRenderer( ::window.get(), "software" ) );
         throwErrorIf( !renderer, "Failed to initialize software renderer" );
+        set_default_texture_filter( renderer.get() );
         throwErrorIf( !SetupRenderTarget(),
                       "Failed to initialize display buffer under software rendering, unable to continue." );
     }
@@ -489,7 +493,7 @@ static void WinCreate()
 
 #if defined(__ANDROID__)
     // TODO: Not too sure why this works to make fullscreen on Android behave. :/
-    if( window_flags & SDL_WINDOW_FULLSCREEN || window_flags & SDL_WINDOW_FULLSCREEN_DESKTOP
+    if( window_flags & SDL_WINDOW_FULLSCREEN
         || window_flags & SDL_WINDOW_MAXIMIZED ) {
         SDL_GetWindowSize( ::window.get(), &WindowWidth, &WindowHeight );
     }
@@ -502,10 +506,10 @@ static void WinCreate()
 
     // Errors here are ignored, worst case: the option does not work as expected,
     // but that won't crash
-    if( get_option<std::string>( "HIDE_CURSOR" ) != "show" && SDL_ShowCursor( -1 ) ) {
-        SDL_ShowCursor( SDL_DISABLE );
+    if( get_option<std::string>( "HIDE_CURSOR" ) != "show" && SDL_CursorVisible() ) {
+        SDL_HideCursor();
     } else {
-        SDL_ShowCursor( SDL_ENABLE );
+        SDL_ShowCursor();
     }
 
     if( get_option<bool>( "ENABLE_JOYSTICK" ) ) {
@@ -517,7 +521,7 @@ static void WinCreate()
 
     DebugLog( D_INFO, DC_ALL ) << "USE_COLOR_MODULATED_TEXTURES is set to " <<
                                get_option<bool>( "USE_COLOR_MODULATED_TEXTURES" );
-    //initialize the alternate rectangle texture for replacing SDL_RenderFillRect
+    //initialize the alternate rectangle texture for replacing RenderFillRectPixels
     if( get_option<bool>( "USE_COLOR_MODULATED_TEXTURES" ) && !software_renderer ) {
         geometry = std::make_unique<ColorModulatedGeometryRenderer>( renderer );
     } else {
@@ -543,7 +547,7 @@ static void WinDestroy()
     tilecontext.reset();
     gamepad::quit();
     geometry.reset();
-    format.reset();
+    format = SDL_PIXELFORMAT_UNKNOWN;
     display_buffer.reset();
     renderer.reset();
     ::window.reset();
@@ -634,30 +638,30 @@ SDL_Texture_Ptr copy_2d_display_buffer()
     if( !renderer || !display_buffer ) { return {}; }
     int width = 0;
     int height = 0;
-    if( SDL_QueryTexture( display_buffer.get(), nullptr, nullptr, &width, &height ) != 0 ) { return {}; }
+    if( QueryTexturePixels( display_buffer.get(), nullptr, nullptr, &width, &height ) != 0 ) { return {}; }
     SDL_Texture_Ptr image( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
                            SDL_TEXTUREACCESS_TARGET, width, height ) );
     if( !image ) { return {}; }
     auto *previous_target = SDL_GetRenderTarget( renderer.get() );
     SDL_Rect viewport;
     SDL_Rect clip;
-    SDL_RenderGetViewport( renderer.get(), &viewport );
-    SDL_RenderGetClipRect( renderer.get(), &clip );
-    const bool clipped = SDL_RenderIsClipEnabled( renderer.get() );
+    SDL_GetRenderViewport( renderer.get(), &viewport );
+    SDL_GetRenderClipRect( renderer.get(), &clip );
+    const bool clipped = SDL_RenderClipEnabled( renderer.get() );
     float sx = 1;
     float sy = 1;
-    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    SDL_GetRenderScale( renderer.get(), &sx, &sy );
     on_out_of_scope restore( [&]() {
         SDL_SetRenderTarget( renderer.get(), previous_target );
-        SDL_RenderSetScale( renderer.get(), sx, sy );
-        SDL_RenderSetViewport( renderer.get(), &viewport );
-        SDL_RenderSetClipRect( renderer.get(), clipped ? &clip : nullptr );
+        SDL_SetRenderScale( renderer.get(), sx, sy );
+        SDL_SetRenderViewport( renderer.get(), &viewport );
+        SDL_SetRenderClipRect( renderer.get(), clipped ? &clip : nullptr );
     } );
-    if( SDL_SetRenderTarget( renderer.get(), image.get() ) != 0 ) { return {}; }
-    SDL_RenderSetScale( renderer.get(), 1, 1 );
-    SDL_RenderSetViewport( renderer.get(), nullptr );
-    SDL_RenderSetClipRect( renderer.get(), nullptr );
-    if( SDL_RenderCopy( renderer.get(), display_buffer.get(), nullptr, nullptr ) != 0 ) { return {}; }
+    if( !SDL_SetRenderTarget( renderer.get(), image.get() ) ) { return {}; }
+    SDL_SetRenderScale( renderer.get(), 1, 1 );
+    SDL_SetRenderViewport( renderer.get(), nullptr );
+    SDL_SetRenderClipRect( renderer.get(), nullptr );
+    if( RenderTexturePixels( renderer.get(), display_buffer.get(), nullptr, nullptr ) != 0 ) { return {}; }
     return image;
 }
 #endif
@@ -690,9 +694,9 @@ void refresh_display()
     if( main_menu_demo_active ) {
         int width = 0;
         int height = 0;
-        SDL_RenderGetLogicalSize( renderer.get(), &width, &height );
+        GetLogicalRenderSize( renderer.get(), &width, &height );
         if( width <= 0 || height <= 0 ) {
-            SDL_GetRendererOutputSize( renderer.get(), &width, &height );
+            SDL_GetCurrentRenderOutputSize( renderer.get(), &width, &height );
         }
         menu_demo_draw_live_frame( width, height, SDL_GetTicks() );
     }
@@ -737,9 +741,23 @@ void refresh_display()
     if( imclient ) {
         imclient->present_overlay();
     }
+    fp3d_compositor::gpu_world_qa_capture_composite();
+    // Explicit one-shot migration QA: capture the completed 2D world/HUD
+    // before presenting. No per-frame readback in normal gameplay.
+    static const char *gpu_capture = std::getenv( "CDDA_FP3D_GPU_2D_CAPTURE" );
+    static bool gpu_captured = false;
+    if( gpu_capture && *gpu_capture && !gpu_captured &&
+        SDL_GetGPURendererDevice( renderer.get() ) && fp3d_compositor::modern_2d_world() ) {
+        gpu_captured = true;
+        SDL_Surface_Ptr pixels( SDL_RenderReadPixels( renderer.get(), nullptr ) );
+        const bool saved = pixels && SDL_SaveBMP( pixels.get(), gpu_capture );
+        DebugLog( D_INFO, D_MAIN ) << "fp3d: GPU_2D capture saved=" << saved
+                                  << ", path=" << gpu_capture;
+    }
 #endif
-    SDL_RenderPresent( renderer.get() );
+    const bool presented = SDL_RenderPresent( renderer.get() );
 #if defined(ENABLE_FP3D)
+    fp3d_compositor::gpu_world_qa_after_present( presented );
     display_probe.stage( "display_finish" );
     fp3d_regression::presented( renderer.get() );
 #endif
@@ -937,14 +955,14 @@ SDL_Texture_Ptr cata_tiles::overmap_texture( const tripoint_abs_omt &center, int
     auto *target = SDL_GetRenderTarget( renderer.get() );
     SDL_Rect viewport;
     SDL_Rect clip;
-    SDL_RenderGetViewport( renderer.get(), &viewport );
-    SDL_RenderGetClipRect( renderer.get(), &clip );
-    const bool clipped = SDL_RenderIsClipEnabled( renderer.get() );
+    SDL_GetRenderViewport( renderer.get(), &viewport );
+    SDL_GetRenderClipRect( renderer.get(), &clip );
+    const bool clipped = SDL_RenderClipEnabled( renderer.get() );
     int logical_width, logical_height;
-    SDL_RenderGetLogicalSize( renderer.get(), &logical_width, &logical_height );
-    const SDL_bool integer_scale = SDL_RenderGetIntegerScale( renderer.get() );
+    GetLogicalRenderSize( renderer.get(), &logical_width, &logical_height );
+    const bool integer_scale = GetIntegerRenderScale( renderer.get() );
     float sx, sy;
-    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    SDL_GetRenderScale( renderer.get(), &sx, &sy );
     Uint8 red, green, blue, alpha;
     SDL_GetRenderDrawColor( renderer.get(), &red, &green, &blue, &alpha );
     SDL_BlendMode blend;
@@ -955,22 +973,22 @@ SDL_Texture_Ptr cata_tiles::overmap_texture( const tripoint_abs_omt &center, int
     restore_on_out_of_scope old_height( screentile_height );
     on_out_of_scope restore( [&]() {
         SDL_SetRenderTarget( renderer.get(), target );
-        SDL_RenderSetIntegerScale( renderer.get(), integer_scale );
-        SDL_RenderSetLogicalSize( renderer.get(), logical_width, logical_height );
-        SDL_RenderSetScale( renderer.get(), sx, sy );
-        SDL_RenderSetViewport( renderer.get(), &viewport );
-        SDL_RenderSetClipRect( renderer.get(), clipped ? &clip : nullptr );
+        SetIntegerRenderScale( renderer.get(), integer_scale );
+        SetLogicalRenderSize( renderer.get(), logical_width, logical_height );
+        SDL_SetRenderScale( renderer.get(), sx, sy );
+        SDL_SetRenderViewport( renderer.get(), &viewport );
+        SDL_SetRenderClipRect( renderer.get(), clipped ? &clip : nullptr );
         SDL_SetRenderDrawColor( renderer.get(), red, green, blue, alpha );
         SDL_SetRenderDrawBlendMode( renderer.get(), blend );
     } );
-    if( SDL_SetRenderTarget( renderer.get(), image.get() ) != 0 ) {
+    if( !SDL_SetRenderTarget( renderer.get(), image.get() ) ) {
         return {};
     }
-    SDL_RenderSetLogicalSize( renderer.get(), 0, 0 );
-    SDL_RenderSetScale( renderer.get(), 1, 1 );
-    SDL_RenderSetViewport( renderer.get(), nullptr );
+    SetLogicalRenderSize( renderer.get(), 0, 0 );
+    SDL_SetRenderScale( renderer.get(), 1, 1 );
+    SDL_SetRenderViewport( renderer.get(), nullptr );
     const SDL_Rect bounds{ 0, 0, width, height };
-    SDL_RenderSetClipRect( renderer.get(), &bounds );
+    SDL_SetRenderClipRect( renderer.get(), &bounds );
     SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 255 );
     SDL_RenderClear( renderer.get() );
     const auto origin = center - point( radius, radius );
@@ -1010,7 +1028,7 @@ SDL_Texture_Ptr cata_tiles::overmap_texture( const tripoint_abs_omt &center, int
         }
     }
     SDL_SetTextureBlendMode( image.get(), SDL_BLENDMODE_NONE );
-    SDL_RenderFlush( renderer.get() );
+    SDL_FlushRenderer( renderer.get() );
     return image;
 }
 #endif
@@ -1083,7 +1101,7 @@ static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &bo
             }
             std::sort( crossings.begin(), crossings.end() );
             for( size_t i = 1; i < crossings.size(); i += 2 ) {
-                SDL_RenderDrawLine( renderer.get(), crossings[i - 1], y, crossings[i], y );
+                SDL_RenderLine( renderer.get(), crossings[i - 1], y, crossings[i], y );
             }
         }
         // Missing parts retain a subdued outline, matching the native missing-part state.
@@ -1092,7 +1110,7 @@ static void draw_fp3d_body_health( const fp3d_hud::data &hud, const SDL_Rect &bo
         } else {
             SDL_SetRenderDrawColor( renderer.get(), color.r, color.g, color.b, 255 );
         }
-        SDL_RenderDrawLines( renderer.get(), points.data(), static_cast<int>( points.size() ) );
+        RenderLinesPixels( renderer.get(), points.data(), static_cast<int>( points.size() ) );
     };
     for( size_t i = 0; i < regions.size(); ++i ) {
         draw_part( i, regions[i].outline );
@@ -1117,11 +1135,11 @@ static void draw_fp3d_hud()
         effect_icons.clear();
         icon_revision = fp3d_materials::revision();
     }
-    const SDL_bool was_clipped = SDL_RenderIsClipEnabled( renderer.get() );
+    const bool was_clipped = SDL_RenderClipEnabled( renderer.get() );
     SDL_Rect previous_clip;
-    SDL_RenderGetClipRect( renderer.get(), &previous_clip );
+    SDL_GetRenderClipRect( renderer.get(), &previous_clip );
     const SDL_Rect clip{ area[0], area[1], area[2], area[3] };
-    SDL_RenderSetClipRect( renderer.get(), &clip );
+    SDL_SetRenderClipRect( renderer.get(), &clip );
     SDL_BlendMode blend;
     SDL_GetRenderDrawBlendMode( renderer.get(), &blend );
     Uint8 r, green, b, a;
@@ -1134,7 +1152,7 @@ static void draw_fp3d_hud()
         const int text_x = area[0] + ( area[2] - text_width ) / 2;
         const int text_y = area[1] + area[3] / 2 + font->height;
         SDL_Rect hint{ text_x - 6, text_y - 3, text_width + 12, font->height + 6 };
-        SDL_RenderFillRect( renderer.get(), &hint );
+        RenderFillRectPixels( renderer.get(), &hint );
         draw_string( *font, renderer, geometry, prompt, point( text_x, text_y ), fp3d_ui_white );
     }
     // The floating combat text reflects native HP after damage resolution.
@@ -1152,7 +1170,7 @@ static void draw_fp3d_hud()
         const Uint8 opacity = static_cast<Uint8>( 185 * ( 1.0f - hit->progress ) );
         SDL_SetRenderDrawColor( renderer.get(), 15, 9, 9, opacity );
         const SDL_Rect behind{ text_x - 5, text_y - 3, width + 10, font->height + 6 };
-        SDL_RenderFillRect( renderer.get(), &behind );
+        RenderFillRectPixels( renderer.get(), &behind );
         draw_string( *font, renderer, geometry, text, point( text_x, text_y ), 9 );
     }
     const auto &scene_lines = lines;
@@ -1184,7 +1202,7 @@ static void draw_fp3d_hud()
     static int layer_height = 0;
     int output_width = 0;
     int output_height = 0;
-    SDL_GetRendererOutputSize( renderer.get(), &output_width, &output_height );
+    SDL_GetCurrentRenderOutputSize( renderer.get(), &output_width, &output_height );
     if( !panel_layer || layer_width != output_width || layer_height != output_height ) {
         panel_layer.reset( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
                                              SDL_TEXTUREACCESS_TARGET, output_width, output_height ) );
@@ -1192,21 +1210,21 @@ static void draw_fp3d_hud()
         layer_height = output_height;
         if( panel_layer ) {
             SDL_SetTextureBlendMode( panel_layer.get(), SDL_BLENDMODE_BLEND );
-            SDL_SetTextureScaleMode( panel_layer.get(), SDL_ScaleModeLinear );
+            SDL_SetTextureScaleMode( panel_layer.get(), SDL_SCALEMODE_LINEAR );
         }
     }
     if( !panel_layer ) {
-        SDL_RenderSetClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
+        SDL_SetRenderClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
         SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );
         SDL_SetRenderDrawBlendMode( renderer.get(), blend );
         return;
     }
     SDL_Texture *const hud_target = SDL_GetRenderTarget( renderer.get() );
     SDL_Rect hud_viewport;
-    SDL_RenderGetViewport( renderer.get(), &hud_viewport );
+    SDL_GetRenderViewport( renderer.get(), &hud_viewport );
     float hud_scale_x = 1.0f;
     float hud_scale_y = 1.0f;
-    SDL_RenderGetScale( renderer.get(), &hud_scale_x, &hud_scale_y );
+    SDL_GetRenderScale( renderer.get(), &hud_scale_x, &hud_scale_y );
     SDL_Rect panel_source{};
     bool panel_scaled = false;
     fp3d_regression::turn_probe panel_probe( "hud_panel_layout" );
@@ -1227,31 +1245,31 @@ static void draw_fp3d_hud()
         panel_scaled = source.x != destination.x || source.y != destination.y ||
                        source.w != destination.w || source.h != destination.h;
         if( !panel_scaled ) {
-            SDL_RenderSetClipRect( renderer.get(), &source );
+            SDL_SetRenderClipRect( renderer.get(), &source );
             panel_probe.stage( panel_names[std::min( panel_index++, 9 )] );
             return;
         }
         SDL_SetRenderTarget( renderer.get(), panel_layer.get() );
-        SDL_RenderSetViewport( renderer.get(), nullptr );
-        SDL_RenderSetScale( renderer.get(), hud_scale_x, hud_scale_y );
-        SDL_RenderSetClipRect( renderer.get(), &source );
+        SDL_SetRenderViewport( renderer.get(), nullptr );
+        SDL_SetRenderScale( renderer.get(), hud_scale_x, hud_scale_y );
+        SDL_SetRenderClipRect( renderer.get(), &source );
         SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_NONE );
         SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 0 );
-        SDL_RenderFillRect( renderer.get(), &source );
+        RenderFillRectPixels( renderer.get(), &source );
         SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_BLEND );
         panel_probe.stage( panel_names[std::min( panel_index++, 9 )] );
     };
     const auto end_panel = [&]( const SDL_Rect &destination ) {
         panel_probe.stage( "hud_target_composite" );
         if( !panel_scaled ) {
-            SDL_RenderSetClipRect( renderer.get(), &clip );
+            SDL_SetRenderClipRect( renderer.get(), &clip );
             return;
         }
         SDL_SetRenderTarget( renderer.get(), hud_target );
-        SDL_RenderSetViewport( renderer.get(), &hud_viewport );
-        SDL_RenderSetScale( renderer.get(), hud_scale_x, hud_scale_y );
-        SDL_RenderSetClipRect( renderer.get(), &clip );
-        SDL_RenderCopy( renderer.get(), panel_layer.get(), &panel_source, &destination );
+        SDL_SetRenderViewport( renderer.get(), &hud_viewport );
+        SDL_SetRenderScale( renderer.get(), hud_scale_x, hud_scale_y );
+        SDL_SetRenderClipRect( renderer.get(), &clip );
+        RenderTexturePixels( renderer.get(), panel_layer.get(), &panel_source, &destination );
     };
     const point hotbar_size = panel_size( hotbar_width, slot_size, "FP3D_HUD_HOTBAR_SCALE" );
     const SDL_Rect hotbar_dest{ area[0] + ( area[2] - hotbar_size.x ) / 2,
@@ -1264,9 +1282,9 @@ static void draw_fp3d_hud()
     SDL_Rect map_box{ area[0] + pad, top, mini, mini };
     begin_panel( map_box, map_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 205 );
-    SDL_RenderFillRect( renderer.get(), &map_box );
+    RenderFillRectPixels( renderer.get(), &map_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
-    SDL_RenderDrawRect( renderer.get(), &map_box );
+    RenderRectPixels( renderer.get(), &map_box );
     if( tilecontext && g ) {
         // QA: the minimap re-renders native tiles into the display buffer every
         // frame; keep it separately measurable from the rest of the panels.
@@ -1275,7 +1293,7 @@ static void draw_fp3d_hud()
         // Clear the whole source area first so uncovered pixels do not copy the 3D scene.
         SDL_SetRenderTarget( renderer.get(), display_buffer.get() );
         SDL_SetRenderDrawColor( renderer.get(), 0, 0, 0, 255 );
-        SDL_RenderFillRect( renderer.get(), &map_box );
+        RenderFillRectPixels( renderer.get(), &map_box );
         // Native minimap drawing selects its own cache targets and then the
         // display buffer; selecting the HUD target here would submit no drawing.
         tilecontext->draw_minimap( point( map_box.x, map_box.y ),
@@ -1284,12 +1302,12 @@ static void draw_fp3d_hud()
         // The vanilla minimap restores the game display buffer as its render target.
         // HUD drawing runs after the buffer has already been copied to the window.
         SDL_SetRenderTarget( renderer.get(), panel_scaled ? panel_layer.get() : hud_target );
-        SDL_RenderSetClipRect( renderer.get(), &map_box );
+        SDL_SetRenderClipRect( renderer.get(), &map_box );
         if( display_buffer ) {
-            SDL_RenderCopy( renderer.get(), display_buffer.get(), &map_box, &map_box );
+            RenderTexturePixels( renderer.get(), display_buffer.get(), &map_box, &map_box );
         }
         SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
-        SDL_RenderDrawRect( renderer.get(), &map_box );
+        RenderRectPixels( renderer.get(), &map_box );
         fp3d_regression::stage_sample( "hud_minimap",
                                        ( SDL_GetPerformanceCounter() - fp3d_minimap_started ) * 1000.0 /
                                        SDL_GetPerformanceFrequency() );
@@ -1325,7 +1343,7 @@ static void draw_fp3d_hud()
         }
         const int size = std::min( 22, effect_row_height - 2 );
         const SDL_Rect dest{ map_box.x + pad, effect_y, size, size };
-        SDL_RenderCopy( renderer.get(), icon->second.get(), nullptr, &dest );
+        RenderTexturePixels( renderer.get(), icon->second.get(), nullptr, &dest );
         const int available = std::max( 0, mini - size - 3 * pad );
         if( available >= font->width ) {
             draw_string( *font, renderer, geometry,
@@ -1344,9 +1362,9 @@ static void draw_fp3d_hud()
                                 compass_size.x, compass_size.y };
     begin_panel( compass_box, compass_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 175 );
-    SDL_RenderFillRect( renderer.get(), &compass_box );
+    RenderFillRectPixels( renderer.get(), &compass_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
-    SDL_RenderDrawRect( renderer.get(), &compass_box );
+    RenderRectPixels( renderer.get(), &compass_box );
     const float heading = std::fmod( fp3d_compositor::heading() + 360.0f, 360.0f );
     const int tick = static_cast<int>( std::round( heading / 45.0f ) ) % 8;
     const char *directions[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
@@ -1362,7 +1380,7 @@ static void draw_fp3d_hud()
         const int y0 = top + font->height + pad;
         const int y1 = y0 + ( bearing % 45 == 0 ? pad : std::max( 2, pad / 2 ) );
         SDL_SetRenderDrawColor( renderer.get(), 255, 235, 120, 235 );
-        SDL_RenderDrawLine( renderer.get(), x, y0, x, y1 );
+        SDL_RenderLine( renderer.get(), x, y0, x, y1 );
         if( bearing % 45 == 0 ) {
             const std::string direction = directions[( bearing / 45 ) % 8];
             const int direction_width = utf8_width( direction ) * font->width;
@@ -1374,7 +1392,7 @@ static void draw_fp3d_hud()
         }
     }
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 255 );
-    SDL_RenderDrawLine( renderer.get(), compass_x + compass_width / 2, top + font->height + pad,
+    SDL_RenderLine( renderer.get(), compass_x + compass_width / 2, top + font->height + pad,
                         compass_x + compass_width / 2, top + compass_box.h - 2 );
     // Colored X symbols show the bearings of saved overmap notes. A marker
     // outside the visible 84-degree compass arc stays pinned at the relevant edge.
@@ -1388,15 +1406,15 @@ static void draw_fp3d_hud()
         const int arm = std::max( 3, pad / 2 );
         SDL_SetRenderDrawColor( renderer.get(), 5, 5, 5, 255 );
         for( int extra = -1; extra <= 1; ++extra ) {
-            SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y - arm + extra,
+            SDL_RenderLine( renderer.get(), marker_x - arm, marker_y - arm + extra,
                                 marker_x + arm, marker_y + arm + extra );
-            SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y + arm + extra,
+            SDL_RenderLine( renderer.get(), marker_x - arm, marker_y + arm + extra,
                                 marker_x + arm, marker_y - arm + extra );
         }
         SDL_SetRenderDrawColor( renderer.get(), marker.red, marker.green, marker.blue, 255 );
-        SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y - arm,
+        SDL_RenderLine( renderer.get(), marker_x - arm, marker_y - arm,
                             marker_x + arm, marker_y + arm );
-        SDL_RenderDrawLine( renderer.get(), marker_x - arm, marker_y + arm,
+        SDL_RenderLine( renderer.get(), marker_x - arm, marker_y + arm,
                             marker_x + arm, marker_y - arm );
     }
 
@@ -1407,9 +1425,9 @@ static void draw_fp3d_hud()
         const bool active_slot = i == hud.active_slot;
         SDL_SetRenderDrawColor( renderer.get(), active_slot ? 92 : 18, active_slot ? 82 : 22,
                                 active_slot ? 12 : 26, 220 );
-        SDL_RenderFillRect( renderer.get(), &slot );
+        RenderFillRectPixels( renderer.get(), &slot );
         SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
-        SDL_RenderDrawRect( renderer.get(), &slot );
+        RenderRectPixels( renderer.get(), &slot );
         if( i < static_cast<int>( hud.hotbar_icons.size() ) ) {
             const auto &item = hud.hotbar_icons[i];
             if( !item.id.empty() ) {
@@ -1426,7 +1444,7 @@ static void draw_fp3d_hud()
                     const int icon_size = std::min( slot.w - 2 * pad, slot.h - 2 * pad );
                     const SDL_Rect destination{ slot.x + ( slot.w - icon_size ) / 2,
                                                 slot.y + ( slot.h - icon_size ) / 2, icon_size, icon_size };
-                    SDL_RenderCopy( renderer.get(), icon->second.get(), nullptr, &destination );
+                    RenderTexturePixels( renderer.get(), icon->second.get(), nullptr, &destination );
                 }
             }
             draw_string( *font, renderer, geometry, std::to_string( i + 1 ),
@@ -1438,9 +1456,9 @@ static void draw_fp3d_hud()
     SDL_Rect status_box{ area[0] + pad, status_y, left_width, panel_h };
     begin_panel( status_box, status_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
-    SDL_RenderFillRect( renderer.get(), &status_box );
+    RenderFillRectPixels( renderer.get(), &status_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
-    SDL_RenderDrawRect( renderer.get(), &status_box );
+    RenderRectPixels( renderer.get(), &status_box );
     draw_string( *font, renderer, geometry, utf8_truncate( hud.status, ( status_box.w - 2 * pad ) / font->width ),
                  point( status_box.x + pad, status_box.y + pad ), fp3d_ui_white );
     const int cell_gap = pad;
@@ -1483,9 +1501,9 @@ static void draw_fp3d_hud()
                      std::max( 1, static_cast<int>( log_dest.w / log_scale ) ), panel_h };
     begin_panel( log_box, log_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 150 );
-    SDL_RenderFillRect( renderer.get(), &log_box );
+    RenderFillRectPixels( renderer.get(), &log_box );
     SDL_SetRenderDrawColor( renderer.get(), 220, 220, 220, 185 );
-    SDL_RenderDrawRect( renderer.get(), &log_box );
+    RenderRectPixels( renderer.get(), &log_box );
     int y = log_box.y + pad;
     const auto log_rows = fp3d_hud::message_rows( hud.messages,
                           ( log_box.w - 2 * pad ) / font->width,
@@ -1508,9 +1526,9 @@ static void draw_fp3d_hud()
                                 mission_size.x, mission_size.y };
     begin_panel( mission_box, mission_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
-    SDL_RenderFillRect( renderer.get(), &mission_box );
+    RenderFillRectPixels( renderer.get(), &mission_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 235 );
-    SDL_RenderDrawRect( renderer.get(), &mission_box );
+    RenderRectPixels( renderer.get(), &mission_box );
     draw_string( *font, renderer, geometry, "任务目标", point( mission_box.x + pad, mission_box.y + pad ), fp3d_ui_yellow );
     if( !hud.mission.empty() ) {
         draw_string( *font, renderer, geometry, utf8_truncate( hud.mission, ( mission_box.w - 2 * pad ) / font->width ),
@@ -1525,9 +1543,9 @@ static void draw_fp3d_hud()
                              compass_dest.y + compass_dest.h + pad, time_size.x, time_size.y };
     begin_panel( time_box, time_dest );
     SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 185 );
-    SDL_RenderFillRect( renderer.get(), &time_box );
+    RenderFillRectPixels( renderer.get(), &time_box );
     SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
-    SDL_RenderDrawRect( renderer.get(), &time_box );
+    RenderRectPixels( renderer.get(), &time_box );
     draw_string( *font, renderer, geometry, utf8_truncate( hud.day_time, ( time_box.w - 2 * pad ) / font->width ),
                  point( time_box.x + pad, time_box.y + pad ), fp3d_ui_white );
     draw_string( *font, renderer, geometry, utf8_truncate( "温度 " + hud.temperature,
@@ -1562,9 +1580,9 @@ static void draw_fp3d_hud()
                                  time_dest.y + time_dest.h + pad, look_size.x, look_size.y };
         begin_panel( look_box, look_dest );
         SDL_SetRenderDrawColor( renderer.get(), 8, 12, 16, 195 );
-        SDL_RenderFillRect( renderer.get(), &look_box );
+        RenderFillRectPixels( renderer.get(), &look_box );
         SDL_SetRenderDrawColor( renderer.get(), 255, 220, 80, 225 );
-        SDL_RenderDrawRect( renderer.get(), &look_box );
+        RenderRectPixels( renderer.get(), &look_box );
         int row_y = look_box.y + pad;
         for( const auto &row : rows ) {
             int color = cata_cursesport::colorpairs[row.color.to_color_pair_index()].FG;
@@ -1577,7 +1595,7 @@ static void draw_fp3d_hud()
         }
         end_panel( look_dest );
     }
-    SDL_RenderSetClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
+    SDL_SetRenderClipRect( renderer.get(), was_clipped ? &previous_clip : nullptr );
     SDL_SetRenderDrawColor( renderer.get(), r, green, b, a );
     SDL_SetRenderDrawBlendMode( renderer.get(), blend );
 }
@@ -1603,8 +1621,8 @@ void cata_tiles::draw_om( const point &dest, const tripoint_abs_omt &center_abs_
     {
         //set clipping to prevent drawing over stuff we shouldn't
         SDL_Rect clipRect = { dest.x, dest.y, width, height };
-        printErrorIf( SDL_RenderSetClipRect( renderer.get(), &clipRect ) != 0,
-                      "SDL_RenderSetClipRect failed" );
+        printErrorIf( !SDL_SetRenderClipRect( renderer.get(), &clipRect ),
+                      "SDL_SetRenderClipRect failed" );
 
         //fill render area with black to prevent artifacts where no new pixels are drawn
         geometry->rect( renderer, clipRect, SDL_Color() );
@@ -2054,14 +2072,14 @@ void cata_tiles::draw_om( const point &dest, const tripoint_abs_omt &center_abs_
         }
     }
 
-    printErrorIf( SDL_RenderSetClipRect( renderer.get(), nullptr ) != 0,
-                  "SDL_RenderSetClipRect failed" );
+    printErrorIf( !SDL_SetRenderClipRect( renderer.get(), nullptr ),
+                  "SDL_SetRenderClipRect failed" );
 }
 
 static bool draw_window( Font_Ptr &font, const catacurses::window &w, const point &offset )
 {
     if( scaling_factor > 1 ) {
-        SDL_RenderSetLogicalSize( renderer.get(), WindowWidth / scaling_factor,
+        SetLogicalRenderSize( renderer.get(), WindowWidth / scaling_factor,
                                   WindowHeight / scaling_factor );
     }
 
@@ -2204,7 +2222,7 @@ static bool draw_window( Font_Ptr &font, const catacurses::window &w )
 void cata_cursesport::curses_drawwindow( const catacurses::window &w )
 {
     if( scaling_factor > 1 ) {
-        SDL_RenderSetLogicalSize( renderer.get(), WindowWidth / scaling_factor,
+        SetLogicalRenderSize( renderer.get(), WindowWidth / scaling_factor,
                                   WindowHeight / scaling_factor );
     }
     WINDOW *const win = w.get<WINDOW>();
@@ -2248,7 +2266,7 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
             const SDL_Rect terrain_clip = { win->pos.x * fontwidth, win->pos.y * fontheight,
                                             TERRAIN_WINDOW_TERM_WIDTH * fontwidth,
                                             TERRAIN_WINDOW_TERM_HEIGHT * fontheight };
-            SDL_RenderSetClipRect( renderer.get(), &terrain_clip );
+            SDL_SetRenderClipRect( renderer.get(), &terrain_clip );
         }
 
         // color blocks overlay
@@ -2313,7 +2331,7 @@ void cata_cursesport::curses_drawwindow( const catacurses::window &w )
         }
 
         if( pixel_offset != point::zero ) {
-            SDL_RenderSetClipRect( renderer.get(), nullptr );
+            SDL_SetRenderClipRect( renderer.get(), nullptr );
         }
 #if defined(ENABLE_FP3D)
         // Only real gameplay's 2D terrain window feeds the title replay.
@@ -2497,14 +2515,14 @@ static void end_arrow_combo()
  * -1 when a ALT+number sequence has been started,
  * or something that a call to ncurses getch would return.
  */
-static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
+static int sdl_keysym_to_curses( const SDL_KeyboardEvent &keysym )
 {
 
     const std::string diag_mode = get_option<std::string>( "DIAG_MOVE_WITH_MODIFIERS_MODE" );
 
     if( diag_mode == "mode1" ) {
-        if( keysym.mod & KMOD_CTRL && sdl_keycode_is_arrow( keysym.sym ) ) {
-            return handle_arrow_combo( keysym.sym );
+        if( keysym.mod & SDL_KMOD_CTRL && sdl_keycode_is_arrow( keysym.key ) ) {
+            return handle_arrow_combo( keysym.key );
         } else {
             end_arrow_combo();
         }
@@ -2512,8 +2530,8 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
 
     if( diag_mode == "mode2" ) {
         //Shift + Cursor Arrow (diagonal clockwise)
-        if( keysym.mod & KMOD_SHIFT ) {
-            switch( keysym.sym ) {
+        if( keysym.mod & SDL_KMOD_SHIFT ) {
+            switch( keysym.key ) {
                 case SDLK_LEFT:
                     return inp_mngr.get_first_char_for_action( "LEFTUP" );
                 case SDLK_RIGHT:
@@ -2525,8 +2543,8 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
             }
         }
         //Ctrl + Cursor Arrow (diagonal counter-clockwise)
-        if( keysym.mod & KMOD_CTRL ) {
-            switch( keysym.sym ) {
+        if( keysym.mod & SDL_KMOD_CTRL ) {
+            switch( keysym.key ) {
                 case SDLK_LEFT:
                     return inp_mngr.get_first_char_for_action( "LEFTDOWN" );
                 case SDLK_RIGHT:
@@ -2541,8 +2559,8 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
 
     if( diag_mode == "mode3" ) {
         //Shift + Cursor Left/RightArrow
-        if( keysym.mod & KMOD_SHIFT ) {
-            switch( keysym.sym ) {
+        if( keysym.mod & SDL_KMOD_SHIFT ) {
+            switch( keysym.key ) {
                 case SDLK_LEFT:
                     return inp_mngr.get_first_char_for_action( "LEFTUP" );
                 case SDLK_RIGHT:
@@ -2550,8 +2568,8 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
             }
         }
         //Ctrl + Cursor Left/Right Arrow
-        if( keysym.mod & KMOD_CTRL ) {
-            switch( keysym.sym ) {
+        if( keysym.mod & SDL_KMOD_CTRL ) {
+            switch( keysym.key ) {
                 case SDLK_LEFT:
                     return inp_mngr.get_first_char_for_action( "LEFTDOWN" );
                 case SDLK_RIGHT:
@@ -2561,12 +2579,12 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
     }
 
     if( diag_mode == "mode4" ) {
-        if( ( keysym.mod & KMOD_SHIFT ) || ( keysym.mod & KMOD_CTRL ) ) {
-            const Uint8 *s = SDL_GetKeyboardState( nullptr );
+        if( ( keysym.mod & SDL_KMOD_SHIFT ) || ( keysym.mod & SDL_KMOD_CTRL ) ) {
+            const bool *s = SDL_GetKeyboardState( nullptr );
             const int count = s[SDL_SCANCODE_LEFT] + s[SDL_SCANCODE_RIGHT] + s[SDL_SCANCODE_UP] +
                               s[SDL_SCANCODE_DOWN];
             if( count == 2 ) {
-                switch( keysym.sym ) {
+                switch( keysym.key ) {
                     case SDLK_LEFT:
                         if( s[SDL_SCANCODE_UP] ) {
                             return inp_mngr.get_first_char_for_action( "LEFTUP" );
@@ -2606,11 +2624,11 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
         }
     }
 
-    if( keysym.mod & KMOD_CTRL && keysym.sym >= 'a' && keysym.sym <= 'z' ) {
+    if( keysym.mod & SDL_KMOD_CTRL && keysym.key >= 'a' && keysym.key <= 'z' ) {
         // ASCII ctrl codes, ^A through ^Z.
-        return keysym.sym - 'a' + '\1';
+        return keysym.key - 'a' + '\1';
     }
-    switch( keysym.sym ) {
+    switch( keysym.key ) {
         // This is special: allow entering a Unicode character with ALT+number
         case SDLK_RALT:
         case SDLK_LALT:
@@ -2630,7 +2648,7 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
         case SDLK_ESCAPE:
             return KEY_ESCAPE;
         case SDLK_TAB:
-            if( keysym.mod & KMOD_SHIFT ) {
+            if( keysym.mod & SDL_KMOD_SHIFT ) {
                 return KEY_BTAB;
             }
             return '\t';
@@ -2687,9 +2705,9 @@ static int sdl_keysym_to_curses( const SDL_Keysym &keysym )
     }
 }
 
-input_event sdl_keysym_to_keycode_evt( const SDL_Keysym &keysym )
+input_event sdl_keysym_to_keycode_evt( const SDL_KeyboardEvent &keysym )
 {
-    switch( keysym.sym ) {
+    switch( keysym.key ) {
         case SDLK_LCTRL:
         case SDLK_LSHIFT:
         case SDLK_LALT:
@@ -2698,23 +2716,23 @@ input_event sdl_keysym_to_keycode_evt( const SDL_Keysym &keysym )
         case SDLK_RALT:
 #if defined(ENABLE_FP3D)
             if( fp3d_input::modifier_binding_editor() ) {
-                return input_event( keysym.sym, input_event_t::keyboard_code );
+                return input_event( keysym.key, input_event_t::keyboard_code );
             }
 #endif
             return input_event();
     }
     input_event evt;
     evt.type = input_event_t::keyboard_code;
-    if( keysym.mod & KMOD_CTRL ) {
+    if( keysym.mod & SDL_KMOD_CTRL ) {
         evt.modifiers.emplace( keymod_t::ctrl );
     }
-    if( keysym.mod & KMOD_ALT ) {
+    if( keysym.mod & SDL_KMOD_ALT ) {
         evt.modifiers.emplace( keymod_t::alt );
     }
-    if( keysym.mod & KMOD_SHIFT ) {
+    if( keysym.mod & SDL_KMOD_SHIFT ) {
         evt.modifiers.emplace( keymod_t::shift );
     }
-    evt.sequence.emplace_back( keysym.sym );
+    evt.sequence.emplace_back( keysym.key );
     return evt;
 }
 
@@ -2757,7 +2775,7 @@ void toggle_fullscreen_window()
     static int restore_win_h = get_option<int>( "TERMINAL_Y" ) * fontheight * scaling_factor;
 
     if( fullscreen ) {
-        if( printErrorIf( SDL_SetWindowFullscreen( window.get(), 0 ) != 0,
+        if( printErrorIf( !SDL_SetWindowFullscreen( window.get(), 0 ),
                           "SDL_SetWindowFullscreen failed" ) ) {
             return;
         }
@@ -2768,7 +2786,7 @@ void toggle_fullscreen_window()
     } else {
         restore_win_w = WindowWidth;
         restore_win_h = WindowHeight;
-        if( printErrorIf( SDL_SetWindowFullscreen( window.get(), SDL_WINDOW_FULLSCREEN_DESKTOP ) != 0,
+        if( printErrorIf( !SDL_SetWindowFullscreen( window.get(), true ),
                           "SDL_SetWindowFullscreen failed" ) ) {
             return;
         }
@@ -2834,8 +2852,8 @@ std::string get_quick_shortcut_name( const std::string &category )
 
 float android_get_display_density()
 {
-    JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-    jobject activity = ( jobject )SDL_AndroidGetActivity();
+    JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+    jobject activity = ( jobject )SDL_GetAndroidActivity();
     jclass clazz( env->GetObjectClass( activity ) );
     jmethodID method_id = env->GetMethodID( clazz, "getDisplayDensity", "()F" );
     jfloat ans = env->CallFloatMethod( activity, method_id );
@@ -3124,7 +3142,7 @@ void draw_terminal_size_preview()
         }
         SetRenderDrawColor( renderer, 255, 255, 255, 255 );
         SDL_Rect previewrect = get_android_render_rect( preview_terminal_width, preview_terminal_height );
-        SDL_RenderDrawRect( renderer.get(), &previewrect );
+        RenderRectPixels( renderer.get(), &previewrect );
         SetRenderDrawColor( renderer, 0, 0, 0, 255 );
     }
 }
@@ -3134,7 +3152,7 @@ void draw_quick_shortcuts()
 {
 
     if( !quick_shortcuts_enabled ||
-        SDL_IsTextInputActive() ||
+        SDL_TextInputActive( window.get() ) ||
         ( get_option<bool>( "ANDROID_HIDE_HOLDS" ) && !is_quick_shortcut_touch && finger_down_time > 0 &&
           SDL_GetTicks() - finger_down_time >= static_cast<uint32_t>(
               get_option<int>( "ANDROID_INITIAL_DELAY" ) ) ) ) { // player is swipe + holding in a direction
@@ -3274,7 +3292,7 @@ void draw_quick_shortcuts()
             }
         }
         SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_NONE );
-        SDL_RenderSetScale( renderer.get(), text_scale, text_scale );
+        SDL_SetRenderScale( renderer.get(), text_scale, text_scale );
         int text_x, text_y;
         if( shortcut_right ) {
             text_x = ( WindowWidth - ( i + 0.5f ) * width - ( font->width * utf8_width(
@@ -3306,7 +3324,7 @@ void draw_quick_shortcuts()
                     text_scale *= ( WindowWidth * safe_margin ) / ( font->width * text_scale *
                                   hint_length );    // scale to fit comfortably
                 }
-                SDL_RenderSetScale( renderer.get(), text_scale, text_scale );
+                SDL_SetRenderScale( renderer.get(), text_scale, text_scale );
                 text_x = ( WindowWidth - ( ( font->width  * hint_length ) * text_scale ) ) * 0.5f / text_scale;
                 text_y = ( WindowHeight - font->height * text_scale ) * 0.5f / text_scale;
                 font->OutputChar( renderer, geometry, hint_text, point( text_x + 1, text_y + 1 ), 0,
@@ -3316,7 +3334,7 @@ void draw_quick_shortcuts()
                                   get_option<int>( "ANDROID_SHORTCUT_OPACITY_FG" ) * 0.01f );
             }
         }
-        SDL_RenderSetScale( renderer.get(), 1.0f, 1.0f );
+        SDL_SetRenderScale( renderer.get(), 1.0f, 1.0f );
         i++;
         if( ( i + 1 ) * width > WindowWidth ) {
             break;
@@ -3496,8 +3514,8 @@ void handle_finger_input( uint32_t ticks )
 
 bool android_is_hardware_keyboard_available()
 {
-    JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-    jobject activity = ( jobject )SDL_AndroidGetActivity();
+    JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+    jobject activity = ( jobject )SDL_GetAndroidActivity();
     jclass clazz( env->GetObjectClass( activity ) );
     jmethodID method_id = env->GetMethodID( clazz, "isHardwareKeyboardAvailable", "()Z" );
     jboolean ans = env->CallBooleanMethod( activity, method_id );
@@ -3510,8 +3528,8 @@ void android_vibrate()
 {
     int vibration_ms = get_option<int>( "ANDROID_VIBRATION" );
     if( vibration_ms > 0 && !android_is_hardware_keyboard_available() ) {
-        JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-        jobject activity = ( jobject )SDL_AndroidGetActivity();
+        JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+        jobject activity = ( jobject )SDL_GetAndroidActivity();
         jclass clazz( env->GetObjectClass( activity ) );
         jmethodID method_id = env->GetMethodID( clazz, "vibrate", "(I)V" );
         env->CallVoidMethod( activity, method_id, vibration_ms );
@@ -3528,15 +3546,15 @@ static bool text_input_active_when_regaining_focus = false;
 
 void StartTextInput()
 {
-    // prevent sending spurious empty SDL_TEXTEDITING events
-    if( SDL_IsTextInputActive() == SDL_TRUE ) {
+    // prevent sending spurious empty SDL_EVENT_TEXT_EDITING events
+    if( SDL_TextInputActive( window.get() ) == true ) {
         return;
     }
 #if defined(__ANDROID__)
-    SDL_StartTextInput();
+    SDL_StartTextInput( window.get() );
 #else
     if( window_focus ) {
-        SDL_StartTextInput();
+        SDL_StartTextInput( window.get() );
     } else {
         text_input_active_when_regaining_focus = true;
     }
@@ -3546,10 +3564,10 @@ void StartTextInput()
 void StopTextInput()
 {
 #if defined(__ANDROID__)
-    SDL_StopTextInput();
+    SDL_StopTextInput( window.get() );
 #else
     if( window_focus ) {
-        SDL_StopTextInput();
+        SDL_StopTextInput( window.get() );
     } else {
         text_input_active_when_regaining_focus = false;
     }
@@ -3562,13 +3580,14 @@ static bool fp3d_preferred_text_input = true;
 #endif
 static void CheckMessages()
 {
+    service_audio();
 #if defined(ENABLE_FP3D)
     // Animate while waiting for input, without submitting a game action.
     static Uint32 last_edge_frame = SDL_GetTicks();
     const Uint32 edge_now = SDL_GetTicks();
     if( edge_now - last_edge_frame >= 16 ) {
         point mouse;
-        SDL_GetMouseState( &mouse.x, &mouse.y );
+        MousePositionPixels( &mouse.x, &mouse.y );
         bool changed = false;
         if( fp3d_compositor::modern_2d_overlay_open() ) {
             // Keep the clicked tile under its cursor menu; moving through menu
@@ -3579,7 +3598,7 @@ static void CheckMessages()
             // renderer coordinates (which can also include DPI/logical scaling).
             float logical_x = 0;
             float logical_y = 0;
-            SDL_RenderWindowToLogical( renderer.get(), mouse.x, mouse.y, &logical_x, &logical_y );
+            SDL_RenderCoordinatesFromWindow( renderer.get(), mouse.x, mouse.y, &logical_x, &logical_y );
             mouse = point( static_cast<int>( std::floor( logical_x ) ),
                            static_cast<int>( std::floor( logical_y ) ) );
             mouse -= point( terrain->pos.x * fontwidth, terrain->pos.y * fontheight );
@@ -3622,7 +3641,7 @@ static void CheckMessages()
     uint32_t ticks = SDL_GetTicks();
 
     // Force text input mode if hardware keyboard is available.
-    if( android_is_hardware_keyboard_available() && !SDL_IsTextInputActive() ) {
+    if( android_is_hardware_keyboard_available() && !SDL_TextInputActive( window.get() ) ) {
         StartTextInput();
     }
 
@@ -3631,8 +3650,8 @@ static void CheckMessages()
         needs_sdl_surface_visibility_refresh = false;
 
         // Call Java show_sdl_surface()
-        JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-        jobject activity = ( jobject )SDL_AndroidGetActivity();
+        JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+        jobject activity = ( jobject )SDL_GetAndroidActivity();
         jclass clazz( env->GetObjectClass( activity ) );
         jmethodID method_id = env->GetMethodID( clazz, "show_sdl_surface", "()V" );
         env->CallVoidMethod( activity, method_id );
@@ -3649,7 +3668,7 @@ static void CheckMessages()
             if( touch_input_context.allow_text_entry &&
                 !new_input_context->allow_text_entry &&
                 !is_string_input( *new_input_context ) &&
-                SDL_IsTextInputActive() &&
+                SDL_TextInputActive( window.get() ) &&
                 get_option<bool>( "ANDROID_AUTO_KEYBOARD" ) ) {
                 StopTextInput();
             }
@@ -3857,8 +3876,8 @@ static void CheckMessages()
 
                 // Display an Android toast message
                 {
-                    JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-                    jobject activity = ( jobject )SDL_AndroidGetActivity();
+                    JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+                    jobject activity = ( jobject )SDL_GetAndroidActivity();
                     jclass clazz( env->GetObjectClass( activity ) );
                     jstring toast_message = env->NewStringUTF( quick_shortcuts_enabled ? "Shortcuts visible" :
                                             "Shortcuts hidden" );
@@ -3880,7 +3899,7 @@ static void CheckMessages()
                 finger_repeat_time = ticks;
                 // Prevent repeating inputs on the next call to this function if there is a fingerup event
                 while( SDL_PollEvent( &ev ) ) {
-                    if( ev.type == SDL_FINGERUP ) {
+                    if( ev.type == SDL_EVENT_FINGER_UP ) {
                         third_finger_down_x = third_finger_curr_x = second_finger_down_x = second_finger_curr_x =
                                                   finger_down_x = finger_curr_x = -1.0f;
                         third_finger_down_y = third_finger_curr_y = second_finger_down_y = second_finger_curr_y =
@@ -3935,104 +3954,98 @@ static void CheckMessages()
 #endif
         imclient->process_input( &ev );
         switch( ev.type ) {
-            case SDL_WINDOWEVENT:
-                switch( ev.window.event ) {
 #if defined(__ANDROID__)
-                    // SDL will send a focus lost event whenever the app loses focus (eg. lock screen, switch app focus etc.)
-                    // If we detect it and the game seems in a saveable state, try and do a quicksave. This is a bit dodgy
-                    // as the player could be ANYWHERE doing ANYTHING (a sub-menu, interacting with an NPC/computer etc.)
-                    // but it seems to work so far, and the alternative is the player losing their progress as the app is likely
-                    // to be destroyed pretty quickly when it goes out of focus due to memory usage.
-                    case SDL_WINDOWEVENT_FOCUS_LOST:
-                        if( world_generator &&
-                            world_generator->active_world &&
-                            g && g->uquit == QUIT_NO &&
-                            get_option<bool>( "ANDROID_QUICKSAVE" ) &&
-                            !std::uncaught_exception() ) {
-                            g->quicksave();
-                        }
-                        break;
-                    // SDL sends a window size changed event whenever the screen rotates orientation
-                    case SDL_WINDOWEVENT_SIZE_CHANGED:
-                        WindowWidth = ev.window.data1;
-                        WindowHeight = ev.window.data2;
-                        SDL_Delay( 500 );
-                        SDL_GetWindowSurface( window.get() );
-                        ui_manager::redraw_invalidated();
-                        refresh_display();
-                        needupdate = true;
-                        break;
-#else
-                    case SDL_WINDOWEVENT_FOCUS_LOST:
-                        window_focus = false;
-                        if( SDL_IsTextInputActive() ) {
-                            text_input_active_when_regaining_focus = true;
-                            // Stop text input to not intefere with other programs
-                            SDL_StopTextInput();
-                            // Clear uncommited IME text. TODO: commit IME text instead.
-                            last_input = input_event();
-                            last_input.type = input_event_t::keyboard_char;
-                            last_input.edit.clear();
-                            last_input.edit_refresh = true;
-                            text_refresh = true;
-                        } else {
-                            text_input_active_when_regaining_focus = false;
-                        }
-                        break;
-                    case SDL_WINDOWEVENT_FOCUS_GAINED:
-                        window_focus = true;
-                        // Restore text input status
-                        if( text_input_active_when_regaining_focus ) {
-                            SDL_StartTextInput();
-                        }
-                        break;
-#endif
-                    case SDL_WINDOWEVENT_SHOWN:
-                    case SDL_WINDOWEVENT_MINIMIZED:
-                        break;
-                    case SDL_WINDOWEVENT_EXPOSED:
-                        needupdate = true;
-                        break;
-                    case SDL_WINDOWEVENT_RESTORED:
-#if defined(__ANDROID__)
-                        needs_sdl_surface_visibility_refresh = true;
-                        if( android_is_hardware_keyboard_available() ) {
-                            StopTextInput();
-                            StartTextInput();
-                        }
-#endif
-                        break;
-                    case SDL_WINDOWEVENT_RESIZED:
-                        resize_dims = point( ev.window.data1, ev.window.data2 );
-                        break;
-                    default:
-                        break;
+            // SDL will send a focus lost event whenever the app loses focus (eg. lock screen, switch app focus etc.)
+            // If we detect it and the game seems in a saveable state, try and do a quicksave. This is a bit dodgy
+            // as the player could be ANYWHERE doing ANYTHING (a sub-menu, interacting with an NPC/computer etc.)
+            // but it seems to work so far, and the alternative is the player losing their progress as the app is likely
+            // to be destroyed pretty quickly when it goes out of focus due to memory usage.
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                if( world_generator &&
+                    world_generator->active_world &&
+                    g && g->uquit == QUIT_NO &&
+                    get_option<bool>( "ANDROID_QUICKSAVE" ) &&
+                    !std::uncaught_exception() ) {
+                    g->quicksave();
                 }
                 break;
-            case SDL_RENDER_TARGETS_RESET:
+            // SDL sends a window size changed event whenever the screen rotates orientation
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                WindowWidth = ev.window.data1;
+                WindowHeight = ev.window.data2;
+                SDL_Delay( 500 );
+                SDL_GetWindowSurface( window.get() );
+                ui_manager::redraw_invalidated();
+                refresh_display();
+                needupdate = true;
+                break;
+#else
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                window_focus = false;
+                if( SDL_TextInputActive( window.get() ) ) {
+                    text_input_active_when_regaining_focus = true;
+                    // Stop text input to not intefere with other programs
+                    SDL_StopTextInput( window.get() );
+                    // Clear uncommited IME text. TODO: commit IME text instead.
+                    last_input = input_event();
+                    last_input.type = input_event_t::keyboard_char;
+                    last_input.edit.clear();
+                    last_input.edit_refresh = true;
+                    text_refresh = true;
+                } else {
+                    text_input_active_when_regaining_focus = false;
+                }
+                break;
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                window_focus = true;
+                // Restore text input status
+                if( text_input_active_when_regaining_focus ) {
+                    SDL_StartTextInput( window.get() );
+                }
+                break;
+#endif
+            case SDL_EVENT_WINDOW_SHOWN:
+            case SDL_EVENT_WINDOW_MINIMIZED:
+                break;
+            case SDL_EVENT_WINDOW_EXPOSED:
+                needupdate = true;
+                break;
+            case SDL_EVENT_WINDOW_RESTORED:
+#if defined(__ANDROID__)
+                needs_sdl_surface_visibility_refresh = true;
+                if( android_is_hardware_keyboard_available() ) {
+                    StopTextInput();
+                    StartTextInput();
+                }
+#endif
+                break;
+            case SDL_EVENT_WINDOW_RESIZED:
+                resize_dims = point( ev.window.data1, ev.window.data2 );
+                break;
+            case SDL_EVENT_RENDER_TARGETS_RESET:
                 render_target_reset = true;
                 break;
-            case SDL_KEYDOWN: {
+            case SDL_EVENT_KEY_DOWN: {
 #if defined(__ANDROID__)
                 // Toggle virtual keyboard with Android back button. For some reason I get double inputs, so ignore everything once it's already down.
-                if( ev.key.keysym.sym == SDLK_AC_BACK && ac_back_down_time == 0 ) {
+                if( ev.key.key == SDLK_AC_BACK && ac_back_down_time == 0 ) {
                     ac_back_down_time = ticks;
                     quick_shortcuts_toggle_handled = false;
                 }
 #endif
                 is_repeat = ev.key.repeat;
                 //hide mouse cursor on keyboard input
-                if( get_option<std::string>( "HIDE_CURSOR" ) != "show" && SDL_ShowCursor( -1 ) ) {
-                    SDL_ShowCursor( SDL_DISABLE );
+                if( get_option<std::string>( "HIDE_CURSOR" ) != "show" && SDL_CursorVisible() ) {
+                    SDL_HideCursor();
                 }
                 keyboard_mode mode = keyboard_mode::keychar;
 #if !defined(__ANDROID__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE == 1)
-                if( !SDL_IsTextInputActive() ) {
+                if( !SDL_TextInputActive( window.get() ) ) {
                     mode = keyboard_mode::keycode;
                 }
 #endif
                 if( mode == keyboard_mode::keychar ) {
-                    const int lc = sdl_keysym_to_curses( ev.key.keysym );
+                    const int lc = sdl_keysym_to_curses( ev.key );
                     if( lc <= 0 ) {
                         // a key we don't know in curses and won't handle.
                         break;
@@ -4064,16 +4077,16 @@ static void CheckMessages()
 #endif
                     }
                 } else {
-                    input_event key = sdl_keysym_to_keycode_evt( ev.key.keysym );
+                    input_event key = sdl_keysym_to_keycode_evt( ev.key );
 #if defined(ENABLE_FP3D)
                     if( fp3d_compositor::modern_2d_input() ) {
-                        const SDL_Keysym &keysym = ev.key.keysym;
-                        const bool shift_key = keysym.sym == SDLK_LSHIFT || keysym.sym == SDLK_RSHIFT;
+                        const SDL_KeyboardEvent &keysym = ev.key;
+                        const bool shift_key = keysym.key == SDLK_LSHIFT || keysym.key == SDLK_RSHIFT;
                         if( shift_key ) {
-                            if( keysym.mod & ( KMOD_CTRL | KMOD_ALT | KMOD_GUI ) ) {
+                            if( keysym.mod & ( SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI ) ) {
                                 continue;
                             }
-                            key = input_event( keysym.sym, input_event_t::keyboard_code );
+                            key = input_event( keysym.key, input_event_t::keyboard_code );
                         }
                         const auto command = fp3d_input::modern_2d_context().input_to_action( key );
                         modern_single_press = command == "MODERN_2D_WAIT" || command == "MODERN_2D_RUN";
@@ -4086,13 +4099,13 @@ static void CheckMessages()
                 }
             }
             break;
-            case SDL_KEYUP: {
+            case SDL_EVENT_KEY_UP: {
 #if defined(__ANDROID__)
                 // Toggle virtual keyboard with Android back button
-                if( ev.key.keysym.sym == SDLK_AC_BACK ) {
+                if( ev.key.key == SDLK_AC_BACK ) {
                     if( ticks - ac_back_down_time <= static_cast<uint32_t>
                         ( get_option<int>( "ANDROID_INITIAL_DELAY" ) ) ) {
-                        if( SDL_IsTextInputActive() ) {
+                        if( SDL_TextInputActive( window.get() ) ) {
                             StopTextInput();
                         } else {
                             StartTextInput();
@@ -4103,13 +4116,13 @@ static void CheckMessages()
 #endif
                 keyboard_mode mode = keyboard_mode::keychar;
 #if !defined(__ANDROID__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE == 1)
-                if( !SDL_IsTextInputActive() ) {
+                if( !SDL_TextInputActive( window.get() ) ) {
                     mode = keyboard_mode::keycode;
                 }
 #endif
                 is_repeat = ev.key.repeat;
                 if( mode == keyboard_mode::keychar ) {
-                    if( ev.key.keysym.sym == SDLK_LALT || ev.key.keysym.sym == SDLK_RALT ) {
+                    if( ev.key.key == SDLK_LALT || ev.key.key == SDLK_RALT ) {
                         int code = end_alt_code();
                         if( code ) {
                             last_input = input_event( code, input_event_t::keyboard_char );
@@ -4117,11 +4130,11 @@ static void CheckMessages()
                         }
                     }
                 } else if( is_repeat ) {
-                    last_input = sdl_keysym_to_keycode_evt( ev.key.keysym );
+                    last_input = sdl_keysym_to_keycode_evt( ev.key );
                 }
             }
             break;
-            case SDL_TEXTINPUT:
+            case SDL_EVENT_TEXT_INPUT:
                 if( !add_alt_code( *ev.text.text ) ) {
                     if( strlen( ev.text.text ) > 0 ) {
                         const unsigned lc = UTF8_getch( ev.text.text );
@@ -4155,7 +4168,7 @@ static void CheckMessages()
                     text_refresh = true;
                 }
                 break;
-            case SDL_TEXTEDITING: {
+            case SDL_EVENT_TEXT_EDITING: {
                 if( strlen( ev.edit.text ) > 0 ) {
                     const unsigned lc = UTF8_getch( ev.edit.text );
                     last_input = input_event( lc, input_event_t::keyboard_char );
@@ -4172,7 +4185,7 @@ static void CheckMessages()
                 break;
             }
 #if defined(SDL_HINT_IME_SUPPORT_EXTENDED_TEXT)
-            case SDL_TEXTEDITING_EXT: {
+            case SDL_EVENT_TEXT_EDITING_EXT: {
                 if( !ev.editExt.text ) {
                     break;
                 }
@@ -4193,24 +4206,24 @@ static void CheckMessages()
                 break;
             }
 #endif
-            case SDL_CONTROLLERBUTTONDOWN:
-            case SDL_CONTROLLERBUTTONUP:
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            case SDL_EVENT_GAMEPAD_BUTTON_UP:
                 gamepad::handle_button_event( ev );
                 break;
-            case SDL_CONTROLLERAXISMOTION:
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION:
                 gamepad::handle_axis_event( ev );
                 break;
             case SDL_GAMEPAD_SCHEDULER:
                 gamepad::handle_scheduler_event( ev );
                 break;
-            case SDL_MOUSEMOTION:
+            case SDL_EVENT_MOUSE_MOTION:
                 if( ! mouse.enabled ) {
                     break;
                 }
                 if( get_option<std::string>( "HIDE_CURSOR" ) == "show" ||
                     get_option<std::string>( "HIDE_CURSOR" ) == "hidekb" ) {
-                    if( !SDL_ShowCursor( -1 ) ) {
-                        SDL_ShowCursor( SDL_ENABLE );
+                    if( !SDL_CursorVisible() ) {
+                        SDL_ShowCursor();
                     }
 
                     // Only monitor motion when cursor is visible
@@ -4218,7 +4231,7 @@ static void CheckMessages()
                 }
                 break;
 
-            case SDL_MOUSEBUTTONDOWN:
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if( ! mouse.enabled ) {
                     break;
                 }
@@ -4238,7 +4251,7 @@ static void CheckMessages()
                 }
                 break;
 
-            case SDL_MOUSEBUTTONUP:
+            case SDL_EVENT_MOUSE_BUTTON_UP:
                 if( ! mouse.enabled ) {
                     break;
                 }
@@ -4258,7 +4271,7 @@ static void CheckMessages()
                 }
                 break;
 
-            case SDL_MOUSEWHEEL:
+            case SDL_EVENT_MOUSE_WHEEL:
                 if( ! mouse.enabled ) {
                     break;
                 }
@@ -4270,7 +4283,7 @@ static void CheckMessages()
                 break;
 
 #if defined(__ANDROID__)
-            case SDL_FINGERMOTION:
+            case SDL_EVENT_FINGER_MOTION:
                 if( ev.tfinger.fingerId == 0 ) {
                     if( !is_quick_shortcut_touch ) {
                         update_finger_repeat_delay();
@@ -4303,7 +4316,7 @@ static void CheckMessages()
                     third_finger_curr_y = ev.tfinger.y * WindowHeight;
                 }
                 break;
-            case SDL_FINGERDOWN:
+            case SDL_EVENT_FINGER_DOWN:
                 if( ev.tfinger.fingerId == 0 ) {
                     finger_down_x = finger_curr_x = ev.tfinger.x * WindowWidth;
                     finger_down_y = finger_curr_y = ev.tfinger.y * WindowHeight;
@@ -4330,7 +4343,7 @@ static void CheckMessages()
                     }
                 }
                 break;
-            case SDL_FINGERUP:
+            case SDL_EVENT_FINGER_UP:
                 if( ev.tfinger.fingerId == 0 ) {
                     finger_curr_x = ev.tfinger.x * WindowWidth;
                     finger_curr_y = ev.tfinger.y * WindowHeight;
@@ -4446,8 +4459,8 @@ static void CheckMessages()
 
                                     // Display an Android toast message
                                     {
-                                        JNIEnv *env = ( JNIEnv * )SDL_AndroidGetJNIEnv();
-                                        jobject activity = ( jobject )SDL_AndroidGetActivity();
+                                        JNIEnv *env = ( JNIEnv * )SDL_GetAndroidJNIEnv();
+                                        jobject activity = ( jobject )SDL_GetAndroidActivity();
                                         jclass clazz( env->GetObjectClass( activity ) );
                                         jstring toast_message = env->NewStringUTF( quick_shortcuts_enabled ? "Shortcuts visible" :
                                                                 "Shortcuts hidden" );
@@ -4519,7 +4532,7 @@ static void CheckMessages()
                 break;
 #endif
 
-            case SDL_QUIT:
+            case SDL_EVENT_QUIT:
                 quit = true;
                 break;
         }
@@ -4538,7 +4551,7 @@ static void CheckMessages()
         throwErrorIf( !SetupRenderTarget(), "SetupRenderTarget failed" );
         needupdate = true;
         restore_on_out_of_scope prev_last_input( last_input );
-        // FIXME: SDL_RENDER_TARGETS_RESET only seems to be fired after the first redraw
+        // FIXME: SDL_EVENT_RENDER_TARGETS_RESET only seems to be fired after the first redraw
         // when restoring the window after system sleep, rather than immediately
         // on focus gain. This seems to mess up the first redraw and
         // causes black screen that lasts ~0.5 seconds before the screen
@@ -4580,17 +4593,8 @@ int projected_window_height()
 static std::pair<float, float> get_display_scale( int display_index )
 {
 #if SDL_VERSION_ATLEAST(2,26,0)
-    // NOLINTNEXTLINE(cata-combine-locals-into-point)
-    int x = SDL_WINDOWPOS_CENTERED_DISPLAY( display_index );
-    // NOLINTNEXTLINE(cata-combine-locals-into-point)
-    int y = SDL_WINDOWPOS_CENTERED_DISPLAY( display_index );
-
-    SDL_Window *w = SDL_CreateWindow(
-                        "probe",
-                        x, y,
-                        16, 16,
-                        SDL_WINDOW_HIDDEN | SDL_WINDOW_ALLOW_HIGHDPI
-                    );
+    SDL_Window *w = create_window_on_display( "probe", display_for_index( display_index ),
+                    16, 16, SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY );
     if( !w ) {
         return std::make_pair( 1.0f, 1.0f );
     }
@@ -4630,20 +4634,18 @@ static void init_term_size_and_scaling_factor()
         int max_width;
         int max_height;
 
-        int current_display_id = std::stoi( get_option<std::string>( "DISPLAY" ) );
-        SDL_DisplayMode current_display;
+        const auto current_display_id = display_for_index( std::stoi( get_option<std::string>( "DISPLAY" ) ) );
+        const SDL_DisplayMode *current_display = SDL_GetDesktopDisplayMode( current_display_id );
 
-        if( SDL_GetDesktopDisplayMode( current_display_id, &current_display ) == 0 ) {
+        if( current_display ) {
             if( get_option<std::string>( "FULLSCREEN" ) == "no" ) {
 
                 // Make a maximized test window to determine maximum windowed size
                 SDL_Window_Ptr test_window;
-                test_window.reset( SDL_CreateWindow( "test_window",
-                                                     SDL_WINDOWPOS_CENTERED_DISPLAY( current_display_id ),
-                                                     SDL_WINDOWPOS_CENTERED_DISPLAY( current_display_id ),
+                test_window.reset( create_window_on_display( "test_window", current_display_id,
                                                      EVEN_MINIMUM_TERM_WIDTH * fontwidth,
                                                      EVEN_MINIMUM_TERM_HEIGHT * fontheight,
-                                                     SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_MAXIMIZED
+                                                     SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_MAXIMIZED
                                                    ) );
 
 #if SDL_VERSION_ATLEAST(2,26,0)
@@ -4660,8 +4662,8 @@ static void init_term_size_and_scaling_factor()
             } else {
                 // For fullscreen or window borderless maximum size is the display size
                 auto [ dpi_scale_w, dpi_scale_h ] = get_display_scale( current_display_id );
-                max_width = dpi_scale_w * current_display.w;
-                max_height = dpi_scale_h * current_display.h;
+                max_width = dpi_scale_w * current_display->w;
+                max_height = dpi_scale_h * current_display->h;
             }
         } else {
             dbg( D_WARNING ) << "Failed to get current Display Mode, assuming infinite display size.";
@@ -5019,7 +5021,7 @@ input_event input_manager::get_input_event( const keyboard_mode preferred_keyboa
         CheckMessages();
     }
 
-    SDL_GetMouseState( &last_input.mouse_pos.x, &last_input.mouse_pos.y );
+    MousePositionPixels( &last_input.mouse_pos.x, &last_input.mouse_pos.y );
     if( last_input.type == input_event_t::keyboard_char ) {
         previously_pressed_key = last_input.get_first_input();
 #if defined(__ANDROID__)
@@ -5270,20 +5272,20 @@ bool save_screenshot( const std::string &file_path )
     SDL_Rect viewport;
 
     // Get the viewport size (width and height of the screen)
-    SDL_RenderGetViewport( renderer.get(), &viewport );
+    SDL_GetRenderViewport( renderer.get(), &viewport );
 
     // Create SDL_Surface with depth of 32 bits (note: using zeros for the RGB masks sets a default value, based on the depth; Alpha mask will be 0).
     SDL_Surface_Ptr surface = CreateRGBSurface( 0, viewport.w, viewport.h, 32, 0, 0, 0, 0 );
 
     // Get data from SDL_Renderer and save them into surface
-    if( printErrorIf( SDL_RenderReadPixels( renderer.get(), nullptr, surface->format->format,
+    if( printErrorIf( ReadRenderPixels( renderer.get(), nullptr, surface->format,
                                             surface->pixels, surface->pitch ) != 0,
                       "save_screenshot: cannot read data from SDL_Renderer." ) ) {
         return false;
     }
 
     // Save screenshot as PNG file
-    if( printErrorIf( IMG_SavePNG( surface.get(), file_path.c_str() ) != 0,
+    if( printErrorIf( !IMG_SavePNG( surface.get(), file_path.c_str() ),
                       std::string( "save_screenshot: cannot save screenshot file: " + file_path ).c_str() ) ) {
         return false;
     }
@@ -5294,10 +5296,8 @@ bool save_screenshot( const std::string &file_path )
 #ifdef _WIN32
 HWND getWindowHandle()
 {
-    SDL_SysWMinfo info;
-    SDL_VERSION( &info.version );
-    SDL_GetWindowWMInfo( ::window.get(), &info );
-    return info.info.win.window;
+    return static_cast<HWND>( SDL_GetPointerProperty( SDL_GetWindowProperties( ::window.get() ),
+                              SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr ) );
 }
 #endif
 

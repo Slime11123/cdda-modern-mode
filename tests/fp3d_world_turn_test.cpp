@@ -45,24 +45,15 @@ TEST_CASE( "fp3d_full_world_turn_navigation_comparison", "[.fp3d_world_turn_comp
     const char *combat_flag = std::getenv( "CDDA_FP3D_WORLD_COMBAT" );
     const bool combat = combat_flag && std::string( combat_flag ) == "1";
     REQUIRE( ( modern || std::string( mode ) == "native" ) );
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() {
         SDL_QuitSubSystem( SDL_INIT_VIDEO );
     } );
-    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D hidden world turn regression",
-                           SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 640, 480,
-                           SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "FP3D hidden world turn regression", 640, 480,
+                           SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    int driver = -1;
-    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
-        SDL_RendererInfo info{};
-        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
-            driver = i;
-        }
-    }
-    REQUIRE( driver >= 0 );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
-                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "gpu" ) );
     REQUIRE( renderer );
     GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
     tileset_cache cache;

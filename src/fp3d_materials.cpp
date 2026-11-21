@@ -13,6 +13,7 @@
 #include "cursesport.h"
 #include "debug.h"
 #include "field_type.h"
+#include <SDL3/SDL_gpu.h>
 #include "fp3d_snapshot.h"
 #include "mapdata.h"
 #include "item.h"
@@ -42,12 +43,23 @@ std::unordered_map<std::string, unsigned> slots;
 std::vector<std::string> slot_keys;
 std::size_t auxiliary_cursor = 0;
 std::unordered_map<std::string, fp3d_material_aux::maps> auxiliary_cache;
+std::vector<auxiliary_tile> auxiliary_slots;
 std::unordered_map<std::string, std::array<float, 3>> vehicle_colors;
 season_type season = SPRING;
 float texture_width = 1;
 float texture_height = 1;
 bool bound = false;
 bool failed = false;
+
+void clear_slots()
+{
+    slots.clear();
+    slot_keys.clear();
+    auxiliary_cursor = 0;
+    auxiliary_slots.clear();
+    auxiliary_cache.clear();
+    vehicle_colors.clear();
+}
 
 unsigned stable_seed( const std::string &id )
 {
@@ -65,8 +77,8 @@ struct saved_renderer_state {
     SDL_Texture *target;
     SDL_Rect viewport;
     SDL_Rect clip;
-    SDL_bool clipping;
-    SDL_bool integer_scale;
+    bool clipping;
+    bool integer_scale;
     int logical_width;
     int logical_height;
     float scale_x;
@@ -75,22 +87,22 @@ struct saved_renderer_state {
     Uint8 r, g, b, a;
 
     explicit saved_renderer_state( SDL_Renderer *value ) : renderer( value ),
-        target( SDL_GetRenderTarget( value ) ), clipping( SDL_RenderIsClipEnabled( value ) ),
-        integer_scale( SDL_RenderGetIntegerScale( value ) ) {
-        SDL_RenderGetViewport( renderer, &viewport );
-        SDL_RenderGetClipRect( renderer, &clip );
-        SDL_RenderGetLogicalSize( renderer, &logical_width, &logical_height );
-        SDL_RenderGetScale( renderer, &scale_x, &scale_y );
+        target( SDL_GetRenderTarget( value ) ), clipping( SDL_RenderClipEnabled( value ) ),
+        integer_scale( GetIntegerRenderScale( value ) ) {
+        SDL_GetRenderViewport( renderer, &viewport );
+        SDL_GetRenderClipRect( renderer, &clip );
+        GetLogicalRenderSize( renderer, &logical_width, &logical_height );
+        SDL_GetRenderScale( renderer, &scale_x, &scale_y );
         SDL_GetRenderDrawBlendMode( renderer, &blend );
         SDL_GetRenderDrawColor( renderer, &r, &g, &b, &a );
     }
     ~saved_renderer_state() {
         SDL_SetRenderTarget( renderer, target );
-        SDL_RenderSetIntegerScale( renderer, integer_scale );
-        SDL_RenderSetLogicalSize( renderer, logical_width, logical_height );
-        SDL_RenderSetViewport( renderer, &viewport );
-        SDL_RenderSetScale( renderer, scale_x, scale_y );
-        SDL_RenderSetClipRect( renderer, clipping ? &clip : nullptr );
+        SetIntegerRenderScale( renderer, integer_scale );
+        SetLogicalRenderSize( renderer, logical_width, logical_height );
+        SDL_SetRenderViewport( renderer, &viewport );
+        SDL_SetRenderScale( renderer, scale_x, scale_y );
+        SDL_SetRenderClipRect( renderer, clipping ? &clip : nullptr );
         SDL_SetRenderDrawBlendMode( renderer, blend );
         SDL_SetRenderDrawColor( renderer, r, g, b, a );
     }
@@ -359,11 +371,7 @@ void set_tileset( std::shared_ptr<const tileset> set, const SDL_Renderer_Ptr &re
     ++material_revision;
     // Called only after the native loader finishes, including forced reloads.
     atlas.reset();
-    slots.clear();
-    slot_keys.clear();
-    auxiliary_cursor = 0;
-    auxiliary_cache.clear();
-    vehicle_colors.clear();
+    clear_slots();
     selected = std::move( set );
     renderer_owner = &renderer;
     failed = false;
@@ -378,24 +386,24 @@ SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image )
     }
     SDL_Renderer *renderer = renderer_owner->get();
     saved_renderer_state saved( renderer );
-    SDL_Texture_Ptr icon( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA8888,
+    SDL_Texture_Ptr icon( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA32,
                           SDL_TEXTUREACCESS_TARGET, slot_size, slot_size ) );
-    if( !icon || SDL_SetRenderTarget( renderer, icon.get() ) != 0 ) {
+    if( !icon || !SDL_SetRenderTarget( renderer, icon.get() ) ) {
         return {};
     }
-    SDL_RenderSetLogicalSize( renderer, 0, 0 );
-    SDL_RenderSetScale( renderer, 1, 1 );
-    SDL_RenderSetViewport( renderer, nullptr );
-    SDL_RenderSetClipRect( renderer, nullptr );
+    SetLogicalRenderSize( renderer, 0, 0 );
+    SDL_SetRenderScale( renderer, 1, 1 );
+    SDL_SetRenderViewport( renderer, nullptr );
+    SDL_SetRenderClipRect( renderer, nullptr );
     SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
     SDL_RenderClear( renderer );
     if( !paint_sprite( image, SDL_Rect{ 0, 0, slot_size, slot_size } ) ) {
         SDL_SetRenderDrawColor( renderer, 150, 155, 165, 255 );
         const SDL_Rect placeholder{ 16, 16, 32, 32 };
-        SDL_RenderFillRect( renderer, &placeholder );
+        RenderFillRectPixels( renderer, &placeholder );
     }
     SDL_SetTextureBlendMode( icon.get(), SDL_BLENDMODE_BLEND );
-    SDL_RenderFlush( renderer );
+    SDL_FlushRenderer( renderer );
     return icon;
 }
 
@@ -419,15 +427,15 @@ SDL_Texture_Ptr tileset_icon( const std::string &id )
     }
     SDL_Renderer *renderer = renderer_owner->get();
     saved_renderer_state saved( renderer );
-    SDL_Texture_Ptr icon( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA8888,
+    SDL_Texture_Ptr icon( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA32,
                           SDL_TEXTUREACCESS_TARGET, slot_size, slot_size ) );
-    if( !icon || SDL_SetRenderTarget( renderer, icon.get() ) != 0 ) {
+    if( !icon || !SDL_SetRenderTarget( renderer, icon.get() ) ) {
         return {};
     }
-    SDL_RenderSetLogicalSize( renderer, 0, 0 );
-    SDL_RenderSetScale( renderer, 1, 1 );
-    SDL_RenderSetViewport( renderer, nullptr );
-    SDL_RenderSetClipRect( renderer, nullptr );
+    SetLogicalRenderSize( renderer, 0, 0 );
+    SDL_SetRenderScale( renderer, 1, 1 );
+    SDL_SetRenderViewport( renderer, nullptr );
+    SDL_SetRenderClipRect( renderer, nullptr );
     SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
     SDL_RenderClear( renderer );
     const auto sprites = choose_sprites( *tile, name );
@@ -438,7 +446,7 @@ SDL_Texture_Ptr tileset_icon( const std::string &id )
         return {};
     }
     SDL_SetTextureBlendMode( icon.get(), SDL_BLENDMODE_BLEND );
-    SDL_RenderFlush( renderer );
+    SDL_FlushRenderer( renderer );
     return icon;
 }
 
@@ -525,13 +533,20 @@ std::vector<field_frame_source> field_frame_sources( const fp3d_snapshot::sprite
 }
 } // namespace
 
-std::vector<field_frame> field_animation( const fp3d_snapshot::sprite &image )
+static std::vector<field_frame> resolve_field_animation( const fp3d_snapshot::sprite &image,
+        std::optional<uv_rect> ( *resolve )( const std::string & ) )
 {
     std::vector<field_frame> result;
     for( const auto &frame : field_frame_sources( image ) ) {
-        result.push_back( { frame.ticks, lookup( frame.key ) } );
+        result.push_back( { frame.ticks, resolve( frame.key ) } );
     }
     return result;
+}
+
+
+std::vector<field_frame> field_animation_gpu( const fp3d_snapshot::sprite &image )
+{
+    return resolve_field_animation( image, lookup_gpu );
 }
 
 void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview )
@@ -543,11 +558,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         ++material_revision;
         season = scene.season;
         atlas.reset();
-        slots.clear();
-        slot_keys.clear();
-        auxiliary_cursor = 0;
-        auxiliary_cache.clear();
-        vehicle_colors.clear();
+        clear_slots();
     }
     // Material requests depend on types, not on the number of equal wall
     // tiles. Retained geometry also retains these representative pointers.
@@ -558,8 +569,11 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         request_allocation != scene.cells.data() ) {
         material_cells.clear();
         std::unordered_set<std::string> unique;
+        // Reuse the scratch capacity for equal materials; only new keys
+        // need an owned string in the set.
+        std::string key;
         for( const auto &tile : scene.cells ) {
-            std::string key = tile.terrain;
+            key = tile.terrain;
             const auto append = [&]( const std::string &value ) { key.push_back( 0 ); key += value; };
             append( std::to_string( tile.roof_connections ) );
             append( std::to_string( tile.ground_connections ) );
@@ -570,7 +584,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             append( tile.furniture ? tile.furniture->id : "" );
             if( tile.furniture ) { append( std::to_string( static_cast<unsigned>( tile.furniture->shape ) ) ); }
             for( const auto &field : tile.ground_fields ) { append( ground_field_key( field ) ); }
-            if( unique.insert( std::move( key ) ).second ) { material_cells.push_back( &tile ); }
+            if( unique.insert( key ).second ) { material_cells.push_back( &tile ); }
         }
         request_geometry = scene.geometry_generation;
         request_allocation = scene.cells.data();
@@ -728,8 +742,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     // the old UVs is invalidated before the reused slots are drawn again.
     if( slots.size() + missing_priority > max_slots ) {
         ++material_revision;
-        slots.clear();
-        vehicle_colors.clear();
+        clear_slots();
     }
     pending.erase( std::remove_if( pending.begin(), pending.end(), resident ), pending.end() );
     const auto add = [&]( const std::string & key, const fp3d_snapshot::sprite * image ) {
@@ -831,7 +844,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     SDL_Renderer *renderer = renderer_owner->get();
     saved_renderer_state saved( renderer );
     if( !atlas ) {
-        atlas.reset( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA8888,
+        atlas.reset( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA32,
                                         SDL_TEXTUREACCESS_TARGET, atlas_size, atlas_size ) );
         if( !atlas ) {
             failed = true;
@@ -839,17 +852,17 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             return;
         }
         SDL_SetTextureBlendMode( atlas.get(), SDL_BLENDMODE_NONE );
-        SDL_SetTextureScaleMode( atlas.get(), SDL_ScaleModeNearest );
+        SDL_SetTextureScaleMode( atlas.get(), SDL_SCALEMODE_NEAREST );
     }
-    if( SDL_SetRenderTarget( renderer, atlas.get() ) != 0 ) {
+    if( !SDL_SetRenderTarget( renderer, atlas.get() ) ) {
         failed = true;
         return;
     }
-    SDL_RenderSetLogicalSize( renderer, 0, 0 );
-    SDL_RenderSetIntegerScale( renderer, SDL_FALSE );
-    SDL_RenderSetScale( renderer, 1, 1 );
-    SDL_RenderSetViewport( renderer, nullptr );
-    SDL_RenderSetClipRect( renderer, nullptr );
+    SetLogicalRenderSize( renderer, 0, 0 );
+    SetIntegerRenderScale( renderer, false );
+    SDL_SetRenderScale( renderer, 1, 1 );
+    SDL_SetRenderViewport( renderer, nullptr );
+    SDL_SetRenderClipRect( renderer, nullptr );
     SDL_SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_NONE );
     unsigned missing = 0;
     for( const request &entry : pending ) {
@@ -862,7 +875,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                                  entry.fence || entry.vehicle || entry.status;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
-        SDL_RenderFillRect( renderer, &slot );
+        RenderFillRectPixels( renderer, &slot );
         const tile_type *tile = nullptr;
         int field_rotation = 0;
         if( entry.vehicle ) {
@@ -1013,7 +1026,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             // Native badges are positioned within a full creature-sized canvas.
             // Crop transparent padding before placing them on the small 3D quad.
             std::array<Uint8, slot_size * slot_size * 4> pixels{};
-            if( SDL_RenderReadPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32,
+            if( ReadRenderPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32,
                                       pixels.data(), slot_size * 4 ) == 0 ) {
                 int left = slot_size;
                 int top = slot_size;
@@ -1030,20 +1043,20 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                     }
                 }
                 if( right >= left && bottom >= top ) {
-                    SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormatFrom( pixels.data(),
+                    SDL_Surface_Ptr surface( CreateSurfaceFromPixels( pixels.data(),
                                              slot_size, slot_size, 32, slot_size * 4, SDL_PIXELFORMAT_RGBA32 ) );
                     SDL_Texture_Ptr cropped( surface ? SDL_CreateTextureFromSurface( renderer, surface.get() ) :
                                              nullptr );
                     if( cropped ) {
                         SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
-                        SDL_RenderFillRect( renderer, &slot );
+                        RenderFillRectPixels( renderer, &slot );
                         const SDL_Rect source{ left, top, right - left + 1, bottom - top + 1 };
                         const float scale = ( slot_size - 4.f ) / std::max( source.w, source.h );
                         const int w = std::max( 1, static_cast<int>( source.w * scale ) );
                         const int h = std::max( 1, static_cast<int>( source.h * scale ) );
                         const SDL_Rect dest{ slot.x + ( slot_size - w ) / 2,
                                              slot.y + ( slot_size - h ) / 2, w, h };
-                        SDL_RenderCopy( renderer, cropped.get(), &source, &dest );
+                        RenderTexturePixels( renderer, cropped.get(), &source, &dest );
                     }
                 }
             }
@@ -1065,15 +1078,15 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                     const int x = slot.x + 8 + ( n * 19 ) % 44;
                     const int y = slot.y + 8 + ( n * 29 ) % 44;
                     if( web ) {
-                        SDL_RenderDrawLine( renderer, x, slot.y + 5, slot.x + 59 - ( n * 11 ) % 48,
+                        SDL_RenderLine( renderer, x, slot.y + 5, slot.x + 59 - ( n * 11 ) % 48,
                                             slot.y + 59 );
-                        SDL_RenderDrawLine( renderer, slot.x + 5, y, slot.x + 59,
+                        SDL_RenderLine( renderer, slot.x + 5, y, slot.x + 59,
                                             slot.y + 59 - ( n * 13 ) % 48 );
                     } else {
                         const int size = debris ? 4 + n % 5 : 7 + 2 * entry.field_intensity;
                         const SDL_Rect patch{ x - size / 2, y - size / 2, size,
                                               debris ? size : size * 2 / 3 };
-                        SDL_RenderFillRect( renderer, &patch );
+                        RenderFillRectPixels( renderer, &patch );
                     }
                 }
             }
@@ -1083,7 +1096,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             ++missing;
             DebugLog( D_INFO, D_MAIN ) << "fp3d: vehicle part missing in selected tileset: " << id;
             SDL_SetRenderDrawColor( renderer, 115, 122, 127, 255 );
-            SDL_RenderFillRect( renderer, &slot );
+            RenderFillRectPixels( renderer, &slot );
         } else if( !painted && ( entry.status || entry.field_sprite >= 0 ) ) {
             // A tileset can intentionally omit this marker: no magenta fallback.
         } else if( !painted && entry.plant ) {
@@ -1099,7 +1112,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 for( int x = 0; x < 4; ++x ) {
                     if( ( x + y ) % 2 == 0 ) {
                         const SDL_Rect square{ slot.x + x * 16, slot.y + y * 16, 16, 16 };
-                        SDL_RenderFillRect( renderer, &square );
+                        RenderFillRectPixels( renderer, &square );
                     }
                 }
             }
@@ -1118,7 +1131,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             constexpr int sample_size = 48;
             std::array<Uint8, sample_size * sample_size * 4> rgba{};
             const SDL_Rect sample{ slot.x + 8, slot.y + 8, sample_size, sample_size };
-            if( SDL_RenderReadPixels( renderer, &sample, SDL_PIXELFORMAT_RGBA32,
+            if( ReadRenderPixels( renderer, &sample, SDL_PIXELFORMAT_RGBA32,
                                       rgba.data(), sample_size * 4 ) == 0 ) {
                 std::array<float, 3> sums{};
                 unsigned colored = 0;
@@ -1150,7 +1163,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     }
     // Appending slots preserves every existing UV. Only atlas resets above
     // invalidate cached geometry; a new terrain ID changes its own chunk key.
-    SDL_RenderFlush( renderer );
+    SDL_FlushRenderer( renderer );
     DebugLog( D_INFO, D_MAIN ) << "fp3d: material atlas slots=" << slots.size()
                                << ", added=" << pending.size() << ", missing=" << missing;
 }
@@ -1164,38 +1177,19 @@ std::optional<std::array<float, 3>> vehicle_body_color( const std::string &key )
     return it->second;
 }
 
-bool bind()
+SDL_Texture *gpu_colour_atlas( SDL_Renderer *renderer )
 {
-    bound = atlas && !failed && SDL_GL_BindTexture( atlas.get(), &texture_width, &texture_height ) == 0;
-    if( atlas && !failed && !bound ) {
-        failed = true;
-        DebugLog( D_WARNING, D_MAIN ) << "fp3d: GL texture interop unavailable: " << SDL_GetError();
+    if( !renderer || !renderer_owner || renderer_owner->get() != renderer ||
+        !SDL_GetGPURendererDevice( renderer ) || !atlas || failed || slots.empty() ) {
+        return nullptr;
     }
-    return bound;
+    return atlas.get();
 }
 
-unsigned revision()
-{
-    return material_revision;
-}
-
-bool ready()
-{
-    return atlas && !failed && !slots.empty();
-}
-
-void unbind()
-{
-    if( bound ) {
-        SDL_GL_UnbindTexture( atlas.get() );
-        bound = false;
-    }
-}
-
-std::optional<uv_rect> lookup( const std::string &id )
+std::optional<uv_rect> lookup_gpu( const std::string &id )
 {
     const auto it = slots.find( id );
-    if( !bound || it == slots.end() ) {
+    if( !atlas || failed || it == slots.end() ) {
         return std::nullopt;
     }
     const float x = ( it->second % slots_per_row ) * slot_size;
@@ -1203,11 +1197,28 @@ std::optional<uv_rect> lookup( const std::string &id )
     const float inset = ( id.compare( 0, 6, "$roof:" ) == 0 ||
                           id.compare( 0, 7, "$field:" ) == 0 ||
                           id.compare( 0, 8, "$ground:" ) == 0 ) ? .5f : 2.5f;
-    return uv_rect{ ( x + inset ) / atlas_size * texture_width,
-                    ( y + inset ) / atlas_size * texture_height,
-                    ( x + slot_size - inset ) / atlas_size * texture_width,
-                    ( y + slot_size - inset ) / atlas_size * texture_height };
+    // GPU renderer texture coordinates are normalized; no GL binding scale.
+    return uv_rect{ ( x + inset ) / atlas_size, ( y + inset ) / atlas_size,
+                    ( x + slot_size - inset ) / atlas_size,
+                    ( y + slot_size - inset ) / atlas_size };
 }
+
+
+unsigned revision()
+{
+    return material_revision;
+}
+
+std::size_t atlas_slot_count()
+{
+    return slots.size();
+}
+
+bool ready()
+{
+    return atlas && !failed && !slots.empty();
+}
+
 
 std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
 {
@@ -1215,7 +1226,7 @@ std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
     if( !atlas || failed || it == slots.end() ) {
         return std::nullopt;
     }
-    // Keep identical padding and SDL_GL_BindTexture scale as the live
+    // Keep identical texel padding and texture extent as the live
     // colour atlas: same per-material UVs across all three atlas textures.
     const float x = ( it->second % slots_per_row ) * slot_size;
     const float y = ( it->second / slots_per_row ) * slot_size;
@@ -1226,6 +1237,31 @@ std::optional<uv_rect> lookup_auxiliary_uv( const std::string &id )
                     ( y + inset ) / atlas_size * texture_height,
                     ( x + slot_size - inset ) / atlas_size * texture_width,
                     ( y + slot_size - inset ) / atlas_size * texture_height };
+}
+
+static const fp3d_material_aux::maps *cache_auxiliary( const std::string &id, unsigned slot,
+        const Uint8 *pixels )
+{
+    const auto inserted = auxiliary_cache.try_emplace( id );
+    auto &maps = inserted.first->second;
+    if( inserted.second ) {
+        maps = fp3d_material_aux::generate( id, pixels, slot_size, slot_size, slot_size * 4 );
+        if( maps.width == slot_size && maps.height == slot_size ) {
+            const auto where = std::lower_bound( auxiliary_slots.begin(), auxiliary_slots.end(),
+            slot, []( const auxiliary_tile &entry, unsigned index ) {
+                return entry.slot < index;
+            } );
+            auxiliary_slots.insert( where, { slot, &maps } );
+        }
+    }
+    return &maps;
+}
+
+void cache_auxiliary_readback( unsigned source_revision, unsigned slot, const Uint8 *pixels )
+{
+    if( pixels && source_revision == material_revision && slot < slot_keys.size() ) {
+        cache_auxiliary( slot_keys[slot], slot, pixels );
+    }
 }
 
 const fp3d_material_aux::maps *auxiliary( const std::string &id )
@@ -1242,7 +1278,7 @@ const fp3d_material_aux::maps *auxiliary( const std::string &id )
     }
     SDL_Renderer *renderer = renderer_owner->get();
     saved_renderer_state saved( renderer );
-    if( SDL_SetRenderTarget( renderer, atlas.get() ) != 0 ) {
+    if( !SDL_SetRenderTarget( renderer, atlas.get() ) ) {
         return nullptr;
     }
     // Reading this *one* existing 64x64 atlas tile is deliberately lazy:
@@ -1251,17 +1287,14 @@ const fp3d_material_aux::maps *auxiliary( const std::string &id )
                            static_cast<int>( index->second / slots_per_row ) * slot_size,
                            slot_size, slot_size };
     std::array<std::uint8_t, slot_size * slot_size * 4> pixels{};
-    SDL_RenderFlush( renderer );
-    if( SDL_RenderReadPixels( renderer, &region, SDL_PIXELFORMAT_RGBA32,
+    SDL_FlushRenderer( renderer );
+    if( ReadRenderPixels( renderer, &region, SDL_PIXELFORMAT_RGBA32,
                               pixels.data(), slot_size * 4 ) != 0 ) {
         DebugLog( D_WARNING, D_MAIN ) << "fp3d: auxiliary texture sampling unavailable: "
                                        << SDL_GetError();
         return nullptr;
     }
-    const auto inserted = auxiliary_cache.emplace( id,
-                          fp3d_material_aux::generate( id, pixels.data(),
-                                  slot_size, slot_size, slot_size * 4 ) );
-    return &inserted.first->second;
+    return cache_auxiliary( id, index->second, pixels.data() );
 }
 
 unsigned prefetch_auxiliary( unsigned budget )
@@ -1283,15 +1316,15 @@ unsigned prefetch_auxiliary( unsigned budget )
     return generated;
 }
 
-unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
-                                     unsigned budget )
+std::vector<unsigned> visible_auxiliary_slots( const fp3d_snapshot::scene_snapshot &scene )
 {
-    if( budget == 0 || !atlas || failed || bound ) {
-        return 0;
+    if( !atlas || failed || bound ) {
+        return {};
     }
     struct candidate {
         int distance = 0;
         std::string id;
+        unsigned slot = 0;
     };
     std::vector<candidate> wanted;
     std::unordered_set<std::string> found;
@@ -1306,7 +1339,8 @@ unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
             continue;
         }
         const std::string key = terrain_key( cell );
-        if( slots.find( key ) == slots.end() ||
+        const auto slot = slots.find( key );
+        if( slot == slots.end() ||
             auxiliary_cache.find( key ) != auxiliary_cache.end() ||
             !found.insert( key ).second ) {
             continue;
@@ -1318,43 +1352,31 @@ unsigned prefetch_visible_auxiliary( const fp3d_snapshot::scene_snapshot &scene,
         // Priority for nearby wall faces: their large, screen-filling texels
         // make an arbitrary atlas-order warmup particularly ineffective.
         const bool wall = cell.kind == fp3d_snapshot::terrain_kind::wall;
-        wanted.push_back( { dx * dx + dz * dz - ( wall ? 8 : 0 ), key } );
+        wanted.push_back( { dx * dx + dz * dz - ( wall ? 8 : 0 ), key, slot->second } );
     }
     std::sort( wanted.begin(), wanted.end(), []( const candidate &a,
     const candidate &b ) {
         return a.distance != b.distance ? a.distance < b.distance :
                a.id < b.id;
     } );
-    unsigned generated = 0;
-    for( const auto &entry : wanted ) {
-        if( generated >= budget ) {
-            break;
-        }
-        if( auxiliary( entry.id ) ) {
-            ++generated;
-        }
+    std::vector<unsigned> requested;
+    const size_t count = std::min<size_t>( wanted.size(), auxiliary_read_limit );
+    requested.reserve( count );
+    for( size_t i = 0; i < count; ++i ) {
+        requested.push_back( wanted[i].slot );
     }
-    return generated;
+    return requested;
 }
 
-std::vector<auxiliary_tile> auxiliary_tiles()
+const std::vector<auxiliary_tile> &auxiliary_tiles()
 {
-    std::vector<auxiliary_tile> result;
-    result.reserve( auxiliary_cache.size() );
-    for( const auto &id : slot_keys ) {
-        const auto slot = slots.find( id );
-        const auto tile = auxiliary_cache.find( id );
-        if( slot != slots.end() && tile != auxiliary_cache.end() &&
-            tile->second.width == slot_size && tile->second.height == slot_size ) {
-            result.push_back( { slot->second, &tile->second } );
-        }
-    }
-    return result;
+    return auxiliary_slots;
 }
 
-furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
+static furniture_uv furniture_surfaces( const std::string &id, unsigned part_index,
+        std::optional<uv_rect> ( *lookup_surface )( const std::string & ) )
 {
-    const auto surface = lookup( "$furniture:" + id );
+    const auto surface = lookup_surface( "$furniture:" + id );
     furniture_uv result{ surface, surface, surface };
     if( !surface || !selected ) {
         return result;
@@ -1534,7 +1556,7 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
     } else if( uses( "f_bed" ) || uses( "f_bed_down" ) ) {
         // UndeadPeople bed sprite = top-down mattress weave only; use wood
         // from another real furniture texture for bed frame and four legs.
-        const auto table = lookup( "$furniture:f_table" );
+        const auto table = lookup_surface( "$furniture:f_table" );
         const auto separate = []( const uv_rect &rect, float x0, float y0, float x1, float y1 ) {
             const float du = rect.right - rect.left;
             const float dv = rect.bottom - rect.top;
@@ -1599,7 +1621,7 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
                id == "f_floor_lamp" || id == "f_floor_lamp_on" ) {
         // Keep the real metal pole neutral; the complete large 2D sprite
         // contains a substantial cast shadow and must not be extruded.
-        if( const auto metal = lookup( "t_metal_floor" ) ) {
+        if( const auto metal = lookup_surface( "t_metal_floor" ) ) {
             result.top = result.front = result.side = metal;
         }
         if( id == "f_street_light" && part_index >= 3 ) {
@@ -1866,16 +1888,17 @@ furniture_uv lookup_furniture( const std::string &id, unsigned part_index )
     return result;
 }
 
+
+furniture_uv lookup_furniture_gpu( const std::string &id, unsigned part_index )
+{
+    return furniture_surfaces( id, part_index, lookup_gpu );
+}
+
 void release()
 {
     ++material_revision;
-    unbind();
     atlas.reset();
-    slots.clear();
-    slot_keys.clear();
-    auxiliary_cursor = 0;
-    auxiliary_cache.clear();
-    vehicle_colors.clear();
+    clear_slots();
     selected.reset();
     renderer_owner = nullptr;
     failed = false;

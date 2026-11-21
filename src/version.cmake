@@ -8,6 +8,16 @@ include(GetGitRevisionDescription)
 
 git_describe(GIT_VERSION --tags --always --match "[0-9A-Z]*.[0-9A-Z]*")
 
+if(GIT_VERSION STREQUAL "HEAD-HASH-NOTFOUND")
+    find_package(Git QUIET)
+endif()
+if(GIT_VERSION STREQUAL "HEAD-HASH-NOTFOUND" AND GIT_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always --match "[0-9A-Z]*.[0-9A-Z]*"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE GIT_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+endif()
+
 if(EXISTS ${GIT_EXECUTABLE})
     execute_process(COMMAND ${GIT_EXECUTABLE} -c core.safecrlf=false diff --quiet
         RESULT_VARIABLE DIRTY_FLAG

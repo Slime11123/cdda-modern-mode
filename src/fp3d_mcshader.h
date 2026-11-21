@@ -19,19 +19,23 @@ struct profile {
     float saturation = 1.15f;
     float warmness = 0.0f;
     float glow = 0.85f;
-    // Runtime-loaded Photon wave source; never bundled into the CDDA repo.
-    std::string water_source;
+    bool has_water_waves = false;
     float water_texture = 0;
     float water_wave_strength = 1;
+    struct wave_settings {
+        int iterations = 3;
+        float frequency = 1;
+        float persistence = 1;
+        float lacunarity = 1;
+        float speed_still = 1;
+        float speed_flowing = 1;
+        bool height_variation = false;
+    } water_waves;
     float water_absorption[3] = { .39f, .14f, .07f };
-    std::string final_fragment;
     std::string label;
-    std::string note;
 };
-// Imports metadata, optional local pack waves, or a standalone GLSL 1.20 final.
-// Full Iris/OptiFine G-buffer/composite programs cannot execute in this backend.
+// Reads shaderpack metadata and native GPU effect parameters.
 profile inspect( const std::filesystem::path &path );
-std::string bridge_fragment( const profile &pack, const std::string &builtin );
 } // namespace fp3d_mcshader
 #endif
 #endif

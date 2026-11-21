@@ -20,7 +20,7 @@
 #include "fp3d_snapshot.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
-#include "imgui/imgui_impl_sdlrenderer2.h"
+#include "imgui/imgui_impl_sdlrenderer3.h"
 #include "input_popup.h"
 #include "popup.h"
 #include "rng.h"
@@ -227,30 +227,21 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     const bool modern = GENERATE( false, true );
     CAPTURE( two_d, modern );
     REQUIRE( fp3d_compositor::requested() );
-    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) == 0 );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
     on_out_of_scope quit_video( []() {
         SDL_QuitSubSystem( SDL_INIT_VIDEO );
     } );
-    SDL_Window_Ptr window( SDL_CreateWindow( "Simple windows regression", SDL_WINDOWPOS_UNDEFINED,
-                           SDL_WINDOWPOS_UNDEFINED, 1280, 720, SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL ) );
+    SDL_Window_Ptr window( SDL_CreateWindow( "Simple windows regression", 1280, 720, SDL_WINDOW_HIDDEN ) );
     REQUIRE( window );
-    int driver = -1;
-    for( int i = 0; i < SDL_GetNumRenderDrivers(); ++i ) {
-        SDL_RendererInfo info{};
-        if( SDL_GetRenderDriverInfo( i, &info ) == 0 && std::string( info.name ) == "opengl" ) {
-            driver = i;
-        }
-    }
-    REQUIRE( driver >= 0 );
-    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), driver,
-                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE ) );
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "gpu" ) );
     REQUIRE( renderer );
     GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
     auto previous_client = std::move( imclient );
     imclient = std::make_unique<cataimgui::client>( renderer, window, geometry );
     on_out_of_scope cleanup( [&]() {
         fp3d_compositor::release();
-        ImGui_ImplSDLRenderer2_Shutdown();
+        ImGui_ImplSDLRenderer3_Shutdown();
         imclient.reset();
         ImGui::DestroyContext();
         imclient = std::move( previous_client );
@@ -296,7 +287,7 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
     const auto frame = [&]() {
         const auto draw_rng = rng_get_engine();
         SDL_SetRenderDrawColor( renderer.get(), 60, 80, 100, 255 );
-        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        REQUIRE( SDL_RenderClear( renderer.get() ) );
         ui_manager::redraw();
         CHECK( GImGui->ColorStack.Size == colors );
         CHECK( GImGui->StyleVarStack.Size == variables );
@@ -308,15 +299,15 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
             std::filesystem::create_directories( directory );
             int width = 0;
             int height = 0;
-            REQUIRE( SDL_GetRendererOutputSize( renderer.get(), &width, &height ) == 0 );
-            SDL_Surface_Ptr picture( SDL_CreateRGBSurfaceWithFormat( 0, width, height, 32,
+            REQUIRE( SDL_GetCurrentRenderOutputSize( renderer.get(), &width, &height ) );
+            SDL_Surface_Ptr picture( CreateSurfaceWithFormat( 0, width, height, 32,
                                      SDL_PIXELFORMAT_RGBA8888 ) );
             REQUIRE( picture );
-            REQUIRE( SDL_RenderReadPixels( renderer.get(), nullptr, picture->format->format,
+            REQUIRE( ReadRenderPixels( renderer.get(), nullptr, picture->format,
                                            picture->pixels, picture->pitch ) == 0 );
             const std::string filename = ( two_d ? "2d-" : "" ) + name + ".png";
             CHECK( IMG_SavePNG( picture.get(), ( std::filesystem::path( directory ) /
-                                                 filename ).u8string().c_str() ) == 0 );
+                                                 filename ).u8string().c_str() ) );
         }
     };
 
@@ -662,9 +653,9 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         SDL_Texture_Ptr background_layer( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
                                           SDL_TEXTUREACCESS_TARGET, 1280, 720 ) );
         REQUIRE( background_layer );
-        REQUIRE( SDL_SetRenderTarget( renderer.get(), background_layer.get() ) == 0 );
-        REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 40, 80, 120, 255 ) == 0 );
-        REQUIRE( SDL_RenderClear( renderer.get() ) == 0 );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), background_layer.get() ) );
+        REQUIRE( SDL_SetRenderDrawColor( renderer.get(), 40, 80, 120, 255 ) );
+        REQUIRE( SDL_RenderClear( renderer.get() ) );
         int marker_x = 24;
         auto menu = fp3d_simple_ui::create_panel( "主菜单", [&]( cataimgui::window & ) {
             const float x = marker_x;
@@ -673,14 +664,14 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
             ImGui::TextUnformatted( "菜单项" );
         } );
         const auto present = [&]() {
-            REQUIRE( SDL_SetRenderTarget( renderer.get(), nullptr ) == 0 );
-            REQUIRE( SDL_RenderCopy( renderer.get(), background_layer.get(), nullptr, nullptr ) == 0 );
+            REQUIRE( SDL_SetRenderTarget( renderer.get(), nullptr ) );
+            REQUIRE( RenderTexturePixels( renderer.get(), background_layer.get(), nullptr, nullptr ) == 0 );
             imclient->present_overlay();
         };
         const auto pixel = [&]( int x ) {
             const SDL_Rect point{ x, 20, 1, 1 };
             std::uint32_t value = 0;
-            REQUIRE( SDL_RenderReadPixels( renderer.get(), &point, SDL_PIXELFORMAT_RGBA8888,
+            REQUIRE( ReadRenderPixels( renderer.get(), &point, SDL_PIXELFORMAT_RGBA8888,
                                           &value, sizeof( value ) ) == 0 );
             return value;
         };
@@ -693,7 +684,7 @@ TEST_CASE( "fp3d_native_simple_windows_keep_input_and_style_isolated", "[.fp3d_s
         CHECK( ( pixel( 30 ) >> 24 ) == Approx( 140 ).margin( 2 ) );
 
         marker_x = 104;
-        REQUIRE( SDL_SetRenderTarget( renderer.get(), background_layer.get() ) == 0 );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), background_layer.get() ) );
         ui_manager::redraw();
         present();
         CHECK( pixel( 30 ) == backdrop );

@@ -70,7 +70,7 @@ void accent_text( const std::string &text )
     ImGui::PopStyleColor();
 }
 
-scoped_theme::scoped_theme() : enabled( active() )
+scoped_theme::scoped_theme( bool apply ) : enabled( apply && active() )
 {
     if( !enabled ) {
         return;

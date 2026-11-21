@@ -14,7 +14,7 @@ set(CMAKE_TLS_VERIFY ON)
 # Build options
 include(CMakeDependentOption)
 option(TILES "Build graphical tileset version." "OFF")
-option(ENABLE_FP3D "Build the Windows SDL2/OpenGL compositing probe." "OFF")
+option(ENABLE_FP3D "Build Modern Mode for Windows SDL3 Tiles." "OFF")
 if (ENABLE_FP3D AND (NOT TILES OR NOT WIN32))
     message(FATAL_ERROR "ENABLE_FP3D requires a Windows Tiles build.")
 endif()
@@ -272,48 +272,9 @@ find_package(ZLIB REQUIRED)
 
 # Check for build types and libraries
 if (TILES)
-    # Find SDL, SDL_ttf & SDL_image for graphical install
-    message(STATUS "Searching for SDL2 library --")
-    if (NOT CMAKE_FIND_PACKAGE_PREFER_CONFIG)
-        set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
-        # ^^ Use sdl2-config.cmake provided by the system or VCPKG
-        find_package(SDL2)
-        if(NOT SDL2_FOUND)
-            # Use our CMakeModules/Find/FindSDL2.cmake
-            set(CMAKE_FIND_PACKAGE_PREFER_CONFIG OFF)
-            find_package(SDL2)
-        endif()
-        set(CMAKE_FIND_PACKAGE_PREFER_CONFIG OFF)
-    endif()
-    if (NOT (SDL2_FOUND OR TARGET SDL2::SDL2 OR TARGET SDL2::SDL2-static))
-        message(FATAL_ERROR
-                "This project requires SDL2 to be installed to compile in graphical mode.  \
-                 Please install the SDL2 development libraries, \
-                 or try compiling without -DTILES=1 for a text-only compilation. \
-                 See doc/c++/COMPILING-CMAKE.md for details and more info.")
-    endif ()
-
-    message(STATUS "Searching for SDL2_TTF library --")
-    find_package(SDL2_ttf)
-    if (NOT (SDL2_TTF_FOUND OR TARGET SDL2::SDL2_ttf OR TARGET SDL2_ttf::SDL2_ttf
-        OR TARGET SDL2_ttf::SDL2_ttf-static))
-        message(FATAL_ERROR
-                "This project requires SDL2_ttf to be installed to compile in graphical mode. \
-                 Please install the SDL2_ttf development libraries, \
-                 or try compiling without -DTILES=1 for a text-only compilation. \
-                 See doc/c++/COMPILING-CMAKE.md for details and more info.")
-    endif ()
-
-    message(STATUS "Searching for SDL2_image library --")
-    find_package(SDL2_image)
-    if (NOT (SDL2_IMAGE_FOUND OR TARGET SDL2::SDL2_image OR TARGET SDL2_image::SDL2_image
-        OR TARGET SDL2_image::SDL2_image-static))
-        message(FATAL_ERROR
-                "This project requires SDL2_image to be installed to compile in graphical mode. \
-                 Please install the SDL2_image development libraries, \
-                 or try compiling without -DTILES=1 for a text-only compilation. \
-                 See doc/c++/COMPILING-CMAKE.md for details and more info.")
-    endif ()
+    find_package(SDL3 3.4 REQUIRED CONFIG)
+    find_package(SDL3_image REQUIRED CONFIG)
+    find_package(SDL3_ttf REQUIRED CONFIG)
     add_definitions(-DTILES)
 endif ()
 
@@ -374,16 +335,7 @@ if (CURSES)
 endif ()
 
 if (SOUND)
-    # Sound requires SDL_mixer library
-    message(STATUS "Searching for SDL2_mixer library --")
-    find_package(SDL2_mixer)
-    if (NOT (SDL2_MIXER_FOUND OR TARGET SDL2_mixer::SDL2_mixer
-                              OR TARGET SDL2_mixer::SDL2_mixer-static))
-        message(FATAL_ERROR
-                "You need the SDL2_mixer development library \
-                    to be able to compile with sound enabled. \
-                    See doc/c++/COMPILING-CMAKE.md for details and more info.")
-    endif()
+    find_package(SDL3_mixer REQUIRED CONFIG)
 endif ()
 
 if (BACKTRACE)

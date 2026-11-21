@@ -80,8 +80,8 @@ extern "C" {
                  << "\nTYPE: " << type
                  << "\nMESSAGE: " << msg;
 #if defined(TILES)
-        if( SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Error",
-                                      log_text.str().c_str(), nullptr ) != 0 ) {
+        if( !SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Error",
+                                      log_text.str().c_str(), nullptr ) ) {
             log_text << "\nError creating SDL message box: " << SDL_GetError();
         }
 #endif

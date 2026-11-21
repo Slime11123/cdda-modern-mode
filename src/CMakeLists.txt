@@ -50,8 +50,6 @@ if (TILES)
 
     target_link_libraries(cataclysm-tiles-common PUBLIC third-party)
     if (ENABLE_FP3D)
-        find_package(OpenGL REQUIRED)
-        target_link_libraries(cataclysm-tiles-common PUBLIC OpenGL::GL)
         if (WIN32)
             target_link_libraries(cataclysm-tiles-common PUBLIC shell32)
         endif()
@@ -117,29 +115,11 @@ if (TILES)
         target_link_libraries(cataclysm-tiles-common PUBLIC ${CMAKE_THREAD_LIBS_INIT})
     endif ()
 
-    if (NOT DYNAMIC_LINKING)
-        target_link_libraries(cataclysm-tiles-common PUBLIC
-            SDL2::SDL2-static
-            SDL2_image::SDL2_image-static
-            SDL2_ttf::SDL2_ttf-static
-        )
-    else()
-        target_link_libraries(cataclysm-tiles-common PUBLIC
-            SDL2::SDL2
-            SDL2_image::SDL2_image
-            SDL2_ttf::SDL2_ttf
-        )
-    endif ()
+    target_link_libraries(cataclysm-tiles-common PUBLIC
+        SDL3::SDL3 SDL3_image::SDL3_image SDL3_ttf::SDL3_ttf
+    )
     if (SOUND)
-        if (NOT DYNAMIC_LINKING)
-            target_link_libraries(cataclysm-tiles-common PUBLIC
-                SDL2_mixer::SDL2_mixer-static
-            )
-        else()
-            target_link_libraries(cataclysm-tiles-common PUBLIC
-                SDL2_mixer::SDL2_mixer
-            )
-        endif()
+        target_link_libraries(cataclysm-tiles-common PUBLIC SDL3_mixer::SDL3_mixer)
         add_definitions(-DSDL_SOUND)
     endif ()
 
@@ -282,9 +262,9 @@ if (MINGW AND NOT RELEASE)
             ${RuntimeLib_WINPTHREAD_1}
             ${RuntimeLib_zlib})
     if (TILES)
-        # SDL2 can have a varius deps. Here you are the MSYS2 ones...
-        find_library(RuntimeLib_SDL2  "SDL2")
-        find_library(RuntimeLib_SDL2_IMG  "SDL2_image")
+        # SDL3 can have a varius deps. Here you are the MSYS2 ones...
+        find_library(RuntimeLib_SDL3  "SDL3")
+        find_library(RuntimeLib_SDL3_IMG  "SDL3_image")
         find_library(RuntimeLib_png  "libpng16-16")
         find_library(RuntimeLib_jpeg  "libjpeg-8")
         find_library(RuntimeLib_jbig  "libjbig-0")
@@ -293,12 +273,12 @@ if (MINGW AND NOT RELEASE)
         find_library(RuntimeLib_lzma  "liblzma-5")
         find_library(RuntimeLib_bz2  "libbz2-1")
         find_library(RuntimeLib_hb  "libharfbuzz-0")
-        find_library(RuntimeLib_SDL2_TTF  "SDL2_ttf")
+        find_library(RuntimeLib_SDL3_TTF  "SDL3_ttf")
         find_library(RuntimeLib_ft  "libfreetype-6")
         find_library(RuntimeLib_glib  "libglib-2.0-0")
         set(RuntimeLib_SDL
-                ${RuntimeLib_SDL2}
-                ${RuntimeLib_SDL2_IMG}
+                ${RuntimeLib_SDL3}
+                ${RuntimeLib_SDL3_IMG}
                 ${RuntimeLib_png}
                 ${RuntimeLib_jpeg}
                 ${RuntimeLib_jbig}
@@ -307,11 +287,11 @@ if (MINGW AND NOT RELEASE)
                 ${RuntimeLib_lzma}
                 ${RuntimeLib_bz2}
                 ${RuntimeLib_hb}
-                ${RuntimeLib_SDL2_TTF}
+                ${RuntimeLib_SDL3_TTF}
                 ${RuntimeLib_ft}
                 ${RuntimeLib_glib})
         if (SOUND)
-            find_library(RuntimeLib_SDL_SND  "SDL2_mixer")
+            find_library(RuntimeLib_SDL_SND  "SDL3_mixer")
             find_library(RuntimeLib_flac  "libFLAC-8")
             find_library(RuntimeLib_ogg  "libogg-0")
             find_library(RuntimeLib_flu  "libfluidsynth-1")

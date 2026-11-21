@@ -1,9 +1,168 @@
 #include "fp3d_cell_index.h"
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include <chrono>
 #include <limits>
 
 #include "cata_catch.h"
+#include "fp3d_gpu_occlusion.h"
+#include "fp3d_gpu_presentation.h"
+#include "fp3d_gpu_terrain_compute.h"
+#include "fp3d_gpu_world_qa.h"
+
+TEST_CASE( "fp3d_input_frame_advances_only_with_sdl_presentation",
+           "[fp3d][gpu_presentation]" )
+{
+    fp3d_gpu::frame_presentation<unsigned> view;
+    CHECK_FALSE( view.target_view() );
+    view.submit( 1 );
+    CHECK_FALSE( view.target_view() );
+    view.begin_composition();
+    view.world_composed();
+    CHECK( view.target_view() == 1 );
+    view.finish_present( true );
+    view.submit( 2 );
+    CHECK( view.target_view() == 1 );
+    CHECK( view.submitted_view() == 2 );
+
+    view.begin_composition();
+    view.world_composed();
+    CHECK( view.target_view() == 2 );
+    view.finish_present( false );
+    CHECK( view.target_view() == 1 );
+
+    // A skipped native submit leaves the same texture and metadata available.
+    view.begin_composition();
+    view.world_composed();
+    view.finish_present( true );
+    CHECK( view.target_view() == 2 );
+
+    view.begin_composition();
+    CHECK_FALSE( view.target_view() );
+    view.finish_present( true );
+    CHECK_FALSE( view.target_view() );
+
+    view.clear();
+    view.begin_composition();
+    view.world_composed();
+    CHECK_FALSE( view.target_view() );
+    view.finish_present( true );
+    CHECK_FALSE( view.target_view() );
+}
+
+TEST_CASE( "fp3d_world_prepares_at_most_once_while_a_submission_is_busy",
+           "[fp3d][gpu_presentation]" )
+{
+    using fp3d_gpu::preparation_mode;
+    fp3d_gpu::frame_preparation preparation;
+    CHECK( preparation.choose( false, false ) == preparation_mode::defer );
+    CHECK( preparation.choose( true, false ) == preparation_mode::refresh_materials );
+    preparation.submitted();
+    CHECK( preparation.choose( false, true ) == preparation_mode::reuse_materials );
+    CHECK( preparation.choose( false, true ) == preparation_mode::defer );
+    CHECK( preparation.choose( false, false ) == preparation_mode::defer );
+    CHECK( preparation.choose( true, true ) == preparation_mode::refresh_materials );
+    CHECK( preparation.choose( false, true ) == preparation_mode::defer );
+    preparation.submitted();
+    CHECK( preparation.choose( false, true ) == preparation_mode::reuse_materials );
+}
+
+TEST_CASE( "fp3d_occlusion_keeps_bounds_touching_clip_planes",
+           "[fp3d][gpu_occlusion]" )
+{
+    using namespace fp3d_gpu::occlusion;
+    const fp3d_gpu_camera_math::matrix4 clip{
+        { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 }
+    };
+    const viewport view{ 128, 96, 1 };
+    const auto middle = project( clip, { 0, 0, .5f }, { .25f, .25f, .125f }, view );
+    REQUIRE( middle.eligible == 1 );
+    CHECK( middle.left == 47 );
+    CHECK( middle.right == 80 );
+    CHECK( middle.top == 35 );
+    CHECK( middle.bottom == 60 );
+    CHECK( middle.near_depth == .375f );
+    CHECK( project( clip, { 0, 0, .05f }, { .25f, .25f, .125f }, view ).eligible == 0 );
+    CHECK( project( clip, { 0, 0, .99f }, { .25f, .25f, .125f }, view ).eligible == 0 );
+    CHECK( project( clip, { .9f, 0, .5f }, { .2f, .25f, .125f }, view ).eligible == 0 );
+    CHECK( project( clip, { 0, 0, .5f }, { -1, .25f, .125f }, view ).eligible == 0 );
+    CHECK( project( clip, { 0, 0, .5f }, { .25f, .25f, .125f }, { 4097, 96, 1 } ).eligible == 0 );
+    CHECK( tile_count( 128 ) == 16 );
+    CHECK( tile_count( 129 ) == 17 );
+}
+
+TEST_CASE( "fp3d_occlusion_leaves_prepass_and_unselected_batches_in_original_order",
+           "[fp3d][gpu_occlusion]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    prepared_world world;
+    world.width = world.height = 128;
+    world.camera.elements = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    auto geometry = std::make_shared<fp3d_geometry::mesh>();
+    geometry->vertices.resize( 4 );
+    geometry->vertices[0].position = { -.25f, -.25f, .25f };
+    geometry->vertices[1].position = { .25f, -.25f, .25f };
+    geometry->vertices[2].position = { .25f, .25f, .25f };
+    geometry->vertices[3].position = { -.25f, .25f, .25f };
+    geometry->indices = { 0, 1, 2, 0, 2, 3, 0, 1, 2, 0, 2, 3 };
+    world.resident_geometry = geometry;
+    auto instances = std::make_shared<std::vector<fp3d_gpu::mesh_instance>>( 128 );
+    ( *instances )[64].offset[2] = .25f;
+    world.resident_pages = instances;
+    world.batches = { { 0, 12, 0, 1, true, true },
+        { 0, 6, 64, 1, true, true }, { 0, 6, 0, 1 }
+    };
+    world.opaque_batches = 2;
+    const auto inputs = prepare_occlusion( world );
+    REQUIRE( inputs.candidates.size() == 3 );
+    CHECK( inputs.occluders == std::vector<Uint32>{ 0 } );
+    CHECK( inputs.candidate_count == 1 );
+    CHECK( inputs.candidates[0].eligible == 0 );
+    CHECK( inputs.candidates[1].eligible == 1 );
+    CHECK( inputs.candidates[1].near_depth == .5f );
+    CHECK( inputs.candidates[2].eligible == 0 );
+}
+
+TEST_CASE( "fp3d_compute_frustum_preserves_terrain_crossing_clip_planes",
+           "[fp3d][terrain_compute]" )
+{
+    using namespace fp3d_gpu::terrain_compute;
+    fp3d_gpu_camera_math::camera camera;
+    camera.eye_height = 0;
+    camera.horizontal_fov_degrees = 90;
+    camera.far_clip = 64;
+    const auto projection = fp3d_gpu_camera_math::clip_from_world( camera );
+    REQUIRE( projection );
+    const auto planes = clip_planes( *projection );
+    const vec4 extent{ .5f, .5f, .5f, 0.f };
+    CHECK( intersects( planes, { 0.f, 0.f, -3.f, 0.f }, extent ) );
+    CHECK( intersects( planes, { 3.5f, 0.f, -3.f, 0.f }, extent ) );
+    CHECK( intersects( planes, { 0.f, 0.f, 0.f, 0.f }, extent ) );
+    CHECK_FALSE( intersects( planes, { 0.f, 0.f, 1.f, 0.f }, extent ) );
+    CHECK_FALSE( intersects( planes, { 8.f, 0.f, -3.f, 0.f }, extent ) );
+    CHECK_FALSE( intersects( planes, { 0.f, 0.f, -70.f, 0.f }, extent ) );
+
+    fp3d_geometry::mesh mesh;
+    mesh.vertices.resize( 4 );
+    mesh.vertices[0].position = { -1.25f, 0.f, 0.f };
+    mesh.vertices[1].position = { 1.25f, 0.f, 0.f };
+    mesh.vertices[2].position = { 0.f, 3.f, 0.f };
+    mesh.vertices[3].position = { 80.f, 80.f, 80.f }; // Not referenced by this model.
+    mesh.indices = { 0, 1, 2, 1, 2, 6 };
+    const auto bound = make_model( mesh, 0, 3, { 0, 0, 1, 1 }, 0 );
+    REQUIRE( bound );
+    CHECK( bound->center == vec4{ 0.f, 1.5f, 0.f, 0.f } );
+    CHECK( bound->half_extent == vec4{ 1.25f, 1.5f, 0.f, 0.f } );
+    CHECK_FALSE( make_model( mesh, 3, 3, {}, 0 ) );
+    CHECK_FALSE( make_model( mesh, 6, 3, {}, 0 ) );
+    const std::vector<cell> cells{ { { 4, 0, -3 } }, { { 7, 4, -3 } } };
+    const auto group = make_block( cells, 0, 2, *bound, 0, 12 );
+    REQUIRE( group );
+    CHECK( group->center == vec4{ 5.5f, 3.5f, -3.f, 0.f } );
+    CHECK( group->half_extent == vec4{ 2.75f, 3.5f, 0.f, 0.f } );
+    CHECK( intersects( planes, group->center, group->half_extent ) );
+    CHECK_FALSE( make_block( cells, 1, 2, *bound, 0, 12 ) );
+}
 
 TEST_CASE( "fp3d_cell_index_matches_snapshot_positions", "[fp3d][cell_index]" )
 {
@@ -41,5 +200,406 @@ TEST_CASE( "fp3d_cell_index_matches_snapshot_positions", "[fp3d][cell_index]" )
     CHECK( index.get( tiles[0].position ) == nullptr );
     index.rebuild( {} );
     CHECK( index.get( tiles[1].position ) == nullptr );
+}
+
+TEST_CASE( "fp3d_cached_terrain_matches_full_scene_gather", "[fp3d][static_floor_cache]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.geometry_generation = 1;
+    terrain_index cache;
+    terrain_index resident( true, true );
+    const auto tile = [&]( int x, int y, int z, const std::string &id ) {
+        fp3d_snapshot::cell c;
+        c.position = tripoint_abs_ms( x, y, z );
+        c.terrain = id;
+        scene.cells.push_back( c );
+    };
+    tile( -9, -6, 0, "t_pavement" );
+    tile( -8, -6, 0, "t_water_dp" );
+    tile( -7, -6, 0, "t_concrete_floor" );
+    tile( -7, -6, 1, "t_concrete_floor" );
+    tile( -6, -6, 0, "t_grass" );
+    tile( -5, -6, 0, "t_floor_metal_gangway" );
+    tile( -4, -6, 0, "t_wood_stairs_up_half" );
+    tile( -3, -6, 0, "" );
+    tile( -2, -6, 0, "t_dirt" );
+    scene.cells.back().known = fp3d_snapshot::knowledge::remembered;
+    scene.cells.back().ground_connections = 3;
+    tile( -8, -8, 0, "t_wall" );
+    scene.cells.back().kind = fp3d_snapshot::terrain_kind::wall;
+    tile( -8, -8, 1, "t_water_dp" );
+    tile( -5, -8, 0, "t_wall" );
+    scene.cells.back().kind = fp3d_snapshot::terrain_kind::wall;
+    scene.cells.back().known = fp3d_snapshot::knowledge::remembered;
+    scene.cells.back().floor_present = false;
+    tile( -6, -7, 0, "t_door_glass_c" );
+    scene.cells.back().kind = fp3d_snapshot::terrain_kind::glass;
+    fp3d_camera::pose view;
+    view.eye.x = -5.f;
+    view.eye.height = 4.f;
+    view.pitch = 27.f;
+
+    const auto compare = [&] {
+        const auto direct = prepare( scene, view, false, 512, 512, true );
+        const auto cached = prepare( scene, view, false, 512, 512, true,
+                                     false, false, false, nullptr, nullptr, &cache );
+        const auto split = prepare( scene, view, false, 512, 512, true,
+                                    false, false, false, nullptr, nullptr, &resident );
+        REQUIRE( direct );
+        REQUIRE( cached );
+        REQUIRE( split );
+        REQUIRE( split->resident_geometry );
+        REQUIRE_FALSE( split->instances.empty() );
+        REQUIRE( split->resident_instance_count > 0 );
+        REQUIRE( split->batches.size() == direct->batches.size() );
+        REQUIRE( split->instances.size() + split->resident_instance_count == direct->instances.size() );
+        for( size_t i = 0; i < split->batches.size(); ++i ) {
+            const auto &draw = split->batches[i];
+            const auto &expected = direct->batches[i];
+            const auto &mesh = draw.resident ? *split->resident_geometry : split->geometry;
+            REQUIRE( draw.index_count == expected.index_count );
+            REQUIRE( draw.instance_count == expected.instance_count );
+            const auto &stream = draw.paged_instances ? *split->resident_pages :
+                                 draw.resident ? split->resident_instances : split->instances;
+            const size_t prefix = draw.resident && !draw.paged_instances && split->resident_pages ?
+                                  split->resident_pages->size() : 0;
+            REQUIRE( draw.first_instance >= prefix );
+            const size_t first_instance = draw.first_instance - prefix;
+            REQUIRE( first_instance + draw.instance_count <= stream.size() );
+            for( Uint32 n = 0; n < draw.instance_count; ++n ) {
+                const auto &instance = stream[first_instance + n];
+                const auto &expected_instance = direct->instances[expected.first_instance + n];
+                auto offset = instance.offset;
+                if( draw.resident ) {
+                    offset[0] += split->resident_to_scene[0];
+                    offset[2] += split->resident_to_scene[2];
+                }
+                REQUIRE( offset == expected_instance.offset );
+                REQUIRE( instance.uv_rect == expected_instance.uv_rect );
+                REQUIRE( instance.tint == expected_instance.tint );
+            }
+            REQUIRE( draw.first_index + draw.index_count <= mesh.indices.size() );
+            for( Uint32 n = 0; n < draw.index_count; ++n ) {
+                const auto &v = mesh.vertices.at( mesh.indices[draw.first_index + n] );
+                const auto &e = direct->geometry.vertices.at( direct->geometry.indices[expected.first_index + n] );
+                REQUIRE( v.position == e.position );
+                REQUIRE( v.normal == e.normal );
+                REQUIRE( v.uv == e.uv );
+                REQUIRE( v.color == e.color );
+            }
+        }
+        REQUIRE( direct->floor_count > 0 );
+        CHECK( cached->floor_count == direct->floor_count );
+        CHECK( cached->wall_count == direct->wall_count );
+        CHECK( cached->uncapped_walls == direct->uncapped_walls );
+        CHECK( cached->missing == direct->missing );
+        CHECK( cached->geometry.indices == direct->geometry.indices );
+        REQUIRE( cached->geometry.vertices.size() == direct->geometry.vertices.size() );
+        for( size_t i = 0; i < cached->geometry.vertices.size(); ++i ) {
+            const auto &v = cached->geometry.vertices[i];
+            const auto &expected = direct->geometry.vertices[i];
+            REQUIRE( v.position == expected.position );
+            REQUIRE( v.normal == expected.normal );
+            REQUIRE( v.uv == expected.uv );
+            REQUIRE( v.color == expected.color );
+        }
+        REQUIRE( cached->instances.size() == direct->instances.size() );
+        for( size_t i = 0; i < cached->instances.size(); ++i ) {
+            REQUIRE( cached->instances[i].offset == direct->instances[i].offset );
+            REQUIRE( cached->instances[i].uv_rect == direct->instances[i].uv_rect );
+            REQUIRE( cached->instances[i].tint == direct->instances[i].tint );
+        }
+        REQUIRE( cached->batches.size() == direct->batches.size() );
+        for( size_t i = 0; i < cached->batches.size(); ++i ) {
+            const auto &a = cached->batches[i];
+            const auto &b = direct->batches[i];
+            REQUIRE( a.first_index == b.first_index );
+            REQUIRE( a.index_count == b.index_count );
+            REQUIRE( a.first_instance == b.first_instance );
+            REQUIRE( a.instance_count == b.instance_count );
+        }
+        REQUIRE( cached->reflective_batches.size() == direct->reflective_batches.size() );
+        for( size_t i = 0; i < cached->reflective_batches.size(); ++i ) {
+            REQUIRE( cached->reflective_batches[i].material == direct->reflective_batches[i].material );
+        }
+    };
+    compare();
+    REQUIRE( cache.plain_cells[0] );
+    REQUIRE( cache.plain_cells[9] );
+    REQUIRE( cache.plain_cells[11] );
+    CHECK_FALSE( cache.plain_cells[5] );
+    CHECK_FALSE( cache.plain_cells[6] );
+    CHECK_FALSE( cache.plain_cells[7] );
+    scene.weather.particles = fp3d_weather::precipitation::rain;
+    scene.weather.intensity = .75f;
+    view.yaw = -5.f;
+    compare();
+    scene.cells[1].terrain = "t_dirt";
+    scene.cells[0].terrain = "t_grass";
+    scene.cells[0].roof_connections = 4;
+    scene.cells[3].floor_present = false;
+    scene.cells[10].terrain = "t_open_air";
+    scene.cells[10].floor_present = false;
+    ++scene.geometry_generation;
+    cache.invalidate_vehicle_roofs();
+    resident.invalidate_vehicle_roofs();
+    compare();
+    scene.origin = tripoint_abs_ms( -1, -1, 0 );
+    view.eye.x += 1.f;
+    view.eye.y += 1.f;
+    compare();
+}
+// Opt-in CPU fixture. Both arms reuse the same spatial and model mesh caches.
+TEST_CASE( "fp3d_ordinary_terrain_recipe_cpu_profile", "[.][static_terrain_profile]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    using clock = std::chrono::steady_clock;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.geometry_generation = 1;
+    scene.sky.sun_y = .7f;
+    scene.sky.sun_z = .7f;
+    scene.sky.daylight = .8f;
+    scene.cells.reserve( 56000 );
+    for( int z = 0; z < 2; ++z ) {
+        for( int y = -125; y < 0; ++y ) {
+            for( int x = -112; x < 112; ++x ) {
+                auto &tile = scene.cells.emplace_back();
+                tile.position = tripoint_abs_ms( x, y, z );
+                if( ( x + y ) % 3 == 0 ) {
+                    tile.kind = kind::wall;
+                    tile.terrain = "t_wall";
+                } else if( x % 2 == 0 ) {
+                    tile.terrain = "t_pavement";
+                } else {
+                    tile.terrain = "t_concrete_floor";
+                    tile.ground_connections = ( x + 112 ) % 8;
+                }
+            }
+        }
+    }
+    terrain_index cached;
+    terrain_index uncached( false );
+    terrain_index gpu_resident( true, true );
+    fp3d_camera::pose view;
+    view.eye.height = 12.f;
+    view.pitch = 28.f;
+    double cached_ms = 0;
+    double uncached_ms = 0;
+    double resident_ms = 0;
+    unsigned prepared_tiles = 0;
+    const auto sample = [&]( terrain_index &index, double &accumulated, bool warmup ) {
+        const auto start = clock::now();
+        const auto frame = prepare( scene, view, true, 2424, 1440, true, false, false, true,
+                                    nullptr, nullptr, &index );
+        const auto finish = clock::now();
+        REQUIRE( frame );
+        REQUIRE( frame->floor_count > 0 );
+        REQUIRE( frame->wall_count > 0 );
+        prepared_tiles = frame->floor_count + frame->wall_count;
+        if( !warmup ) {
+            accumulated += std::chrono::duration<double, std::milli>( finish - start ).count();
+        }
+    };
+    for( const bool edited : { false, true } ) {
+        cached_ms = 0;
+        uncached_ms = 0;
+        resident_ms = 0;
+        constexpr int samples = 24;
+        for( int i = -2; i < samples; ++i ) {
+            view.eye.x = i * .25f;
+            view.yaw = ( i % 7 ) - 3.f;
+            if( edited ) {
+                scene.cells[8000].ground_connections = i & 7;
+                ++scene.geometry_generation;
+            }
+            // Rotate the three paths to reduce ordering and warm-cache bias.
+            const std::array<terrain_index *, 3> paths{ &cached, &uncached, &gpu_resident };
+            const std::array<double *, 3> totals{ &cached_ms, &uncached_ms, &resident_ms };
+            for( int offset = 0; offset < 3; ++offset ) {
+                const size_t which = ( i + 3 + offset ) % 3;
+                sample( *paths[which], *totals[which], i < 0 );
+            }
+        }
+        WARN( "terrain_recipe_cpu_profile edited=" << edited << ", samples=" << samples
+              << ", snapshot_cells=" << scene.cells.size() << ", prepared_tiles=" << prepared_tiles
+              << ", cached_ms=" << cached_ms / samples << ", uncached_ms=" << uncached_ms / samples
+              << ", resident_ms=" << resident_ms / samples );
+    }
+}
+TEST_CASE( "fp3d_static_instance_upload_positions_survive_movement_within_anchor",
+           "[fp3d][resident_instance_anchor]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    terrain_index storage( true, true );
+    scene.geometry_generation = 1;
+    scene.origin = tripoint_abs_ms( -64, 64, 0 );
+    auto &cell = scene.cells.emplace_back();
+    cell.position = tripoint_abs_ms( -63, 58, 0 );
+    cell.terrain = "t_pavement";
+    fp3d_camera::pose view;
+    view.eye.height = 3.f;
+    view.pitch = 25.f;
+    const auto prepare_static = [&]() {
+        return prepare( scene, view, false, 512, 512, true, false, false, false,
+                        nullptr, nullptr, &storage );
+    };
+    const auto first = prepare_static();
+    REQUIRE( first );
+    REQUIRE( first->batches.size() == 1 );
+    REQUIRE( first->batches.front().resident );
+    REQUIRE( first->resident_instance_count == 1 );
+    REQUIRE( first->resident_pages );
+    CHECK( first->resident_pages->size() == 64 );
+    CHECK( first->resident_instances.empty() );
+    REQUIRE( first->batches.front().paged_instances );
+    const auto first_slot = first->batches.front().first_instance;
+    REQUIRE( first->instances.empty() );
+    const auto compute = prepare_terrain_compute( *first );
+    REQUIRE( compute.draw_indices == std::vector<Uint32>{ 0 } );
+    REQUIRE( compute.cells.size() == 1 );
+    REQUIRE( compute.models.size() == 1 );
+    REQUIRE( compute.blocks.size() == 1 );
+    const auto &cached = ( *first->resident_pages )[first_slot];
+    CHECK( compute.cells.front().position == std::array<float, 3>{ cached.offset[0], cached.offset[1],
+                                                                   cached.offset[2] } );
+    CHECK( compute.cells.front().tint == cached.tint );
+    CHECK( compute.models.front().uv_rect == cached.uv_rect );
+    CHECK( compute.blocks.front().revision == first->material_revision );
+    auto translated = *first;
+    translated.camera.elements = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    const auto translated_planes = terrain_compute_planes( translated );
+    CHECK( translated_planes[0][3] == 1.f + translated.resident_to_scene[0] );
+    auto invalid = *first;
+    invalid.batches.front().instance_count = 2;
+    const auto altered = std::make_shared<std::vector<fp3d_gpu::mesh_instance>>( *first->resident_pages );
+    ( *altered )[first_slot + 1] = cached;
+    ( *altered )[first_slot + 1].uv_rect[0] += .125f;
+    invalid.resident_pages = altered;
+    CHECK( prepare_terrain_compute( invalid ).blocks.empty() );
+    terrain_compute_input_cache compute_cache;
+    CHECK_FALSE( compute_cache.reuse_or_rebuild( *first ) );
+    CHECK( compute_cache.reuse_or_rebuild( translated ) );
+    const auto *cells_data = compute_cache.inputs().cells.data();
+    scene.origin = tripoint_abs_ms( -62, 65, 0 );
+    view.eye.x -= 2.f;
+    view.eye.y -= 1.f;
+    const auto second = prepare_static();
+    REQUIRE( second );
+    REQUIRE( second->resident_instance_count == 1 );
+    REQUIRE( second->batches.front().first_instance == first_slot );
+    CHECK( first->resident_pages == second->resident_pages );
+    REQUIRE( first->resident_page_revision );
+    CHECK( first->resident_page_revision == second->resident_page_revision );
+    CHECK( compute_cache.reuse_or_rebuild( *second ) );
+    CHECK( compute_cache.inputs().cells.data() == cells_data );
+    CHECK( first->resident_geometry == second->resident_geometry );
+    CHECK( second->resident_to_scene[0] == first->resident_to_scene[0] - 2.f );
+    CHECK( second->resident_to_scene[2] == first->resident_to_scene[2] - 1.f );
+
+    scene.origin = tripoint_abs_ms( 0, 65, 0 );
+    view.eye.x -= 62.f;
+    const auto crossed = prepare_static();
+    REQUIRE( crossed );
+    REQUIRE( crossed->resident_instance_count == 1 );
+    REQUIRE( crossed->batches.front().first_instance == first_slot );
+    CHECK( crossed->resident_to_scene[0] == 0.f );
+    REQUIRE( crossed->resident_pages );
+    CHECK( crossed->resident_pages != first->resident_pages );
+    CHECK( crossed->resident_page_revision != first->resident_page_revision );
+    CHECK_FALSE( compute_cache.reuse_or_rebuild( *crossed ) );
+    REQUIRE( compute_cache.inputs().cells.size() == 1 );
+    CHECK( compute_cache.inputs().cells.front().position[0] == -63.f );
+    CHECK( ( *crossed->resident_pages )[first_slot].offset[0] == -63.f );
+    CHECK( ( *first->resident_pages )[first_slot].offset[0] == 65.f );
+    CHECK( crossed->resident_geometry == first->resident_geometry );
+
+    auto rerouted = *crossed;
+    rerouted.batches.front().paged_instances = false;
+    CHECK_FALSE( compute_cache.reuse_or_rebuild( rerouted ) );
+    CHECK( compute_cache.inputs().blocks.empty() );
+    CHECK( compute_cache.reuse_or_rebuild( rerouted ) );
+    ++rerouted.material_revision;
+    CHECK_FALSE( compute_cache.reuse_or_rebuild( rerouted ) );
+}
+TEST_CASE( "fp3d_resident_mesh_palette_keeps_offsets_and_caps_storage", "[fp3d][resident_model_cache]" )
+{
+    fp3d_geometry::resident_model_meshes<int> palette;
+    const auto triangle = []( fp3d_geometry::mesh &mesh ) {
+        mesh.vertices.resize( 3 );
+        mesh.indices = { 0, 1, 2 };
+    };
+    const auto first = palette.retain( 0, triangle );
+    REQUIRE( first );
+    const auto original = palette.geometry();
+    REQUIRE( palette.retain( 0, triangle )->first == first->first );
+    REQUIRE( original == palette.geometry() );
+    for( int i = 1; i < 512; ++i ) {
+        const auto next = palette.retain( i, triangle );
+        REQUIRE( next );
+        REQUIRE( next->first == static_cast<unsigned>( i * 3 ) );
+    }
+    CHECK_FALSE( palette.retain( 512, triangle ) );
+    REQUIRE( palette.geometry()->indices.size() == 512 * 3 );
+    REQUIRE( original->indices.size() == 3 );
+    palette.set_atlas_layout( 1, 4 );
+    CHECK_FALSE( palette.geometry() );
+    auto too_big = []( fp3d_geometry::mesh &mesh ) {
+        mesh.vertices.resize( ( 4 * 1024 * 1024 ) / sizeof( fp3d_geometry::vertex ) + 1 );
+        mesh.indices = { 0, 1, 2 };
+    };
+    CHECK_FALSE( palette.retain( 0, too_big ) );
+    CHECK_FALSE( palette.geometry() );
+    CHECK( palette.retain( 0, triangle )->first == 0 );
+}
+TEST_CASE( "fp3d_block_instance_pages_retain_offsets_and_evict_inactive_blocks",
+           "[fp3d][resident_instance_pages]" )
+{
+    using pages_type = fp3d_gpu::instance_pages<int, int>;
+    pages_type pages;
+    const auto encode = []( int x ) { return x + 64; };
+    pages.begin_frame();
+    const auto first = pages.write( 1, { 3, 5 }, encode );
+    const auto neighbour = pages.write( 2, { 7 }, encode );
+    REQUIRE( first == 0 );
+    REQUIRE( neighbour == pages_type::page_size );
+    REQUIRE( pages.data()[*first + 1] == 69 );
+    REQUIRE( pages.data()[*neighbour] == 71 );
+    const auto revision = pages.snapshot_revision();
+    const auto *storage = pages.data().data();
+    CHECK( pages.write( 1, { 3, 4 }, encode ) == first );
+    CHECK( pages.data().data() == storage );
+    CHECK( pages.snapshot_revision() != revision );
+    CHECK( pages.write( 1, { 3, 5 }, encode ) == first );
+    const auto previous = pages.snapshot();
+    const auto previous_revision = pages.snapshot_revision();
+
+    pages.begin_frame();
+    CHECK( pages.write( 2, { 7 }, encode ) == neighbour );
+    CHECK( pages.snapshot() == previous );
+    CHECK( pages.snapshot_revision() == previous_revision );
+    CHECK( pages.write( 1, { 3, 6 }, encode ) == first );
+    CHECK( pages.data()[*first + 1] == 70 );
+    CHECK( pages.snapshot_revision() != previous_revision );
+    CHECK( ( *previous )[*first + 1] == 69 );
+    CHECK( pages.data()[*neighbour] == 71 );
+    for( int frame = 0; frame < 33; ++frame ) {
+        pages.begin_frame();
+        REQUIRE( pages.write( 2, { 7 }, encode ) == neighbour );
+    }
+    CHECK( pages.write( 3, { 13 }, encode ) == first );
+    CHECK( pages.data()[*first] == 77 );
+    CHECK( pages.data()[*neighbour] == 71 );
+    for( size_t i = 2; i < pages_type::page_count; ++i ) {
+        REQUIRE( pages.write( static_cast<int>( i + 100 ), { 9 }, encode ) );
+    }
+    CHECK( pages.data().size() == pages_type::max_extent );
+    CHECK_FALSE( pages.write( 10000, { 9 }, encode ) );
+    CHECK_FALSE( pages.write( 2, std::vector<int>( pages_type::page_size + 1 ), encode ) );
+    CHECK( pages.write( 2, { 7 }, encode ) == neighbour );
+    pages.clear();
+    CHECK( pages.data().empty() );
+    CHECK( pages.write( 2, { 7 }, encode ) == first );
 }
 #endif

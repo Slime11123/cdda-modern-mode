@@ -1,5 +1,7 @@
 # CDDA Modern Mode
 
+> **源码分支说明（2026-11-21）：** `main` 现为 **SDL3 / SDL GPU** 实验版源码；原 **SDL2** 源码保留在 [`sdl2` 分支](https://github.com/Slime11123/cdda-modern-mode/tree/sdl2)。此前的 GitHub Releases 下载可能仍为 SDL2 构建版本。
+
 **让《大灾变：浩劫余生》（CDDA）拥有第一人称 3D 画面与现代化操作。**
 
 > **AI 生成项目声明：** 本项目由 OpenAI GPT 生成并协助开发，基于 CDDA 官方 **0.I-1（Ito-1）** 源码独立开发。项目为**非官方衍生版本**，不代表 OpenAI 或 CDDA 官方。

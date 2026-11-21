@@ -37,7 +37,7 @@
 #include "viewer.h"
 
 #if defined(__ANDROID__)
-#include <SDL_keyboard.h>
+#include <SDL3/SDL_keyboard.h>
 #endif
 
 static const efftype_id effect_weed_high( "weed_high" );

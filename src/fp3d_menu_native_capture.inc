@@ -125,26 +125,26 @@ template <typename F> void menu_on_target( SDL_Texture *target, const F &f )
     }
     SDL_Texture *previous = SDL_GetRenderTarget( renderer.get() );
     SDL_Rect old_view = {}, old_clip = {};
-    SDL_RenderGetViewport( renderer.get(), &old_view );
-    SDL_RenderGetClipRect( renderer.get(), &old_clip );
-    const bool clipping = SDL_RenderIsClipEnabled( renderer.get() ) == SDL_TRUE;
+    SDL_GetRenderViewport( renderer.get(), &old_view );
+    SDL_GetRenderClipRect( renderer.get(), &old_clip );
+    const bool clipping = SDL_RenderClipEnabled( renderer.get() ) == true;
     float sx = 1.0f, sy = 1.0f;
-    SDL_RenderGetScale( renderer.get(), &sx, &sy );
+    SDL_GetRenderScale( renderer.get(), &sx, &sy );
     int lx = 0, ly = 0;
-    SDL_RenderGetLogicalSize( renderer.get(), &lx, &ly );
-    if( SDL_SetRenderTarget( renderer.get(), target ) != 0 ) {
+    GetLogicalRenderSize( renderer.get(), &lx, &ly );
+    if( !SDL_SetRenderTarget( renderer.get(), target ) ) {
         return;
     }
-    SDL_RenderSetLogicalSize( renderer.get(), 0, 0 );
-    SDL_RenderSetScale( renderer.get(), 1.0f, 1.0f );
-    SDL_RenderSetViewport( renderer.get(), nullptr );
-    SDL_RenderSetClipRect( renderer.get(), nullptr );
+    SetLogicalRenderSize( renderer.get(), 0, 0 );
+    SDL_SetRenderScale( renderer.get(), 1.0f, 1.0f );
+    SDL_SetRenderViewport( renderer.get(), nullptr );
+    SDL_SetRenderClipRect( renderer.get(), nullptr );
     f();
     SDL_SetRenderTarget( renderer.get(), previous );
-    SDL_RenderSetLogicalSize( renderer.get(), lx, ly );
-    SDL_RenderSetScale( renderer.get(), sx, sy );
-    SDL_RenderSetViewport( renderer.get(), &old_view );
-    SDL_RenderSetClipRect( renderer.get(), clipping ? &old_clip : nullptr );
+    SetLogicalRenderSize( renderer.get(), lx, ly );
+    SDL_SetRenderScale( renderer.get(), sx, sy );
+    SDL_SetRenderViewport( renderer.get(), &old_view );
+    SDL_SetRenderClipRect( renderer.get(), clipping ? &old_clip : nullptr );
 }
 #if defined(_WIN32)
 // Writer side of the shared-memory frame channel. Returns false when shared
@@ -226,7 +226,7 @@ void menu_record_worker_frame()
         return;
     }
     int dw = 0, dh = 0;
-    SDL_QueryTexture( display_buffer.get(), nullptr, nullptr, &dw, &dh );
+    QueryTexturePixels( display_buffer.get(), nullptr, nullptr, &dw, &dh );
     SDL_Rect from = menu_terrain_rect;
     from.x = std::clamp( from.x, 0, dw );
     from.y = std::clamp( from.y, 0, dh );
@@ -274,19 +274,19 @@ void menu_record_worker_frame()
     }
     SDL_Texture_Ptr output( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_ARGB8888,
                            SDL_TEXTUREACCESS_TARGET, frame_width, frame_height ) );
-    SDL_Surface_Ptr surface( SDL_CreateRGBSurfaceWithFormat( 0, frame_width,
+    SDL_Surface_Ptr surface( CreateSurfaceWithFormat( 0, frame_width,
                             frame_height, 32, SDL_PIXELFORMAT_ARGB8888 ) );
     if( !output || !surface ) {
         return;
     }
-    SDL_SetTextureScaleMode( display_buffer.get(), SDL_ScaleModeNearest );
+    SDL_SetTextureScaleMode( display_buffer.get(), SDL_SCALEMODE_NEAREST );
     bool success = false;
     menu_on_target( output.get(), [&]() {
         SDL_SetRenderDrawColor( renderer.get(), 10, 10, 10, 255 );
         SDL_RenderClear( renderer.get() );
         SDL_Rect dest = { 0, 0, frame_width, frame_height };
-        if( SDL_RenderCopy( renderer.get(), display_buffer.get(), &from, &dest ) == 0 ) {
-            success = SDL_RenderReadPixels( renderer.get(), nullptr,
+        if( RenderTexturePixels( renderer.get(), display_buffer.get(), &from, &dest ) == 0 ) {
+            success = ReadRenderPixels( renderer.get(), nullptr,
                                            SDL_PIXELFORMAT_ARGB8888, surface->pixels,
                                            surface->pitch ) == 0;
         }
@@ -311,7 +311,7 @@ void menu_record_worker_frame()
     }
     std::filesystem::path tmp = path / ( "tmp_" + std::to_string( menu_worker_frame_id ) + ".png" );
     std::filesystem::path dst = path / ( "frame_" + std::to_string( menu_worker_frame_id ) + ".png" );
-    if( IMG_SavePNG( surface.get(), tmp.string().c_str() ) != 0 ) {
+    if( !IMG_SavePNG( surface.get(), tmp.string().c_str() ) ) {
         return;
     }
     std::filesystem::remove( dst, ec );
@@ -364,7 +364,7 @@ bool menu_start_isolated_worker()
     int canvas_w = 0;
     int canvas_h = 0;
     if( renderer ) {
-        SDL_GetRendererOutputSize( renderer.get(), &canvas_w, &canvas_h );
+        SDL_GetCurrentRenderOutputSize( renderer.get(), &canvas_w, &canvas_h );
     }
     if( canvas_w <= 0 || canvas_h <= 0 ) {
         canvas_w = 1280;
@@ -537,9 +537,9 @@ bool menu_attach_shared_frame()
         return false;
     }
     SDL_SetTextureBlendMode( texture.get(), SDL_BLENDMODE_NONE );
-    SDL_SetTextureScaleMode( texture.get(), SDL_ScaleModeNearest );
+    SDL_SetTextureScaleMode( texture.get(), SDL_SCALEMODE_NEAREST );
     SDL_SetTextureBlendMode( staging.get(), SDL_BLENDMODE_NONE );
-    SDL_SetTextureScaleMode( staging.get(), SDL_ScaleModeNearest );
+    SDL_SetTextureScaleMode( staging.get(), SDL_SCALEMODE_NEAREST );
     menu_shm_read_handle = handle;
     menu_shm_read_base = base;
     menu_shm_read_bytes = need;
@@ -578,8 +578,8 @@ bool menu_try_shared_frame()
     // The producer is mid-write or the upload failed: report it, so the gate
     // keeps refusing this frame instead of silently accepting a texture that
     // was created but never received any pixels.
-    if( SDL_UpdateTexture( menu_shm_staging.get(), nullptr,
-                           menu_shm_read_base + menu_shm_header_bytes, width * 4 ) != 0 ) {
+    if( !SDL_UpdateTexture( menu_shm_staging.get(), nullptr,
+                           menu_shm_read_base + menu_shm_header_bytes, width * 4 ) ) {
         report.seq_stable = true;
         report.uploaded = false;
         menu_readiness.accept_frame( report, fp3d_menu::now_ms() );
@@ -638,7 +638,7 @@ void menu_load_next_frame()
         SDL_Texture_Ptr texture( SDL_CreateTextureFromSurface( renderer.get(), image.get() ) );
         if( texture ) {
             SDL_SetTextureBlendMode( texture.get(), SDL_BLENDMODE_NONE );
-            SDL_SetTextureScaleMode( texture.get(), SDL_ScaleModeNearest );
+            SDL_SetTextureScaleMode( texture.get(), SDL_SCALEMODE_NEAREST );
             menu_play_texture = std::move( texture );
             ++menu_play_index;
             menu_last_progress = now;
@@ -755,7 +755,7 @@ void menu_draw_native_background( int width, int height )
     }
 #endif
     int image_width = 0, image_height = 0;
-    SDL_QueryTexture( live, nullptr, nullptr,
+    QueryTexturePixels( live, nullptr, nullptr,
                       &image_width, &image_height );
     if( image_width <= 0 || image_height <= 0 ) {
         return;
@@ -772,14 +772,14 @@ void menu_draw_native_background( int width, int height )
         src.y = ( image_height - src.h ) / 2;
     }
     SDL_Rect dst = { 0, 0, width, height };
-    SDL_RenderCopy( renderer.get(), live, &src, &dst );
+    RenderTexturePixels( renderer.get(), live, &src, &dst );
     // Preserve *all* original ASCII title/menu text and version metadata.
     SDL_BlendMode blend;
     SDL_GetRenderDrawBlendMode( renderer.get(), &blend );
     SDL_SetRenderDrawBlendMode( renderer.get(), SDL_BLENDMODE_BLEND );
     SDL_SetRenderDrawColor( renderer.get(), 4, 8, 11, 140 );
     SDL_Rect left = { 0, 0, std::min( 250, width / 5 ), height };
-    SDL_RenderFillRect( renderer.get(), &left );
+    RenderFillRectPixels( renderer.get(), &left );
     SDL_SetRenderDrawBlendMode( renderer.get(), blend );
 }
 } // namespace

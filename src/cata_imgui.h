@@ -150,6 +150,7 @@ class window
 
     protected:
         bool force_to_back = false;
+        bool use_default_theme = true;
         bool hide_ui = false;
         bool is_open;
         std::string id;

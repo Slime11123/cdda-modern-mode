@@ -1,4 +1,6 @@
 #include "fp3d_modern_ui.h"
+#include "fp3d_survival_style.h"
+#include "scoped_rng.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <cmath>
@@ -51,6 +53,7 @@ namespace fp3d_modern_ui
 {
 namespace
 {
+namespace palette = fp3d_survival_style;
 bool resume_after_activity = false;
 int remembered_page = 0;
 int scale_choice = 0;
@@ -61,7 +64,7 @@ constexpr int bestiary_page_index = 12;
 
 bool yellow_button( const char *label, const ImVec2 &size = ImVec2( 0, 0 ) )
 {
-    ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, .86f, .18f, 1 ) );
+    ImGui::PushStyleColor( ImGuiCol_Text, palette::color( palette::accent ) );
     const bool pressed = ImGui::Button( label, size );
     ImGui::PopStyleColor();
     return pressed;
@@ -69,7 +72,7 @@ bool yellow_button( const char *label, const ImVec2 &size = ImVec2( 0, 0 ) )
 
 bool yellow_small_button( const char *label )
 {
-    ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, .86f, .18f, 1 ) );
+    ImGui::PushStyleColor( ImGuiCol_Text, palette::color( palette::accent ) );
     const bool pressed = ImGui::SmallButton( label );
     ImGui::PopStyleColor();
     return pressed;
@@ -2266,7 +2269,7 @@ class panel : public cataimgui::window
             scale = 1 + scale_choice * .25f;
             ImGui::SetWindowFontScale( scale );
             if( !action_message.empty() ) {
-                ImGui::TextColored( ImVec4( 1, .86f, .18f, 1 ), "%s", action_message.c_str() );
+                ImGui::TextColored( palette::color( palette::accent ), "%s", action_message.c_str() );
             }
             const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏", "变异", "仿生插件", "武术", "图鉴" };
             if( pickup_target ) {
@@ -2457,31 +2460,12 @@ class panel : public cataimgui::window
             }
             // The native 2D buffer is retained between UI frames. An opaque panel
             // prevents old page contents accumulating under translucent children.
-            const float opacity = fp3d_compositor::controls() == fp3d_input::mode::modern_2d ? 1.0f : .72f;
-            ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f, opacity ) );
-            ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .045f, .043f, .038f, .48f ) );
-            ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .12f, .115f, .10f, .74f ) );
-            ImGui::PushStyleColor( ImGuiCol_Header, ImVec4( .43f, .31f, .15f, .70f ) );
-            ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( .43f, .32f, .17f, .85f ) );
-            ImGui::PushStyleColor( ImGuiCol_HeaderHovered, ImVec4( .50f, .36f, .16f, .8f ) );
-            ImGui::PushStyleColor( ImGuiCol_HeaderActive, ImVec4( .65f, .46f, .20f, .9f ) );
-            ImGui::PushStyleColor( ImGuiCol_Border, ImVec4( .43f, .40f, .33f, .5f ) );
-            ImGui::PushStyleColor( ImGuiCol_PopupBg, ImVec4( .045f, .04f, .03f, .97f ) );
-            ImGui::PushStyleColor( ImGuiCol_TitleBg, ImVec4( .16f, .13f, .085f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_TitleBgActive, ImVec4( .30f, .22f, .11f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_TextDisabled, ImVec4( 1, .86f, .18f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_FrameBg, ImVec4( .12f, .115f, .10f, .65f ) );
-            ImGui::PushStyleColor( ImGuiCol_FrameBgHovered, ImVec4( .30f, .25f, .17f, .8f ) );
-            ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( .38f, .29f, .16f, .9f ) );
-            ImGui::PushStyleColor( ImGuiCol_CheckMark, ImVec4( .88f, .66f, .32f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_PlotHistogram, ImVec4( .48f, .68f, .40f, 1 ) );
+            const palette::scoped_theme theme( fp3d_compositor::view_3d() ? .95f : 1.f );
             ImGui::PushStyleVar( ImGuiStyleVar_DisabledAlpha, .75f );
             ImGui::BeginDisabled( activity_pending || native_prompt_open );
             cataimgui::window::draw();
             ImGui::EndDisabled();
             ImGui::PopStyleVar();
-            ImGui::PopStyleColor( 18 );
         }
         void refresh_character() {
             needs.clear();
@@ -2547,6 +2531,7 @@ class panel : public cataimgui::window
             background( fp3d_compositor::copy_view() ) {
             // Keep ImGui popup windows above their parent panel.
             force_to_back = true;
+            use_default_theme = false;
             if( initial_use ) {
                 use_item = initial_use;
                 item_uses = fp3d_inventory::use_options( use_item, you, here );

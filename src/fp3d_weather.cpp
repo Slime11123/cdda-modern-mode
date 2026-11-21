@@ -2,11 +2,6 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <cmath>
-#if defined(_MSC_VER) && defined(USE_VCPKG)
-#include <SDL2/SDL_opengl.h>
-#else
-#include <SDL_opengl.h>
-#endif
 #include "fp3d_camera.h"
 #include "weather_type.h"
 
@@ -71,50 +66,24 @@ float flash( const state &weather, std::uint64_t milliseconds )
     return 1 - ( milliseconds - started ) / 360.0f;
 }
 
-void begin_atmosphere( const state &weather, float daylight, float lightning, float far_scale )
+linear_fog fog_parameters( const state &weather, float daylight, float lightning, float far_scale )
 {
-    glDisable( GL_FOG );
-    // Do not globally toggle GL_FOG based on where the player stands:
-    // through a doorway the outside would suddenly gain/lose all fog.
-    // Long-distance fog is stable with a world-wide weather state.
-    if( weather.fog_end <= 0 ) { return; }
+    if( weather.fog_end <= 0 ) {
+        return {};
+    }
     const float light = .055f + daylight * .48f + lightning * .3f;
-    const GLfloat color[] = { light * .91f, light * .97f, light, 1 };
     const float scale = far_scale > .05f ? far_scale : 1.0f;
-    glFogfv( GL_FOG_COLOR, color );
-    glFogi( GL_FOG_MODE, GL_LINEAR );
-    glFogf( GL_FOG_START, 8 * scale );
-    glFogf( GL_FOG_END, weather.fog_end * scale );
-    glEnable( GL_FOG );
+    return { { light * .91f, light * .97f, light, 1 }, 8 * scale, weather.fog_end * scale };
 }
 
-void draw( const state &weather, const tripoint_abs_ms &origin, float yaw,
-           float daylight, std::uint64_t milliseconds )
+void visit_particles( const state &weather, const tripoint_abs_ms &origin,
+                      std::uint64_t milliseconds, const std::function<void( particle )> &visit )
 {
     if( weather.particles == precipitation::none || weather.columns.empty() ) { return; }
-    // Precipitation must not leak culling/alpha/depth state into glass, the
-    // held item or the compositor's screen quad (whose winding is reversed).
-    glPushAttrib( GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-                  GL_LINE_BIT | GL_CURRENT_BIT );
     const bool rain = weather.particles == precipitation::rain;
     const bool anomaly = weather.particles == precipitation::anomaly;
     const float seconds = ( milliseconds % 600000 ) / 1000.0f;
     const float speed = rain ? 9.0f : anomaly ? -.7f : 1.2f;
-    const float right_x = std::cos( yaw * pi / 180 );
-    const float right_z = std::sin( yaw * pi / 180 );
-    glDisable( GL_TEXTURE_2D );
-    glDisable( GL_LIGHTING );
-    glDisable( GL_CULL_FACE );
-    glDisable( GL_ALPHA_TEST );
-    glEnable( GL_BLEND );
-    glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-    glDepthMask( GL_FALSE );
-    const float light = .3f + .65f * daylight;
-    if( rain ) { glColor4f( light * .68f, light * .83f, light, .48f ); }
-    else if( anomaly ) { glColor4f( .65f, .24f, .93f, .65f ); }
-    else { glColor4f( light, light, light, .8f ); }
-    glLineWidth( 1 );
-    glBegin( rain ? GL_LINES : GL_QUADS );
     unsigned count = 0;
     for( const auto &column : weather.columns ) {
         const auto p = column - origin;
@@ -132,21 +101,13 @@ void draw( const state &weather, const tripoint_abs_ms &origin, float yaw,
             const float z = p.y() + std::clamp( fraction( seed + 4 ) - .5f + weather.wind_z * ( 7.5f - height ) * .04f, -.46f, .46f );
             const float floor = p.z() * fp3d_camera::floor_height + .025f;
             const float y = floor + height;
-            if( rain ) {
-                glVertex3f( x, y, z );
-                glVertex3f( x + weather.wind_x * .06f, std::max( floor, y - .35f ), z + weather.wind_z * .06f );
-            } else {
-                const float size = anomaly ? .04f : .025f;
-                glVertex3f( x - right_x * size, y - size, z - right_z * size );
-                glVertex3f( x + right_x * size, y - size, z + right_z * size );
-                glVertex3f( x + right_x * size, y + size, z + right_z * size );
-                glVertex3f( x - right_x * size, y + size, z - right_z * size );
-            }
+            visit( { x, y, z, x + weather.wind_x * .06f, std::max( floor, y - .35f ),
+                     z + weather.wind_z * .06f } );
         }
         if( count >= 1200 ) { break; }
     }
-    glEnd();
-    glPopAttrib();
 }
+
+
 }
 #endif
