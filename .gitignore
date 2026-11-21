@@ -263,3 +263,6 @@ VERSION.txt
 /assets/downloads/
 /assets/undeadpeople-source/
 /assets/tilesets/
+
+# Local agent instructions; never publish
+/AGENTS.md
