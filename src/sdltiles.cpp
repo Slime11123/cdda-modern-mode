@@ -3602,10 +3602,11 @@ static void CheckMessages()
             mouse = point( static_cast<int>( std::floor( logical_x ) ),
                            static_cast<int>( std::floor( logical_y ) ) );
             mouse -= point( terrain->pos.x * fontwidth, terrain->pos.y * fontheight );
+            const point size( TERRAIN_WINDOW_TERM_WIDTH * fontwidth,
+                              TERRAIN_WINDOW_TERM_HEIGHT * fontheight );
             changed = edge_camera.update( fp3d_compositor::modern_2d_input() &&
                                           SDL_GetMouseFocus() == window.get() && g->get_zoom() > 4,
-                                          mouse, point( TERRAIN_WINDOW_TERM_WIDTH * fontwidth,
-                                                  TERRAIN_WINDOW_TERM_HEIGHT * fontheight ),
+                                          fp3d_compositor::right_camera_dragging() ? mouse : size / 2, size,
                                           ( edge_now - last_edge_frame ) / 1000.0f );
         } else {
             changed = edge_camera.update( false, point::zero, point::zero, 0 );

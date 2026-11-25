@@ -2218,6 +2218,8 @@ void move_items_activity_actor::do_turn( player_activity &act, Character &who )
     map &here = get_map();
 
     const tripoint_bub_ms dest = relative_destination + who.pos_bub();
+    const bool strict_destination = !act.str_values.empty() &&
+                                    act.str_values.front() == "fp3d_keep_unmoved_items";
 
     while( who.get_moves() > 0 && !target_items.empty() ) {
         item_location target = std::move( target_items.back() );
@@ -2232,6 +2234,39 @@ void move_items_activity_actor::do_turn( player_activity &act, Character &who )
 
         // Check that we can pick it up.
         if( !target->made_of_from_type( phase_id::SOLID ) ) {
+            continue;
+        }
+        if( strict_destination ) {
+            item moved( *target );
+            if( !moved.is_owned_by( who, true ) ) {
+                continue;
+            }
+            moved.set_owner( who );
+            if( moved.count_by_charges() && quantity > 0 ) {
+                moved.charges = std::min( moved.charges, quantity );
+            }
+            bool inserted = false;
+            if( to_vehicle ) {
+                if( const auto cargo = here.veh_at( dest ).cargo(); cargo && !cargo->part().is_cleaner_on() ) {
+                    inserted = cargo->vehicle().add_item( here, cargo->part(), moved ).has_value();
+                }
+            } else if( here.can_put_items_ter_furn( dest ) ) {
+                inserted = !here.add_item_or_charges( dest, moved, false ).is_null();
+            }
+            if( !inserted ) {
+                who.add_msg_if_player( _( "There is no room for %s." ), moved.tname() );
+                continue;
+            }
+            const auto src = target.pos_bub( here );
+            const int distance = src.z() == dest.z() ? std::max( rl_dist( src, dest ), 1 ) : 1;
+            const float weary_mult = who.exertion_adjusted_move_multiplier( exertion_level() );
+            who.mod_moves( -Pickup::cost_to_move_item( who, moved ) * distance / weary_mult );
+            if( moved.count_by_charges() && target->charges > moved.charges ) {
+                target->charges -= moved.charges;
+                target.on_contents_changed();
+            } else {
+                target.remove_item();
+            }
             continue;
         }
         // Spill out any invalid contents first
@@ -5330,7 +5365,7 @@ static ret_val<void> insert_into_activity_pocket( item_location &container, int 
 
 static ret_val<void> try_insert( item_location &holster, drop_location &holstered_item,
                                  int *charges_added, Character *carrier, bool allow_fill_charge_item_nested,
-                                 int pocket_index )
+                                 int pocket_index, bool partial_insert )
 {
     item &it = *holstered_item.first;
     ret_val<void> ret = ret_val<void>::make_failure( _( "item can't be stored there" ) );
@@ -5365,7 +5400,7 @@ static ret_val<void> try_insert( item_location &holster, drop_location &holstere
         }
         ret = holster.parents_can_contain_recursive( &it );
         if( !ret.success() ) {
-            if( carrier != nullptr && carrier->is_avatar() && query_yn(
+            if( !partial_insert && carrier != nullptr && carrier->is_avatar() && query_yn(
                     _( "The parent container does not have enough space to fit more items.  Would you like to first wield %s to fit more?" ),
                     holster->tname() )
                 &&
@@ -5395,7 +5430,7 @@ static ret_val<void> try_insert( item_location &holster, drop_location &holstere
     ret_val<int> max_parent_charges = holster.max_charges_by_parent_recursive( it );
     if( !max_parent_charges.success() ) {
         return ret_val<void>::make_failure( max_parent_charges.str() );
-    } else if( carrier != nullptr && carrier->is_avatar() &&
+    } else if( !partial_insert && carrier != nullptr && carrier->is_avatar() &&
                max_parent_charges.value() < holstered_item.second ) {
         // if you cannot fit all items because parent container is too small
         if( query_yn(
@@ -5433,8 +5468,12 @@ void insert_item_activity_actor::finish( player_activity &act, Character &who )
         return;
     }
     int pocket_index = -1;
-    if( !act.str_values.empty() && act.str_values.front() == "fp3d_target_pocket" ) {
-        if( act.values.size() != 1 || act.values.front() < 0 || act.str_values.size() != 2 ||
+    const bool partial_insert = !act.str_values.empty() &&
+                                act.str_values.front() == "fp3d_partial_insert";
+    if( partial_insert || ( !act.str_values.empty() &&
+                           act.str_values.front() == "fp3d_target_pocket" ) ) {
+        if( act.values.size() != 1 || act.values.front() < ( partial_insert ? -1 : 0 ) ||
+            act.str_values.size() != 2 ||
             act.str_values[1] != holster->typeId().str() ) {
             canceled( act, who );
             act.set_to_null();
@@ -5457,7 +5496,7 @@ void insert_item_activity_actor::finish( player_activity &act, Character &who )
         ret_val<void> ret = ret_val<void>::make_failure( _( "item can't be stored there" ) );
 
         if( !it.count_by_charges() ) {
-            ret = try_insert( holster, holstered_item, nullptr, carrier, false, pocket_index );
+            ret = try_insert( holster, holstered_item, nullptr, carrier, false, pocket_index, partial_insert );
 
             if( ret.success() ) {
                 //~ %1$s: item to put in the container, %2$s: container to put item in
@@ -5470,7 +5509,7 @@ void insert_item_activity_actor::finish( player_activity &act, Character &who )
         } else {
             int charges_added = 0;
             ret = try_insert( holster, holstered_item, &charges_added, carrier,
-                              allow_fill_count_by_charge_item_nested, pocket_index );
+                              allow_fill_count_by_charge_item_nested, pocket_index, partial_insert );
 
             if( ret.success() ) {
                 item copy( it );
@@ -5509,7 +5548,13 @@ void insert_item_activity_actor::finish( player_activity &act, Character &who )
     }
 
     items.pop_front();
-    if( items.empty() || !success || items.front().first == item_location::nowhere ) {
+    if( partial_insert ) {
+        while( !items.empty() && !items.front().first ) {
+            items.pop_front();
+        }
+    }
+    if( items.empty() || ( !success && !partial_insert ) ||
+        items.front().first == item_location::nowhere ) {
         holster.make_active();
         handler.handle_by( who );
         act.set_to_null();

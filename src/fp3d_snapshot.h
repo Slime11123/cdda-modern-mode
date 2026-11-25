@@ -7,6 +7,7 @@
 #include <array>
 #include <optional>
 #include <utility>
+#include <unordered_set>
 #include <vector>
 
 #include "coordinates.h"
@@ -123,8 +124,8 @@ struct cell {
     bool goes_down = false;
     bool is_ramp = false;
     int ramp_delta = 0;
-    // The tile's column belongs to the interior region the avatar is standing
-    // in (the same rooms plus their walls). Used only by the overhead view to
+    // The column belongs to the active overhead cut (avatar room by default,
+    // mouse-selected room while dragging, including its boundary walls). Used only by the overhead view to
     // lift that region's ceiling and the storeys above it; it never widens
     // perception, never carries contents and must not be read as "known".
     bool over_avatar_region = false;
@@ -150,6 +151,11 @@ struct sprite {
     // Extra visible native effect badges, ordered by urgency; at most four total.
     std::vector<std::string> status_icons;
     float height = 1.8f;
+    // Presentation-only scale of the drawn billboard (F5 3D settings, default
+    // 80% for monsters and NPCs). The quad still grows from the actor's own
+    // feet, and `height` keeps its native value so picking, interaction reach
+    // and every gameplay rule stay exactly as they were.
+    float display_scale = 1.f;
     float elevation = 0;
     int field_intensity = 0;
 };
@@ -184,8 +190,18 @@ struct unknown_span {
     int width = 1;
 };
 
+// Bounded native topology cache, owned by the existing snapshot lifecycle.
+struct cutaway_room {
+    tripoint_abs_ms anchor;
+    std::vector<unsigned char> topology;
+    std::unordered_set<tripoint_abs_ms> interior;
+    std::unordered_set<tripoint_abs_ms> columns;
+    bool clipped = false;
+};
+
 struct scene_snapshot {
     tripoint_abs_ms origin;
+    std::optional<cutaway_room> pointer_room;
     unsigned render_generation = 0; // Assigned when publishing owned render data.
     unsigned geometry_generation = 0; // Retained only while owned cells are identical.
     season_type season = SPRING;
@@ -201,6 +217,8 @@ struct scene_snapshot {
     bool stairs_connected = false;
     // Cells came from the complete live camera grid, before overhead dimming.
     bool camera_geometry = false;
+    // Live camera cuts are draw masks. Keep the complete geometry for instant restoration.
+    bool camera_cutaway = false;
     std::vector<landscape_patch> landscape;
     std::vector<sprite> sprites;
     // Only native-visible, active/powered sources; never remembered lamp IDs.
@@ -223,8 +241,27 @@ struct scene_snapshot {
     double capture_full_ms = 0;
     unsigned visible = 0;
     unsigned remembered = 0;
+    // Full native light checks are for occupied sprite candidates, not empty terrain.
+    unsigned entity_visibility_checks = 0;
     std::vector<tripoint_abs_ms> interactable;
 };
+
+inline bool cutaway_column( const scene_snapshot &scene, const cell &tile )
+{
+    return scene.pointer_room ? scene.pointer_room->columns.count( tripoint_abs_ms(
+               tile.position.x(), tile.position.y(), scene.origin.z() ) ) != 0 : tile.over_avatar_region;
+}
+
+inline bool hidden_by_cutaway( const scene_snapshot &scene, const cell &tile )
+{
+    return scene.camera_cutaway && tile.position.z() > scene.origin.z() &&
+           !tile.faded_tower && cutaway_column( scene, tile );
+}
+
+// Updates only bounded topology and the draw mask; never captures the map or changes cells.
+// Returns whether the visible region changed (movement within one room is a no-op).
+bool update_pointer_room( scene_snapshot &scene, const avatar &you, const map &here,
+                          std::optional<tripoint_abs_ms> target );
 
 // Connect permitted adjacent stair tiles into rectangular flights.
 void connect_stairs( scene_snapshot &scene );
@@ -261,12 +298,17 @@ scene_snapshot capture( avatar &you, const map &here,
                         bool cut_overhead = false );
 // Independent 3D geometry from the already loaded map. Camera culling and
 // depth decide which surfaces reach the screen; native map memory is unchanged.
+// Overhead geometry is retained in full; hidden_by_cutaway() is the shared draw/pick mask.
 scene_snapshot capture_camera( avatar &you, const map &here,
                                int above = render_above, int below = render_below,
                                bool cut_overhead = false );
 // Same live queries; an unchanged geometry allocation may be moved from previous.
+// pointer_room selects the bounded room on the current viewed storey. The legacy
+// reveal flag is reserved for native curtain peeks; it is never a drag-wide cut.
 scene_snapshot capture_camera_reusing( avatar &you, const map &here, scene_snapshot *previous,
-                                       int above, int below, bool cut_overhead );
+                                       int above, int below, bool cut_overhead,
+                                       bool reveal_visible_interiors = false, bool native_peek = false,
+                                       std::optional<tripoint_abs_ms> pointer_room = std::nullopt );
 } // namespace fp3d_snapshot
 #endif
 #endif // CATA_SRC_FP3D_SNAPSHOT_H

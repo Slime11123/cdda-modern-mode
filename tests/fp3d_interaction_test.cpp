@@ -11,9 +11,12 @@
 #include "game.h"
 #include "input.h"
 #include "item.h"
+#include "item_location.h"
+#include "sprite_alpha_mask.h"
 #include "map.h"
 #include "map_helpers.h"
 #include "monster.h"
+#include "melee.h"
 #include "npc.h"
 #include "player_helpers.h"
 #include "rng.h"
@@ -750,5 +753,197 @@ TEST_CASE( "fp3d_downspout_E_wheel_routes_only_native_climbing_actions",
     CHECK( you.get_moves() == initial_moves );
     CHECK( calendar::turn == initial_turn );
     CHECK( rng_get_engine() == initial_rng );
+}
+
+TEST_CASE( "fp3d_hover_prefers_a_visible_creature_over_the_tile_below_it",
+           "[fp3d][interaction][targeting]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( p, ter_str_id( "t_floor" ) );
+    spawn_test_monster( "mon_zombie", p );
+    fp3d_snapshot::prepare_view( you, here );
+
+    // Pointing at the standing actor's body: the floor of its own tile is
+    // reached at almost the same depth, so the actor must still win the pick.
+    for( const int pitch : { 30, 40, 45 } ) {
+        CAPTURE( pitch );
+        const auto target = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, pitch );
+        REQUIRE( target );
+        CHECK( target->type == fp3d_targeting::kind::creature );
+        CHECK( target->id == "mon_zombie" );
+        CHECK( target->position == here.get_abs( p ) );
+    }
+
+    // Aiming steeply past the actor's feet reaches the floor first, and there
+    // the ordinary tile pick is kept: the creature is only preferred where its
+    // silhouette is really under the ray.
+    const auto feet = fp3d_targeting::ray( fp3d_snapshot::capture( you, here ), 0, 60 );
+    REQUIRE( feet );
+    CHECK( feet->type == fp3d_targeting::kind::terrain );
+}
+
+TEST_CASE( "pointer_melee_eligibility_uses_native_range_path_and_perception",
+           "[fp3d][interaction][combat][pointer_melee]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto origin = you.pos_bub( here );
+    const bool diagonal = GENERATE( false, true );
+    monster &zed = spawn_test_monster( "mon_zombie", origin + tripoint_rel_ms( diagonal ? 1 : 0, -1, 0 ) );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    const auto before_rng = rng_get_engine();
+    const int before_moves = you.get_moves();
+    for( int n = 0; n < 100; ++n ) {
+        CHECK( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    }
+    CHECK( you.get_moves() == before_moves );
+    CHECK( rng_get_engine() == before_rng );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, origin ) );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) + tripoint_rel_ms::above ) );
+    zed.setpos( here, origin + tripoint_rel_ms( 0, -2, 0 ) );
+    fp3d_snapshot::prepare_view( you, here );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    item polearm( itype_id( "pike" ) );
+    you.wield( polearm );
+    REQUIRE( you.get_wielded_item()->reach_range( you ) >= 2 );
+    CHECK( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    const auto between = origin + tripoint_rel_ms::north;
+    here.ter_set( between, ter_str_id( "t_wall_glass" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( you.sees( here, zed ) );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    here.ter_set( between, ter_str_id( "t_wall" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    here.ter_set( between, ter_str_id( "t_floor" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    zed.friendly = -1;
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    zed.friendly = 0;
+    you.add_effect( efftype_id( "blind" ), 1_minutes );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+    you.remove_effect( efftype_id( "blind" ) );
+    zed.set_hp( 0 );
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, zed.pos_bub( here ) ) );
+}
+
+TEST_CASE( "pointer_melee_one_explicit_attack_does_not_move_or_attack_a_stale_target",
+           "[fp3d][interaction][combat][pointer_melee]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    g->set_safe_mode( SAFE_MODE_OFF );
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const bool reach = GENERATE( false, true );
+    if( reach ) { item polearm( itype_id( "pike" ) );
+    you.wield( polearm ); }
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms( 0, reach ? -2 : -1, 0 );
+    monster &zed = spawn_test_monster( "mon_zombie", p );
+    monster &other = spawn_test_monster( "mon_zombie", you.pos_bub( here ) + tripoint_rel_ms::east );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( fp3d_interaction::can_quick_melee( you, here, p ) );
+    you.set_moves( 1000 );
+    const auto origin = you.pos_abs();
+    const int hp = other.get_hp();
+    const auto turn = calendar::turn;
+    melee::clear_stats();
+    REQUIRE( fp3d_interaction::melee( you, here, p ) );
+    CHECK( melee::get_stats().attack_count == 1 );
+    CHECK( you.get_moves() < 1000 );
+    CHECK( you.pos_abs() == origin );
+    CHECK( calendar::turn == turn );
+    CHECK( other.get_hp() == hp );
+    zed.setpos( here, p + tripoint_rel_ms::west );
+    const int moves = you.get_moves();
+    CHECK_FALSE( fp3d_interaction::can_quick_melee( you, here, p ) );
+    CHECK_FALSE( fp3d_interaction::melee( you, here, p ) );
+    CHECK( you.get_moves() == moves );
+    CHECK( melee::get_stats().attack_count == 1 );
+    CHECK( you.pos_abs() == origin );
+}
+
+TEST_CASE( "pointer_sprite_alpha_rejects_padding_and_preserves_hole_contours",
+           "[fp3d][pointer_melee]" )
+{
+    sprite_alpha_mask mask;
+    mask.width = mask.height = 5;
+    mask.pixels.resize( 25 );
+    for( int y = 1; y <= 3; ++y ) {
+        for( int x = 1; x <= 3; ++x ) { mask.pixels[y * 5 + x] = x != 2 || y != 2; }
+    }
+    CHECK_FALSE( mask.opaque( 0, 0 ) );
+    CHECK_FALSE( mask.opaque( 2, 2 ) );
+    CHECK_FALSE( mask.opaque( -1, 2 ) );
+    CHECK( mask.opaque( 1, 1 ) );
+    int edges = 0;
+    mask.edges( 0, 0, 5, 5, [&]( int, int, int, int ) { ++edges; } );
+    CHECK( edges == 16 ); // Twelve exterior edges plus the four around the hole.
+}
+
+TEST_CASE( "pointer_melee_overhead_billboard_pick_matches_scale_rotation_and_zoom",
+           "[fp3d][pointer_melee][ray]" )
+{
+    using namespace fp3d_snapshot;
+    scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 10000, -10000, 4 );
+    cell floor;
+    floor.position = scene.origin + tripoint_rel_ms( 2, -1, 0 );
+    floor.terrain = "t_floor";
+    floor.kind = terrain_kind::floor;
+    scene.cells.push_back( floor );
+    sprite image;
+    image.kind = sprite_kind::monster;
+    image.id = "pointer_test_sprite";
+    image.position = floor.position;
+    image.height = 1.6f;
+    image.display_scale = GENERATE( .5f, .8f, 1.3f );
+    scene.sprites.push_back( image );
+    fp3d_camera::orbit orbit;
+    orbit.azimuth = GENERATE( 0.f, 90.f, 225.f );
+    orbit.distance = GENERATE( 6.f, 16.f, 32.f );
+    const auto view = fp3d_camera::orbit_pose( orbit, 0, 0 );
+    const fp3d_camera::frustum camera( view.yaw, view.pitch, 1.6f );
+    const float height = image.height * image.display_scale;
+    const float rise = .04f + ( height - .04f ) * .6f * camera.up_y();
+    const float x = 2.f + ( height - .04f ) * .6f * camera.up_x();
+    const float y = -1.f + ( height - .04f ) * .6f * camera.up_z();
+    const auto projected = fp3d_camera::project( view, 1.6f, x, rise, y );
+    REQUIRE( projected );
+    const auto target = fp3d_targeting::ray( scene, view.yaw, view.pitch, view.eye, 100.f,
+                        ( *projected )[0], ( *projected )[1], 1.6f, true );
+    REQUIRE( target );
+    CHECK( target->type == fp3d_targeting::kind::creature );
+    CHECK( target->position == image.position );
+    const auto padding = fp3d_camera::project( view, 1.6f,
+                         x + height * .6f * camera.right_x(), rise,
+                         y + height * .6f * camera.right_z() );
+    REQUIRE( padding );
+    const auto outside = fp3d_targeting::ray( scene, view.yaw, view.pitch, view.eye, 100.f,
+                         ( *padding )[0], ( *padding )[1], 1.6f, true );
+    CHECK( ( !outside || outside->type != fp3d_targeting::kind::creature ) );
+}
+
+TEST_CASE( "pointer_melee_native_left_click_has_only_one_select_edge",
+           "[fp3d][pointer_melee]" )
+{
+    input_context context( "DEFAULTMODE", keyboard_mode::keycode );
+    context.register_action( "SELECT" );
+    context.register_action( "CLICK_AND_DRAG" );
+    CHECK( context.input_to_action( input_event( MouseInput::LeftButtonPressed, input_event_t::mouse ) ) == "CLICK_AND_DRAG" );
+    CHECK( context.input_to_action( input_event( MouseInput::LeftButtonReleased, input_event_t::mouse ) ) == "SELECT" );
 }
 #endif

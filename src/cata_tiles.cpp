@@ -2,6 +2,8 @@
 #include "cata_tiles.h"
 #if defined(ENABLE_FP3D)
 #include "fp3d_materials.h"
+#include "fp3d_interaction.h"
+#include "cata_scope_helpers.h"
 #include "fp3d_compositor.h"
 #endif
 
@@ -377,6 +379,10 @@ void cata_tiles::load_tileset( const std::string &tileset_id, const bool prechec
         fp3d_materials::release();
     }
 #endif
+#if defined(ENABLE_FP3D)
+    monster_sprites.clear();
+    last_monster_hover.reset();
+#endif
     tileset_ptr = cache.load_tileset( tileset_id, renderer, precheck, force, pump_events, terrain );
 #if defined(ENABLE_FP3D)
     if( fp3d_primary ) {
@@ -492,6 +498,29 @@ void tileset_cache::loader::copy_surface_to_texture( const SDL_Surface_Ptr &surf
     const std::shared_ptr<SDL_Texture> texture_ptr = CreateTextureFromSurface( renderer, surf );
     cata_assert( texture_ptr );
 
+    std::shared_ptr<sprite_alpha_mask> alpha;
+#if defined(ENABLE_FP3D)
+    if( &target == &ts.tile_values ) {
+        alpha = std::make_shared<sprite_alpha_mask>();
+        alpha->width = surf->w;
+        alpha->height = surf->h;
+        alpha->pixels.resize( surf->w * surf->h );
+        Uint32 key = 0;
+        const bool keyed = SDL_GetSurfaceColorKey( surf.get(), &key );
+        Uint8 kr = 0, kg = 0, kb = 0, ka = 0;
+        if( keyed ) {
+            SDL_GetRGBA( key, SDL_GetPixelFormatDetails( surf->format ), SDL_GetSurfacePalette( surf.get() ),
+                         &kr, &kg, &kb, &ka );
+        }
+        for( int y = 0; y < surf->h; ++y ) {
+            for( int x = 0; x < surf->w; ++x ) {
+                Uint8 r, g, b, a = 0;
+                SDL_ReadSurfacePixel( surf.get(), x, y, &r, &g, &b, &a );
+                alpha->pixels[y * surf->w + x] = a >= 32 && !( keyed && r == kr && g == kg && b == kb );
+            }
+        }
+    }
+#endif
     for( const SDL_Rect rect : input_range ) {
         cata_assert( offset.x % sprite_width == 0 );
         cata_assert( offset.y % sprite_height == 0 );
@@ -503,6 +532,7 @@ void tileset_cache::loader::copy_surface_to_texture( const SDL_Surface_Ptr &surf
         cata_assert( index < target.size() );
         cata_assert( target[index].dimension() == std::make_pair( 0, 0 ) );
         target[index] = texture( texture_ptr, rect );
+        target[index].set_alpha( alpha );
     }
 }
 
@@ -1377,6 +1407,11 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
 #else
     constexpr bool skip_covered_map = false;
 #endif
+#if defined(ENABLE_FP3D)
+    monster_sprites.clear();
+    drawing_monster = nullptr;
+    monster_viewport = { dest.x, dest.y, width, height };
+#endif
     if( !skip_covered_map ) {
         //set clipping to prevent drawing over stuff we shouldn't
         SDL_Rect clipRect = {dest.x, dest.y, width, height};
@@ -2068,9 +2103,97 @@ void cata_tiles::draw( const point &dest, const tripoint_bub_ms &center, int wid
         }
     }
 
+#if defined(ENABLE_FP3D)
+    draw_monster_hover();
+#endif
     printErrorIf( !SDL_SetRenderClipRect( renderer.get(), nullptr ),
                   "SDL_SetRenderClipRect failed" );
 }
+
+#if defined(ENABLE_FP3D)
+std::pair<float, float> cata_tiles::monster_sprite_hit::source_point( const point &pixel ) const
+{
+    const float radians = -angle * 3.14159265358979323846f / 180.f;
+    const float x = pixel.x + .5f - rect.x - rect.w * .5f;
+    const float y = pixel.y + .5f - rect.y - rect.h * .5f;
+    float u = ( x * std::cos( radians ) - y * std::sin( radians ) ) / rect.w + .5f;
+    float v = ( x * std::sin( radians ) + y * std::cos( radians ) ) / rect.h + .5f;
+    if( flip & SDL_FLIP_HORIZONTAL ) { u = 1.f - u; }
+    if( flip & SDL_FLIP_VERTICAL ) { v = 1.f - v; }
+    return { u, v };
+}
+
+std::optional<tripoint_abs_ms> cata_tiles::monster_at_pixel( const point &pixel ) const
+{
+    if( fp3d_compositor::view_3d() || !fp3d_compositor::world_pointer_input() ||
+        pixel.x < monster_viewport.x || pixel.y < monster_viewport.y ||
+        pixel.x >= monster_viewport.x + monster_viewport.w ||
+        pixel.y >= monster_viewport.y + monster_viewport.h ) { return std::nullopt; }
+    map &here = get_map();
+    for( auto it = monster_sprites.rbegin(); it != monster_sprites.rend(); ++it ) {
+        const auto [u, v] = it->source_point( pixel );
+        if( !it->art.opaque( u, v ) ) { continue; }
+        const auto p = here.get_bub( it->position );
+        const Creature *critter = get_creature_tracker().creature_at( p, true );
+        if( critter == it->identity && !critter->is_dead_state() &&
+            get_avatar().sees( here, *critter ) ) { return it->position; }
+    }
+    return std::nullopt;
+}
+
+bool cata_tiles::update_monster_hover( const point &pixel )
+{
+    const auto hovered = monster_at_pixel( pixel );
+    const bool changed = hovered != last_monster_hover;
+    last_monster_hover = hovered;
+    return changed;
+}
+
+void cata_tiles::draw_monster_hover()
+{
+    point mouse;
+    MousePositionPixels( &mouse.x, &mouse.y );
+    last_monster_hover = monster_at_pixel( mouse );
+    if( !last_monster_hover ) { return; }
+    const SDL_FColor color = fp3d_interaction::can_quick_melee( get_avatar(), get_map(),
+                             get_map().get_bub( *last_monster_hover ) ) ?
+                             SDL_FColor{ 1.f, .12f, .12f, 1.f } : SDL_FColor{ 1.f, 1.f, 1.f, 1.f };
+    std::vector<SDL_Vertex> vertices;
+    std::vector<int> indices;
+    for( const auto &hit : monster_sprites ) {
+        if( hit.position != *last_monster_hover ) { continue; }
+        const auto [w, h] = hit.art.dimension();
+        const float radians = hit.angle * 3.14159265358979323846f / 180.f;
+        const auto screen = [&]( float x, float y ) {
+            float u = x / w;
+            float v = y / h;
+            if( hit.flip & SDL_FLIP_HORIZONTAL ) { u = 1.f - u; }
+            if( hit.flip & SDL_FLIP_VERTICAL ) { v = 1.f - v; }
+            x = ( u - .5f ) * hit.rect.w;
+            y = ( v - .5f ) * hit.rect.h;
+            return SDL_FPoint{ hit.rect.x + hit.rect.w * .5f + x * std::cos( radians ) - y * std::sin( radians ),
+                               hit.rect.y + hit.rect.h * .5f + x * std::sin( radians ) + y * std::cos( radians ) };
+        };
+        hit.art.alpha_edges( [&]( int x1, int y1, int x2, int y2 ) {
+            const SDL_FPoint a = screen( x1, y1 );
+            const SDL_FPoint b = screen( x2, y2 );
+            const float len = std::hypot( b.x - a.x, b.y - a.y );
+            if( len < .001f ) { return; }
+            const float dx = -( b.y - a.y ) / len;
+            const float dy = ( b.x - a.x ) / len;
+            const int first = vertices.size();
+            vertices.push_back( { { a.x + dx, a.y + dy }, color, {} } );
+            vertices.push_back( { { b.x + dx, b.y + dy }, color, {} } );
+            vertices.push_back( { { b.x - dx, b.y - dy }, color, {} } );
+            vertices.push_back( { { a.x - dx, a.y - dy }, color, {} } );
+            indices.insert( indices.end(), { first, first + 1, first + 2, first, first + 2, first + 3 } );
+        } );
+    }
+    if( !indices.empty() ) {
+        SDL_RenderGeometry( renderer.get(), nullptr, vertices.data(), vertices.size(), indices.data(), indices.size() );
+    }
+}
+#endif
 
 void cata_tiles::set_draw_cache_dirty()
 {
@@ -3257,6 +3380,22 @@ bool cata_tiles::draw_sprite_at(
         ret = sprite_tex->render_copy_ex( renderer, &destination, 0, nullptr, SDL_FLIP_NONE );
     }
 
+#if defined(ENABLE_FP3D)
+    if( drawing_monster && !collecting_3d_overlays ) {
+        double angle = 0;
+        SDL_FlipMode flip = SDL_FLIP_NONE;
+        if( rotate_sprite ) {
+            if( rota == -1 ) { flip = SDL_FLIP_HORIZONTAL; }
+            else if( !is_isometric() ) {
+                if( rota % 4 == 1 ) { angle = -90; }
+                if( rota % 4 == 3 ) { angle = 90; }
+                if( rota % 4 == 2 ) { flip = static_cast<SDL_FlipMode>( SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL ); }
+            }
+        }
+        monster_sprites.push_back( { drawing_monster->pos_abs(), drawing_monster,
+                                    *tileset_ptr->get_tile( sprite_index ), destination, angle, flip } );
+    }
+#endif
     printErrorIf( ret != 0, "RenderTextureRotatedPixels() failed" );
     // this reference passes all the way back up the call chain back to
     // cata_tiles::draw() here.draw_points_cache[z][row][col].com.height_3d
@@ -4248,6 +4387,10 @@ bool cata_tiles::draw_critter_at( const tripoint_bub_ms &p, lit_level ll, int &h
             } else if( m->facing == FacingDirection::LEFT ) {
                 rot_facing = -1;
             }
+#if defined(ENABLE_FP3D)
+            drawing_monster = !collecting_3d_overlays && !fp3d_compositor::active() ? m : nullptr;
+            on_out_of_scope reset_drawing_monster( [&]() { drawing_monster = nullptr; } );
+#endif
             if( rot_facing >= -1 ) {
                 std::string chosen_id = m->type->id.str();
                 if( m->has_effect( effect_ridden ) ) {
@@ -4512,11 +4655,11 @@ void cata_tiles::draw_zlevel_overlay( const tripoint_bub_ms &p, const lit_level 
     SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_NONE );
 }
 
-void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bounds,
+bool cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bounds,
         const std::vector<std::pair<std::string, std::string>> &gear )
 {
     if( !tileset_ptr || bounds.w <= 0 || bounds.h <= 0 ) {
-        return;
+        return false;
     }
 
     struct preview_sprite {
@@ -4535,6 +4678,7 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
         if( !found ) {
             return false;
         }
+        const size_t previous = sprites.size();
         const tile_type &tile = found->tile();
         const auto add_list = [&]( const weighted_int_list<std::vector<int>> &list ) {
             const std::vector<int> *indices = list.pick( 0 );
@@ -4554,7 +4698,7 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
         };
         add_list( tile.bg );
         add_list( tile.fg );
-        return true;
+        return sprites.size() != previous;
     };
 
     const std::vector<trait_id> appearance_overrides = ch.get_functioning_mutations(
@@ -4568,6 +4712,10 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
         }
     } else {
         add_tile( appearance_overrides.front().obj().override_look->id );
+    }
+
+    if( sprites.empty() ) {
+        return false;
     }
 
     const auto overlays = appearance_overrides.empty() ?
@@ -4589,10 +4737,6 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
             }
         }
     }
-    if( sprites.empty() ) {
-        return;
-    }
-
     float min_x = sprites.front().x;
     float min_y = sprites.front().y;
     float max_x = sprites.front().x + sprites.front().w;
@@ -4627,6 +4771,7 @@ void cata_tiles::draw_character_preview( const Character &ch, const SDL_Rect &bo
         sprite.image->render_copy_ex( renderer, &dest, 0, nullptr, SDL_FLIP_NONE );
     }
     SDL_SetRenderClipRect( renderer.get(), had_clip ? &previous_clip : nullptr );
+    return true;
 }
 
 void cata_tiles::draw_entity_with_overlays( const Character &ch, const tripoint_bub_ms &p,

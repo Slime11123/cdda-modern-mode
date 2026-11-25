@@ -60,6 +60,8 @@ float overhead_distance();
 // The native tile under the mouse cursor inside the 3D world viewport. Only
 // natively visible, non-facade cells on the avatar's own storey qualify.
 std::optional<tripoint_abs_ms> pointer_tile();
+std::optional<tripoint_abs_ms> pointer_monster( bool fresh = false );
+bool world_pointer_input();
 bool overhead_tile_visible( const tripoint_abs_ms &position );
 // Overhead right-click: the 3D profile binds the right button to aiming, so the
 // native secondary-select binding can never arrive. The compositor owns the
@@ -68,6 +70,8 @@ bool overhead_tile_visible( const tripoint_abs_ms &position );
 bool take_secondary_select( point *mouse = nullptr );
 std::optional<tripoint_abs_ms> take_secondary_select_target();
 bool modern_2d_input();
+bool right_camera_dragging();
+void set_curtain_peek( std::optional<tripoint_abs_ms> window, const point &direction = point::zero );
 bool modern_2d_world();
 bool modern_2d_overlay_open();
 // Shared modern interfaces, independent of 3D scene capture and movement controls.
@@ -86,6 +90,17 @@ bool menu_text_input();
 bool covers_map( const tripoint_abs_ms &center );
 float heading();
 void set_blueprint( std::optional<fp3d_scene::blueprint> preview );
+struct pickup_highlight {
+    enum class kind { furniture, vehicle, item };
+    kind type;
+    tripoint_abs_ms tile;
+    std::string id;
+    std::string variant;
+    bool operator==( const pickup_highlight &other ) const {
+        return type == other.type && tile == other.tile && id == other.id && variant == other.variant;
+    }
+};
+void set_pickup_highlight( std::optional<pickup_highlight> source );
 bool turn_based();
 std::vector<std::string> hud_lines();
 // Borrowed until the next HUD/scene publication or compositor reset.

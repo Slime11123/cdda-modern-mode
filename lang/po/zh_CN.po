@@ -48156,6 +48156,30 @@ msgstr "<npcname>的%s被后坐力弄伤了！"
 msgid "Steadiness"
 msgstr "稳定度"
 
+#: src/ranged.cpp
+msgid "Shot parameters"
+msgstr "射击参数"
+
+#: src/ranged.cpp
+msgid "Target self"
+msgstr "对准自身"
+
+#: src/ranged.cpp
+msgid "Cannot fire"
+msgstr "无法射击"
+
+#: src/ranged.cpp
+msgid "Out of range"
+msgstr "超出射程"
+
+#: src/ranged.cpp
+msgid "Unload after quitting"
+msgstr "退出后卸下弹药"
+
+#: src/ranged.cpp
+msgid "Keep loaded after quitting"
+msgstr "退出后保持装填"
+
 #: src/ranged.cpp:1766 src/ranged.cpp:3625
 msgid "Immediate"
 msgstr "立即"

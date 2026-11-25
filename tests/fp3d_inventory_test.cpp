@@ -230,6 +230,7 @@ TEST_CASE( "fp3d_nearby_vehicle_cargo_uses_native_item_locations", "[fp3d][inven
     REQUIRE( cart );
     const auto cargo = here.veh_at( p ).cargo();
     REQUIRE( cargo );
+    cargo->items().clear();
     REQUIRE( cart->add_item( here, cargo->part(), item( itype_id( "rock" ) ) ) );
     here.build_map_cache( 0 );
     here.update_visibility_cache( 0 );
@@ -323,6 +324,7 @@ TEST_CASE( "fp3d_nearby_transfers_use_native_drop_and_move_activities", "[fp3d][
     REQUIRE( cart );
     const auto cargo = here.veh_at( north ).cargo();
     REQUIRE( cargo );
+    cargo->items().clear();
     here.add_item_or_charges( south, item( itype_id( "rock" ) ) );
     here.build_map_cache( 0 );
     here.update_visibility_cache( 0 );
@@ -528,6 +530,91 @@ TEST_CASE( "fp3d_precise_pocket_survives_activity_reload_without_falling_back",
     const int after_transfer = you.get_moves();
     CHECK_FALSE( fp3d_inventory::execute( action, you, here ) );
     CHECK( you.get_moves() == after_transfer );
+}
+
+TEST_CASE( "fp3d_batch_vehicle_transfer_does_not_drop_items_that_cannot_fit",
+           "[fp3d][inventory]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const tripoint_bub_ms origin( 65, 65, 0 );
+    const auto destination = origin + tripoint_rel_ms::north;
+    you.setpos( here, origin );
+    auto *cart = here.add_vehicle( vproto_id( "shopping_cart" ), destination, 0_degrees, 100, 0 );
+    REQUIRE( cart );
+    const auto cargo = here.veh_at( destination ).cargo();
+    REQUIRE( cargo );
+    cargo->items().clear();
+    item &large = here.add_item_or_charges( origin, item( itype_id( "arc_furnace" ) ) );
+    item &small = here.add_item_or_charges( origin, item( itype_id( "bandages" ) ) );
+    REQUIRE_FALSE( large.is_null() );
+    REQUIRE_FALSE( small.is_null() );
+    REQUIRE( cargo->items().amount_can_fit( large ) == 0 );
+    REQUIRE( cargo->items().amount_can_fit( small ) >= 1 );
+    const item_location large_loc( map_cursor( origin ), &large );
+    here.build_map_cache( 0 );
+    here.update_visibility_cache( 0 );
+
+    fp3d_inventory::operation action;
+    action.kind = fp3d_inventory::operation_kind::place;
+    action.destination_tile = here.get_abs( destination );
+    action.to_vehicle = true;
+    action.best_effort = true;
+    action.items = { { large_loc, 1 }, { item_location( map_cursor( origin ), &small ), 1 } };
+    REQUIRE( fp3d_inventory::execute( action, you, here ) );
+    process_activity( you );
+
+    CHECK( large_loc );
+    CHECK( here.i_at( origin ).size() == 1 );
+    CHECK( here.i_at( destination ).empty() );
+    REQUIRE( cargo->items().size() == 1 );
+    CHECK( cargo->items().begin()->typeId() == itype_id( "bandages" ) );
+}
+
+TEST_CASE( "fp3d_batch_insert_leaves_items_that_no_longer_fit_and_continues",
+           "[fp3d][inventory][pockets]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const tripoint_bub_ms origin( 65, 65, 0 );
+    you.setpos( here, origin );
+    const auto spawn = [&]( const tripoint_bub_ms &position, const char *id ) {
+        auto &object = here.add_item_or_charges( position, item( itype_id( id ) ) );
+        return item_location( map_cursor( position ), &object );
+    };
+    auto can = spawn( origin, "test_watertight_open_sealed_multipocket_container_2x250ml" );
+    auto first = spawn( origin + tripoint_rel_ms::north, "bandages" );
+    auto rock = spawn( origin + tripoint_rel_ms::east, "rock" );
+    auto last = spawn( origin + tripoint_rel_ms::south, "bandages" );
+    auto oversized = spawn( origin + tripoint_rel_ms::west, "backpack" );
+    auto pockets = can->get_all_contained_pockets();
+    REQUIRE( pockets.size() == 2 );
+    REQUIRE( pockets[0]->can_contain( *rock ).success() );
+    REQUIRE_FALSE( pockets[0]->can_contain( *oversized ).success() );
+    here.build_map_cache( 0 );
+    here.update_visibility_cache( 0 );
+
+    fp3d_inventory::operation action;
+    action.kind = fp3d_inventory::operation_kind::insert;
+    action.destination = can;
+    action.destination_pocket = 0;
+    action.best_effort = true;
+    action.items = { { oversized, 1 }, { first, 1 }, { rock, 1 }, { last, 1 } };
+    REQUIRE( fp3d_inventory::execute( action, you, here ) );
+    process_activity( you );
+
+    CHECK( here.i_at( origin + tripoint_rel_ms::west ).size() == 1 );
+    CHECK( here.i_at( origin + tripoint_rel_ms::east ).size() == 1 );
+    CHECK( here.i_at( origin + tripoint_rel_ms::north ).empty() );
+    CHECK( here.i_at( origin + tripoint_rel_ms::south ).empty() );
+    CHECK( pockets[0]->size() == 2 );
+    CHECK( pockets[1]->empty() );
 }
 
 TEST_CASE( "fp3d_precise_pocket_keeps_partial_charges_and_revalidates_target",

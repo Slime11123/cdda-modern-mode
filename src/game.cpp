@@ -2588,6 +2588,11 @@ bool game::handle_mouseview( input_context &ctxt, std::string &action )
     do {
         action = ctxt.handle_input();
         if( action == "MOUSE_MOVE" ) {
+#if defined(TILES) && defined(ENABLE_FP3D)
+            if( tilecontext && tilecontext->update_monster_hover( ctxt.get_raw_input().mouse_pos ) ) {
+                invalidate_main_ui_adaptor();
+            }
+#endif
             const std::optional<tripoint_bub_ms> mouse_pos = ctxt.get_coordinates( w_terrain,
                     ter_view_p.raw().xy(),
                     true );
@@ -4336,9 +4341,8 @@ void game::draw( ui_adaptor &ui )
     // Publish before any native map drawing so the first 3D frame can skip it.
     if( capture_3d ) {
         // The overhead camera asks the capture to lift the avatar's own ceiling
-        // and the storeys above it. That is a presentation cut performed while
-        // the snapshot is built, so the renderer and the pointer ray can never
-        // disagree about which surfaces exist.
+        // and the storeys above it. Live camera geometry retains those surfaces;
+        // rendering and picking share the same cut mask for instant restoration.
         fp3d_compositor::publish_camera( u, here, fp3d_compositor::overhead() );
     } else if( fp3d_compositor::uses_hud() &&
                fp3d_compositor::controls() != fp3d_input::mode::first_person_3d ) {
@@ -6757,6 +6761,14 @@ void game::peek( const tripoint_bub_ms &p )
     tripoint_bub_ms center = p;
     here.build_map_cache( p.z() );
     here.update_visibility_cache( p.z() );
+#if defined(TILES) && defined(ENABLE_FP3D)
+    const bool curtain_preview = fp3d_compositor::view_3d() &&
+                                 here.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_WINDOW_CURTAINS, p ) &&
+                                 !here.ter( p )->close;
+    if( curtain_preview ) {
+        fp3d_compositor::set_curtain_peek( here.get_abs( p ), ( p - prev ).raw().xy() );
+    }
+#endif
 
     look_around_result result;
     const look_around_params looka_params = { true, center, center, false, false, true, true};
@@ -6768,6 +6780,11 @@ void game::peek( const tripoint_bub_ms &p )
         result = look_around( looka_params );
         u.setpos( here, prev, false );
     }
+#if defined(TILES) && defined(ENABLE_FP3D)
+    if( curtain_preview ) {
+        fp3d_compositor::set_curtain_peek( std::nullopt );
+    }
+#endif
 
     if( result.peek_action ) {
         if( *result.peek_action == PA_BLIND_THROW ) {

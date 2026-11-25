@@ -1,3 +1,4 @@
+#include "fp3d_survival_style.h"
 #include "fp3d_trade.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
@@ -27,7 +28,7 @@ namespace fp3d_trade
 {
 namespace
 {
-const ImVec4 gold( 1, .86f, .38f, 1 );
+const ImVec4 gold = fp3d_survival_style::color( fp3d_survival_style::heading );
 
 void set_font_scale( float scale )
 {
@@ -46,6 +47,8 @@ window::window( trade_ui &trade, int scale_percent ) :
     background( fp3d_compositor::copy_view() )
 {
     force_to_back = true;
+    use_default_theme = false;
+    window_flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
     ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     fp3d_input::world_gestures().cancel();
     fp3d_compositor::set_input_context( "NPC_TRADE_MOUSE" );
@@ -177,31 +180,12 @@ void window::draw()
                 ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize,
                 ImVec2( 0, modern_2d ? 0 : 1 ), ImVec2( 1, modern_2d ? 1 : 0 ) );
     }
-    ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f,
-                          modern_2d ? 1.0f : .72f ) );
-    ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .045f, .043f, .038f, .48f ) );
-    ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
-    ImGui::PushStyleColor( ImGuiCol_TextDisabled, ImVec4( .70f, .64f, .48f, 1 ) );
-    ImGui::PushStyleColor( ImGuiCol_Border, ImVec4( .43f, .40f, .33f, .5f ) );
-    ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .12f, .115f, .10f, .74f ) );
-    ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( .43f, .32f, .17f, .85f ) );
-    ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( .65f, .46f, .20f, .9f ) );
-    ImGui::PushStyleColor( ImGuiCol_Header, ImVec4( .43f, .31f, .15f, .70f ) );
-    ImGui::PushStyleColor( ImGuiCol_HeaderHovered, ImVec4( .50f, .36f, .16f, .8f ) );
-    ImGui::PushStyleColor( ImGuiCol_HeaderActive, ImVec4( .65f, .46f, .20f, .9f ) );
-    ImGui::PushStyleColor( ImGuiCol_FrameBg, ImVec4( .12f, .115f, .10f, .65f ) );
-    ImGui::PushStyleColor( ImGuiCol_FrameBgHovered, ImVec4( .30f, .25f, .17f, .8f ) );
-    ImGui::PushStyleColor( ImGuiCol_PopupBg, ImVec4( .045f, .04f, .03f, .97f ) );
-    ImGui::PushStyleColor( ImGuiCol_CheckMark, gold );
-    ImGui::PushStyleColor( ImGuiCol_SliderGrab, ImVec4( .72f, .53f, .24f, 1 ) );
-    ImGui::PushStyleColor( ImGuiCol_SliderGrabActive, gold );
-    ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( .38f, .29f, .16f, .9f ) );
+    const fp3d_survival_style::scoped_theme theme( fp3d_compositor::view_3d() ? .95f : 1.f );
     ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 16 * scale, 12 * scale ) );
     ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 8 * scale, 6 * scale ) );
     ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, 4 * scale );
     cataimgui::window::draw();
     ImGui::PopStyleVar( 3 );
-    ImGui::PopStyleColor( 18 );
 }
 
 void window::quantity( size_t side, const row &entry, int count )
@@ -227,10 +211,10 @@ void window::card( size_t side, const row &entry, bool compact )
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
     auto *draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled( min, max, entry.chosen ? IM_COL32( 110, 79, 36, 190 ) :
-                         ImGui::IsItemHovered() ? IM_COL32( 70, 60, 43, 180 ) : IM_COL32( 20, 19, 17, 120 ), 3 );
+    draw->AddRectFilled( min, max, entry.chosen ? fp3d_survival_style::selected :
+                         ImGui::IsItemHovered() ? fp3d_survival_style::hover : fp3d_survival_style::item, 3 );
     draw->AddRect( min, max, entry.chosen || focused[side] == entry.location ?
-                   IM_COL32( 220, 170, 85, 255 ) : IM_COL32( 105, 95, 75, 100 ), 3 );
+                   fp3d_survival_style::accent : fp3d_survival_style::panel, 3 );
     auto icon = icons.find( entry.icon );
     if( icon == icons.end() ) {
         scoped_rng_restore restore_rng;
@@ -244,7 +228,8 @@ void window::card( size_t side, const row &entry, bool compact )
         draw->AddImage( ( ImTextureID )( intptr_t )icon->second.get(),
                         ImVec2( min.x + 24 * scale, min.y + 4 * scale ),
                         ImVec2( min.x + 72 * scale, min.y + 52 * scale ), ImVec2( 0, 0 ), ImVec2( 1, 1 ),
-                        enabled ? IM_COL32_WHITE : IM_COL32( 145, 145, 145, 150 ) );
+                        enabled ? IM_COL32_WHITE : ( fp3d_survival_style::text & 0x00FFFFFFu ) |
+                        ( 150u << IM_COL32_A_SHIFT ) );
     }
     const ImU32 color = ImGui::GetColorU32( enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled );
     const ImVec4 clip( min.x + 4 * scale, min.y, max.x - 4 * scale, max.y );
@@ -407,7 +392,7 @@ void window::draw_controls()
     const auto balance = trader.will_exchange_items_freely() ? "自由交换" :
                          std::string( trade._balance >= 0 ? "对方欠你 " : "你需补足 " ) + format_money( std::abs( trade._balance ) );
     ImGui::SameLine();
-    ImGui::TextColored( npc_trading::npc_will_accept_trade( trader, trade._balance ) ? gold : ImVec4( 1, .5f, .35f, 1 ),
+    ImGui::TextColored( npc_trading::npc_will_accept_trade( trader, trade._balance ) ? gold : fp3d_survival_style::color( fp3d_survival_style::warning ),
                         "%s", balance.c_str() );
     if( ImGui::Button( "清空选择", ImVec2( 120 * scale, 34 * scale ) ) ) { pending = action::clear; }
     if( get_option<bool>( "CAPITALISM" ) ) {

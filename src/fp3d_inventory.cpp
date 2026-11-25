@@ -146,7 +146,7 @@ std::vector<use_option> use_options( const item_location &location, const avatar
     return result;
 }
 
-model capture( avatar &you, map &here, std::optional<tripoint_abs_ms> nearby_target )
+model capture( avatar &you, map &here, std::optional<tripoint_abs_ms> nearby_target, bool pickup_view )
 {
     model result;
     std::function<void( item_location, size_t, bool )> append;
@@ -168,7 +168,7 @@ model capture( avatar &you, map &here, std::optional<tripoint_abs_ms> nearby_tar
         for( item_pocket *pocket : object.get_all_contained_pockets() ) {
             ++pocket_index;
             if( !pocket->is_type( pocket_type::CONTAINER ) || ( near && ( pocket->sealed() ||
-                    !pocket->transparent() ) ) ) {
+                    ( !pickup_view && !nearby_target && !pocket->transparent() ) ) ) ) {
                 continue;
             }
             const size_t child_group = result.groups.size();
@@ -212,6 +212,15 @@ model capture( avatar &you, map &here, std::optional<tripoint_abs_ms> nearby_tar
             result.groups.push_back( { source + " (" + std::to_string( offset.x() ) + "," + std::to_string( offset.y() ) + ") / z=" + std::to_string( p.z() ), {}, 0, 0, true, {}, here.get_abs( p ), false } );
             result.groups[index].capacity_l = units::to_milliliter( here.max_volume( p ) ) / 1000.0f;
             result.groups[index].used_l = units::to_milliliter( objects.stored_volume() ) / 1000.0f;
+            if( here.has_furn( p ) ) {
+                const furn_id furniture = here.furn( p );
+                const bool open_storage = furniture->has_flag( ter_furn_flag::TFLAG_PLACE_ITEM ) &&
+                                          result.groups[index].capacity_l > 0 &&
+                                          here.can_put_items_ter_furn( p );
+                if( furniture->has_flag( ter_furn_flag::TFLAG_CONTAINER ) || open_storage ) {
+                    result.groups[index].source_sprite = furniture.id().str();
+                }
+            }
             for( item &object : objects ) {
                 append( item_location( map_cursor( p ), &object ), index, false );
             }
@@ -221,6 +230,7 @@ model capture( avatar &you, map &here, std::optional<tripoint_abs_ms> nearby_tar
                 result.groups.push_back( { "车辆 / " + cargo->vehicle().name + " / " + cargo->info().name(), {},
                                            units::to_milliliter( storage.max_volume() ) / 1000.0f,
                                            units::to_milliliter( storage.stored_volume() ) / 1000.0f, true, {}, here.get_abs( p ), true } );
+                result.groups[cargo_group].source_sprite = "vp_" + cargo->info().id.str();
                 for( item &object : storage ) {
                     append( item_location( vehicle_cursor( cargo->vehicle(), cargo->part_index() ), &object ),
                             cargo_group, false );
@@ -406,7 +416,15 @@ bool can_insert( const operation &action, avatar &you, const map &here, std::str
         }
     } else {
         for( const auto &part : action.items ) {
-            if( !action.destination->can_contain_directly( *part.first ).success() ) {
+            if( part.first.has_parent() && part.first.parent_item() == action.destination ) {
+                error = "物品已经在此容器内。";
+                return false;
+            }
+            item candidate( *part.first );
+            if( candidate.count_by_charges() ) {
+                candidate.charges = action.best_effort ? 1 : part.second;
+            }
+            if( !action.destination->can_contain_directly( candidate ).success() ) {
                 error = "目标容器无法容纳这件物品。";
                 return false;
             }
@@ -450,6 +468,52 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
                                         *action.follower_command ) ) {
             return fail( "此人物已变化、不可见或无法听从该命令，请刷新队友页。" );
         }
+        return true;
+    }
+    if( action.kind == operation_kind::insert && action.best_effort && action.items.size() > 1 ) {
+        operation batch = action;
+        batch.items.clear();
+        operation single = action;
+        for( const auto &part : action.items ) {
+            single.items = { part };
+            std::string reason;
+            if( can_insert( single, you, here, reason ) ) {
+                batch.items.push_back( part );
+            }
+        }
+        if( batch.items.empty() ) {
+            return fail( "选中的物品都无法放入目标容器。" );
+        }
+        const drop_locations eligible = batch.items;
+        batch.items.remove_if( [&]( const drop_location &part ) {
+            auto owner = part.first;
+            while( owner.has_parent() ) {
+                owner = owner.parent_item();
+                if( std::any_of( eligible.begin(), eligible.end(), [&]( const drop_location &other ) {
+                return owner == other.first;
+                } ) ) {
+                    return true;
+                }
+            }
+            return false;
+        } );
+        if( batch.items.size() < action.items.size() ) {
+            const auto count = action.items.size() - batch.items.size();
+            if( error ) {
+                *error = string_format( "%zu 项未单独转移。", count );
+            }
+        }
+        // Each item has already been checked. The activity rechecks fit against
+        // the current capacity before removing anything from its source.
+        for( const auto &part : batch.items ) {
+            auto source = part.first;
+            if( !avatar_action::check_stealing( you, *source ) ) {
+                return fail( "没有权限移动该物品。" );
+            }
+        }
+        you.assign_activity( insert_item_activity_actor( batch.destination, batch.items ) );
+        you.activity.values = { batch.destination_pocket };
+        you.activity.str_values = { "fp3d_partial_insert", batch.destination->typeId().str() };
         return true;
     }
     std::string insert_error;
@@ -548,7 +612,7 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
                     return fail( "请分别移动随身物品和附近物品。" );
                 }
             }
-            if( own ) {
+            if( own && !action.best_effort ) {
                 // Native drop handles worn layers, capacity, spill prompts and cost.
                 you.drop( action.items, target );
                 clear_slots_for( action.items );
@@ -557,7 +621,13 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
                 std::vector<int> quantities;
                 for( const auto &part : action.items ) {
                     if( !part.first->made_of_from_type( phase_id::SOLID ) || !part.first->is_owned_by( you, true ) ) {
+                        if( action.best_effort ) {
+                            continue;
+                        }
                         return fail( "此搬运方式只能移动有权使用的固体物品。" );
+                    }
+                    if( own && ( you.is_worn( *part.first ) || part.first == you.get_wielded_item() ) ) {
+                        continue;
                     }
                     if( !part.first.has_parent() && part.first.pos_abs() == *action.destination_tile &&
                         ( part.first.where_recursive() == item_location::type::vehicle ) == action.to_vehicle ) {
@@ -569,8 +639,17 @@ bool execute( const operation &action, avatar &you, map &here, std::string *erro
                 if( items.empty() ) {
                     return fail( "没有可移动的物品。" );
                 }
+                if( action.best_effort ) {
+                    // The actor consumes from the back. Preserve the caller's
+                    // order when deciding which items get the remaining space.
+                    std::reverse( items.begin(), items.end() );
+                    std::reverse( quantities.begin(), quantities.end() );
+                }
                 you.assign_activity( move_items_activity_actor( std::move( items ), std::move( quantities ),
                                      action.to_vehicle, target - you.pos_bub( here ) ) );
+                if( action.best_effort ) {
+                    you.activity.str_values = { "fp3d_keep_unmoved_items" };
+                }
             }
             return true;
         }

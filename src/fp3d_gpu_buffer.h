@@ -136,6 +136,7 @@ class upload_buffer
                                 Uint32 suffix_size ) {
             base_ = nullptr;
             range_count_ = 0;
+            merged_gap_bytes_ = 0;
             staged_ = 0;
             if( !staging_ || prefix.size > capacity_ || suffix_size > capacity_ - prefix.size ||
                 ( prefix.size == 0 && suffix_size == 0 ) || ( prefix.size && !prefix_data ) ||
@@ -213,6 +214,18 @@ class upload_buffer
             return base_ ? range_count_ : 0;
         }
 
+        Uint32 delta_prefix_upload_bytes() const {
+            Uint32 bytes = 0;
+            for( size_t i = 0; base_ && i < range_count_ && ranges_[i].offset < prefix_size_; ++i ) {
+                bytes += std::min( ranges_[i].size, prefix_size_ - ranges_[i].offset );
+            }
+            return bytes;
+        }
+
+        Uint32 delta_merged_gap_bytes() const {
+            return base_ ? merged_gap_bytes_ : 0;
+        }
+
         Uint32 delta_skipped_prefix_bytes() const {
             return base_ ? skipped_prefix_bytes_ : 0;
         }
@@ -284,11 +297,33 @@ class upload_buffer
         void add_range( Uint32 offset, Uint32 size ) {
             if( range_count_ ) {
                 auto &last = ranges_[range_count_ - 1];
-                if( last.offset + last.size == offset || range_count_ == ranges_.size() ) {
-                    // At the command budget, cover the remaining gaps with
-                    // the final copy rather than queuing unbounded transfers.
+                if( last.offset + last.size == offset ) {
                     last.size = offset + size - last.offset;
                     return;
+                }
+                if( range_count_ == ranges_.size() ) {
+                    // Keep the largest clean gaps when the copy budget is full.
+                    // Extending the final range alone can re-upload most of the buffer.
+                    Uint32 smallest_gap = offset - ( last.offset + last.size );
+                    size_t merge_at = range_count_ - 1;
+                    for( size_t i = 0; i + 1 < range_count_; ++i ) {
+                        const Uint32 gap = ranges_[i + 1].offset - ( ranges_[i].offset + ranges_[i].size );
+                        if( gap < smallest_gap ) {
+                            smallest_gap = gap;
+                            merge_at = i;
+                        }
+                    }
+                    merged_gap_bytes_ += smallest_gap;
+                    if( merge_at == range_count_ - 1 ) {
+                        last.size = offset + size - last.offset;
+                        return;
+                    }
+                    auto &first = ranges_[merge_at];
+                    const auto &second = ranges_[merge_at + 1];
+                    first.size = second.offset + second.size - first.offset;
+                    std::move( ranges_.begin() + merge_at + 2, ranges_.end(),
+                               ranges_.begin() + merge_at + 1 );
+                    --range_count_;
                 }
             }
             ranges_[range_count_++] = { offset, size };
@@ -312,6 +347,7 @@ class upload_buffer
         Uint32 next_size_ = 0;
         std::array<copy_range, 16> ranges_{};
         size_t range_count_ = 0;
+        Uint32 merged_gap_bytes_ = 0;
 };
 } // namespace fp3d_gpu
 #endif // CATA_SRC_FP3D_GPU_BUFFER_H

@@ -20,6 +20,8 @@
 #include "messages.h"
 #include "mission.h"
 #include "map.h"
+#include "monster.h"
+#include "npc.h"
 #include "vehicle.h"
 #include "veh_type.h"
 #include "vpart_position.h"
@@ -83,11 +85,14 @@ std::vector<data::message_entry> inspect( const avatar &you, const map &here,
 {
     const auto position = here.get_bub( target.position );
     const auto &visibility = here.get_visibility_variables_cache();
-    if( target.origin != you.pos_abs() || you.is_blind() || !here.inbounds( position ) ||
-        here.get_visibility( here.apparent_light_at( position, visibility ),
-                             visibility ) != visibility_type::CLEAR ) {
+    if( target.origin != you.pos_abs() || you.is_blind() || !here.inbounds( position ) ) {
         return {};
     }
+    // The tile itself must be clearly visible for terrain/furniture/item text,
+    // exactly as before. A creature gets its own rule further down.
+    const bool clearly_visible =
+        here.get_visibility( here.apparent_light_at( position, visibility ),
+                             visibility ) == visibility_type::CLEAR;
 
     const auto area_position = coords::project_to<coords::omt>( target.position );
     std::string area = uppercase_first_letter( overmap_buffer.ter( area_position )->get_name(
@@ -96,13 +101,49 @@ std::vector<data::message_entry> inspect( const avatar &you, const map &here,
         area = event->string_id;
     }
     std::vector<data::message_entry> lines{ { area, c_yellow } };
-    if( target.type == fp3d_targeting::kind::creature ) {
-        const Creature *creature = get_creature_tracker().creature_at( position );
-        if( creature && !creature->is_avatar() && you.sees( here, *creature ) ) {
-            lines.push_back( { creature->disp_name(), c_white } );
+    // A visible creature standing on the inspected tile is the primary subject,
+    // whether the pick landed on the actor itself or on the tile under it. Its
+    // name, wounds and attitude come from the native monster/NPC accessors
+    // only, so nothing is invented and nothing unseen is revealed. The
+    // visibility test is the same light-ignoring native check the 3D snapshot
+    // uses to decide that this actor is actually drawn, so the panel can never
+    // describe a creature the view does not show, and never hides one it does.
+    const Creature *creature = get_creature_tracker().creature_at( position, true );
+    bool described_creature = false;
+    if( creature && !creature->is_avatar() && you.Creature::sees( here, *creature, true ) ) {
+        described_creature = true;
+        lines.push_back( { creature->disp_name(), c_white } );
+        if( const monster *mon = creature->as_monster() ) {
+            nc_color bar_color = c_white;
+            std::string bar_text;
+            mon->get_HP_Bar( bar_color, bar_text );
+            if( !bar_text.empty() ) {
+                lines.push_back( { bar_text, bar_color } );
+            }
+            const std::pair<std::string, nc_color> attitude = mon->get_attitude();
+            if( !attitude.first.empty() ) {
+                lines.push_back( { attitude.first, attitude.second } );
+            }
+        } else if( creature->as_character() ) {
+            const auto bar = get_hp_bar( creature->get_hp(), creature->get_hp_max() );
+            lines.push_back( { bar.first, bar.second } );
+            if( const npc *guy = creature->as_npc() ) {
+                lines.push_back( { npc_attitude_name( guy->get_attitude() ), c_light_gray } );
+            }
         }
-    } else if( target.type == fp3d_targeting::kind::vehicle && target.vehicle_origin &&
-               target.vehicle_part >= 0 ) {
+        // Items the creature is standing on stay readable as secondary
+        // information instead of disappearing behind the actor.
+        const auto floor = here.maptile_at( position );
+        if( floor.get_item_count() > 0 && floor.get_field().displayed_field_type()->display_items &&
+            here.could_see_items( position, you ) ) {
+            std::string underfoot = floor.get_uppermost_item().tname();
+            if( floor.get_item_count() > 1 ) {
+                underfoot += " +" + std::to_string( floor.get_item_count() - 1 );
+            }
+            lines.push_back( { std::move( underfoot ), c_light_gray } );
+        }
+    } else if( clearly_visible && target.type == fp3d_targeting::kind::vehicle &&
+               target.vehicle_origin && target.vehicle_part >= 0 ) {
         const auto vp = here.veh_at( position );
         if( vp && vp->vehicle().pos_abs() == *target.vehicle_origin &&
             target.vehicle_part < vp->vehicle().part_count() ) {
@@ -115,7 +156,8 @@ std::vector<data::message_entry> inspect( const avatar &you, const map &here,
                 lines.push_back( { part.info().name(), part.is_broken() ? c_light_red : c_white } );
             }
         }
-    } else if( target.type == fp3d_targeting::kind::item && here.could_see_items( position, you ) ) {
+    } else if( clearly_visible && target.type == fp3d_targeting::kind::item &&
+               here.could_see_items( position, you ) ) {
         const auto tile = here.maptile_at( position );
         if( tile.get_item_count() > 0 && tile.get_field().displayed_field_type()->display_items ) {
             const item &object = tile.get_uppermost_item();
@@ -123,6 +165,12 @@ std::vector<data::message_entry> inspect( const avatar &you, const map &here,
                 lines.push_back( { object.tname(), c_white } );
             }
         }
+    }
+    // Terrain, furniture and the tile details keep the original rule: the
+    // avatar must be able to make out the tile itself. A creature the 3D view
+    // really draws is already named above, even in a dark room.
+    if( !clearly_visible ) {
+        return described_creature ? lines : std::vector<data::message_entry>{};
     }
     lines.push_back( { uppercase_first_letter( here.tername( position ) ), c_white } );
     lines.push_back( { here.ter( position ).obj().description.translated(), c_light_gray } );

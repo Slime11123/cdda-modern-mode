@@ -19,11 +19,19 @@ struct request {
     bool targeted_melee = false;
 };
 bool valid( const fp3d_targeting::target &target, const avatar &you, const map &here );
-// 3D directional actions are armed first, then resolved by E on the reticle.
+// 3D directional actions are armed first, then confirmed by the active view.
 bool begin_direction_selection( action_id action );
 void cancel_direction_selection();
+bool direction_selection_pending();
+bool direction_selection_accepts( const fp3d_targeting::target &target, const avatar &you,
+                                  const map &here );
+std::optional<request> confirm_direction_selection(
+    const std::optional<fp3d_targeting::target> &target, const avatar &you, const map &here,
+    bool by_mouse );
 std::string direction_selection_hint();
 
+// Read-only single-monster predicate shared by hover and click.
+bool can_quick_melee( const avatar &you, map &here, const tripoint_bub_ms &position );
 // Runs at the native action boundary, never from the renderer or input resolver.
 bool melee( avatar &you, map &here, const tripoint_bub_ms &position );
 // Resolve and fire on the native game thread, preserving native ballistics.
@@ -32,6 +40,7 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
         const avatar &you, const map &here );
 std::optional<request> resolve( const std::string &command,
                                 const std::optional<fp3d_targeting::target> &target, avatar &you, map &here );
+bool can_peek_window( const avatar &you, const map &here, const tripoint_bub_ms &position );
 bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &position,
                    bool targeted = false );
 std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &position,

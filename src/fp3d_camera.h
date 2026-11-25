@@ -99,6 +99,10 @@ pose orbit_pose( const orbit &view, float pivot_x, float pivot_y );
 std::optional<std::array<float, 3>> project( const pose &camera, float aspect,
         float x, float height, float z );
 
+// Intersect the pointer ray with an explicit scene-relative storey plane.
+std::optional<std::array<float, 2>> pointer_floor( const pose &camera, float aspect,
+        float ndc_x, float ndc_y, float height = 0 );
+
 // Game-thread-owned native vehicle pose; never retains vehicle/part pointers.
 struct rider_pose {
     double world_x = 0;

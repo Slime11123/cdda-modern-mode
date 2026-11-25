@@ -14,6 +14,9 @@
 #include "fp3d_quick_menu.h"
 #include "fp3d_snapshot.h"
 #include "game.h"
+#include "enums.h"
+#include "flag.h"
+#include "magic_enchantment.h"
 #include "gun_mode.h"
 #include "item.h"
 #include "item_location.h"
@@ -176,14 +179,34 @@ std::unique_ptr<activity_actor> deserialize_2d_interaction( JsonValue &data )
     return result;
 }
 
+bool can_quick_melee( const avatar &you, map &here, const tripoint_bub_ms &p )
+{
+    if( !here.inbounds( p ) || p.z() != you.posz() || you.is_dead_state() || you.is_blind() ||
+        fp3d_input::vehicle_controls() || you.has_flag( json_character_flag( "CANNOT_ATTACK" ) ) ||
+        you.has_active_mutation( trait_id( "SHELL2" ) ) ||
+        you.has_active_mutation( trait_id( "SHELL3" ) ) || you.has_effect( efftype_id( "incorporeal" ) ) ) {
+        return false;
+    }
+    const item_location weapon = you.get_wielded_item();
+    const int reach = weapon ? weapon->reach_range( you ) : std::max( 1,
+                      static_cast<int>( you.calculate_by_enchantment( 1, enchant_vals::mod::MELEE_RANGE_MODIFIER ) ) );
+    // Reject distant cells before doing native visibility/path work.
+    if( square_dist( you.pos_bub( here ), p ) > reach ) { return false; }
+    const Creature *critter = get_creature_tracker().creature_at( p, true );
+    return critter && critter->is_monster() && !critter->is_dead_state() &&
+           you.sees( here, *critter ) && you.is_targetable_creature( *critter, reach, true ) &&
+           ( reach != 1 || you.is_adjacent( critter, true ) );
+}
+
 bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
 {
-    Creature *critter = get_creature_tracker().creature_at( p );
+    Creature *critter = get_creature_tracker().creature_at( p, true );
     if( you.is_dead_state() || you.is_blind() || fp3d_input::vehicle_controls() ||
         you.has_active_mutation( trait_id( "SHELL2" ) ) ||
         you.has_active_mutation( trait_id( "SHELL3" ) ) || you.has_effect( efftype_id( "incorporeal" ) ) ||
         !here.inbounds( p ) || p.z() != you.posz() ||
-        square_dist( you.pos_bub( here ), p ) != 1 || !critter || critter->is_avatar() ||
+        ( square_dist( you.pos_bub( here ), p ) != 1 && !can_quick_melee( you, here, p ) ) ||
+        !critter || critter->is_avatar() ||
         critter->is_dead_state() || !you.sees( here, *critter ) ) {
         fp3d_input::world_gestures().cancel();
         return false;
@@ -204,7 +227,7 @@ bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
                                .default_color( c_light_red ).query().action == "YES";
         fp3d_input::world_gestures().cancel();
         if( !confirmed || you.pos_abs() != origin ||
-            get_creature_tracker().creature_at( p ) != critter ||
+            get_creature_tracker().creature_at( p, true ) != critter ||
             ( person && person->getID() != identity ) || critter->is_dead_state() ||
             !you.sees( here, *critter ) ) {
             return false;
@@ -221,6 +244,11 @@ bool melee( avatar &you, map &here, const tripoint_bub_ms &p )
     const tripoint_abs_ms impact_position = critter->pos_abs();
     // Native combat directly: a stunned movement command could redirect to
     // another tile, displace a pet or walk after the selected creature dies.
+    if( square_dist( you.pos_bub( here ), p ) > 1 ) {
+        // Native reach combat retains stamina, intervening-creature checks and costs.
+        you.reach_attack( p );
+        return you.get_moves() < moves;
+    }
     you.melee_attack( *critter, true );
     if( you.get_moves() >= moves ) {
         return false;
@@ -254,7 +282,9 @@ bool begin_direction_selection( action_id action )
         case ACTION_PICKUP:
         case ACTION_CHAT:
             pending_direction_action = action;
-            add_msg( m_info, "将准星对准相邻目标并按 E 确认方向（切换模式可取消）。" );
+            add_msg( m_info, fp3d_compositor::overhead() ?
+                     "将鼠标指向相邻目标并按 E 确认（切换模式可取消）。" :
+                     "将准星对准相邻目标并按 E 确认方向（切换模式可取消）。" );
             return true;
         default:
             return false;
@@ -264,6 +294,11 @@ bool begin_direction_selection( action_id action )
 void cancel_direction_selection()
 {
     pending_direction_action.reset();
+}
+
+bool direction_selection_pending()
+{
+    return pending_direction_action.has_value();
 }
 
 std::string direction_selection_hint()
@@ -278,7 +313,9 @@ std::string direction_selection_hint()
                        *pending_direction_action == ACTION_DIR_DROP ? "定向放下" :
                        *pending_direction_action == ACTION_PICKUP ? "拾取" :
                        *pending_direction_action == ACTION_CHAT ? "交谈" : "查看";
-    return std::string( "等待目标：" ) + name + " — 准星对准相邻物体，按 E 确认";
+    return std::string( "等待目标：" ) + name +
+           ( fp3d_compositor::overhead() ? " — 鼠标指向相邻物体，按 E 确认" :
+             " — 准星对准相邻物体，按 E 确认" );
 }
 
 bool valid( const fp3d_targeting::target &target, const avatar &you, const map &here )
@@ -333,6 +370,64 @@ bool valid( const fp3d_targeting::target &target, const avatar &you, const map &
     return here.ter( p ).id().str() == target.id;
 }
 
+static const char *direction_selection_error( const fp3d_targeting::target &target,
+        const avatar &you, const map &here )
+{
+    if( !valid( target, you, here ) ) {
+        return "准星未对准可触及的相邻目标，请调整视角再按 E。";
+    }
+    const auto selected = here.get_bub( target.position );
+    switch( *pending_direction_action ) {
+        case ACTION_GRAB:
+            if( selected == you.pos_bub( here ) || target.type == fp3d_targeting::kind::creature ||
+                ( !here.has_furn( selected ) && !here.veh_at( selected ) ) ) {
+                return "拖拽需要对准相邻家具或车辆，请重新对准后按 E。";
+            }
+            break;
+        case ACTION_PICKUP:
+            if( !here.could_see_items( selected, you ) || !here.has_items( selected ) ) {
+                return "这个位置没有可拾取的物品，请对准物品后按 E。";
+            }
+            break;
+        case ACTION_CHAT:
+            if( !get_creature_tracker().creature_at<npc>( selected ) ) {
+                return "请用准星对准相邻人物，再按 E 交谈。";
+            }
+            break;
+        default:
+            break;
+    }
+    return nullptr;
+}
+
+bool direction_selection_accepts( const fp3d_targeting::target &target, const avatar &you,
+                                  const map &here )
+{
+    return pending_direction_action && !direction_selection_error( target, you, here );
+}
+
+std::optional<request> confirm_direction_selection(
+    const std::optional<fp3d_targeting::target> &target, const avatar &you, const map &here,
+    bool by_mouse )
+{
+    if( !pending_direction_action ) {
+        return std::nullopt;
+    }
+    const char *error = target ? direction_selection_error( *target, you, here ) :
+                        "准星未对准可触及的相邻目标，请调整视角再按 E。";
+    if( error ) {
+        if( !by_mouse ) {
+            add_msg( m_info, error );
+        }
+        return std::nullopt;
+    }
+    const request selected{ *pending_direction_action, here.get_bub( target->position ) };
+    pending_direction_action.reset();
+    return selected;
+}
+
+static bool has_pickup_storage( const map &here, const tripoint_bub_ms &p );
+
 std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::target &target,
         const avatar &you, const map &here )
 {
@@ -357,7 +452,7 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
                 { "关闭车门", "由原版 CDDA 检查车门状态与行动消耗",
                   ACTION_CLOSE, nullptr, door && part.open, door && part.open },
                 { "查看货舱", "由原版 CDDA 查看此格车辆货舱与物品",
-                  ACTION_EXAMINE_AND_PICKUP, nullptr, cargo, cargo },
+                  ACTION_PICKUP, nullptr, cargo, cargo },
                 { "拖拽 / 松开", "执行原版拖拽操作；驾驶时不可用",
                   ACTION_GRAB, nullptr, draggable, draggable },
                 { "检查零件", "打开原版车辆检查，不绕过修理需求",
@@ -402,10 +497,12 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
     const bool surface = object && target.type != fp3d_targeting::kind::item;
     const bool opens = surface && ( here.ter( p ).obj().open || here.furn( p ).obj().open );
     const bool closes = surface && ( here.ter( p ).obj().close || here.furn( p ).obj().close );
-    const bool items = object && here.maptile_at( p ).get_item_count() > 0 &&
+    const bool items_on_map = object && here.maptile_at( p ).get_item_count() > 0 &&
                        here.field_at( p ).displayed_field_type()->display_items &&
                        here.accessible_items( p ) && here.could_see_items( p, you );
-    const bool corpse = items && target.type != fp3d_targeting::kind::furniture &&
+    const bool items = items_on_map || ( object && has_pickup_storage( here, p ) &&
+                                       here.accessible_items( p ) && here.could_see_items( p, you ) );
+    const bool corpse = items_on_map && target.type != fp3d_targeting::kind::furniture &&
                         !here.has_flag( ter_furn_flag::TFLAG_SEALED, p ) &&
                         here.maptile_at( p ).get_uppermost_item().is_corpse();
     const bool examine = surface && ( target.type == fp3d_targeting::kind::appliance ||
@@ -423,7 +520,7 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
             { "关闭", "关闭目标门窗或容器，沿用原版规则。", ACTION_CLOSE, nullptr, closes, closes },
             { "交谈", "与此人物交谈；交易和招募仍由原版确认。", ACTION_CHAT, nullptr, person != nullptr, person != nullptr },
             { "查看 / 搜索", "查看目标或搜索容器，沿用原版检查。", ACTION_EXAMINE_AND_PICKUP, nullptr, examine, examine },
-            { "拾取物品", "单件自动收纳，多件打开背包与目标容器两栏。", ACTION_PICKUP, nullptr, items, items },
+            { "拾取物品", "通过地面及容器图标切换来源。", ACTION_PICKUP, nullptr, items, items },
             corpse ? fp3d_quick_menu::entry{ "屠宰", "处理目标位置的尸体，沿用原版工具与耗时规则。",
                                             ACTION_BUTCHER, nullptr } : fp3d_quick_menu::entry{
                 "原地守卫", "让队友守卫当前位置，按原版喊话和行动消耗结算。", ACTION_NULL, "FP3D_GUARD",
@@ -441,6 +538,20 @@ std::array<fp3d_quick_menu::entry, 8> context_entries( const fp3d_targeting::tar
         }};
 }
 
+static bool has_pickup_storage( const map &here, const tripoint_bub_ms &p )
+{
+    const auto cargo = here.veh_at( p ).cargo();
+    return ( cargo && !cargo->part().is_cleaner_on() ) ||
+           here.furn( p )->has_flag( ter_furn_flag::TFLAG_CONTAINER );
+}
+
+bool can_peek_window( const avatar &you, const map &here, const tripoint_bub_ms &p )
+{
+    return here.inbounds( p ) && p.z() == you.posz() && !here.is_outside( you.pos_bub( here ) ) &&
+           here.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_WINDOW_CURTAINS, p ) &&
+           !here.ter( p )->close;
+}
+
 bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p, bool targeted )
 {
     if( p.z() != you.posz() || !here.inbounds( p ) || square_dist( p, you.pos_bub( here ) ) > 1 ||
@@ -448,11 +559,15 @@ bool quick_pickup( avatar &you, map &here, const tripoint_bub_ms &p, bool target
         return false;
     }
     auto objects = here.i_at( p );
+    if( targeted && has_pickup_storage( here, p ) ) {
+        auto action = fp3d_modern_ui::show( you, here, false, -1, here.get_abs( p ) );
+        return action && fp3d_inventory::execute( *action, you, here );
+    }
     if( objects.empty() ) {
         return false;
     }
     const item *top = &here.maptile_at( p ).get_uppermost_item();
-    if( targeted && ( objects.size() > 1 || top->is_corpse() ) ) {
+    if( targeted && ( objects.size() > 1 || top->is_corpse() || top->is_container() ) ) {
         auto action = fp3d_modern_ui::show( you, here, false, -1, here.get_abs( p ) );
         return action && fp3d_inventory::execute( *action, you, here );
     }
@@ -486,7 +601,8 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
     const auto *person = creature ? critter->as_npc() : nullptr;
     const bool opens = here.ter( p ).obj().open || here.furn( p ).obj().open;
     const bool closes = here.ter( p ).obj().close || here.furn( p ).obj().close;
-    const bool items = here.could_see_items( p, you ) && here.maptile_at( p ).get_item_count() > 0;
+    const bool items = here.could_see_items( p, you ) &&
+                       ( here.maptile_at( p ).get_item_count() > 0 || has_pickup_storage( here, p ) );
     std::vector<fp3d_quick_menu::entry> result{
         { "前往此处", "沿原版安全路线前往此格，危险或障碍仍会中断移动。", ACTION_NULL,
           "MODERN_2D_TRAVEL", !self && !creature && ( here.passable( p ) || opens ) },
@@ -500,6 +616,9 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
     }
     if( opens ) { result.push_back( { "打开", "走近并打开这个门窗或容器。", ACTION_OPEN, nullptr } ); }
     if( closes ) { result.push_back( { "关闭", "走近并关闭这个门窗或容器。", ACTION_CLOSE, nullptr } ); }
+    if( can_peek_window( you, here, p ) ) {
+        result.push_back( { "窥视窗外", "从闭合的窗帘向外窥视。", ACTION_PEEK, nullptr } );
+    }
     if( items ) { result.push_back( { "拾取物品", "查看并拾取这格物品。", ACTION_PICKUP, nullptr,
                                      here.accessible_items( p ) } ); }
     if( person ) {
@@ -656,33 +775,10 @@ std::optional<request> resolve( const std::string &command,
     auto candidate = selected_target;
     if( ( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) &&
         pending_direction_action ) {
-        if( !candidate || !valid( *candidate, you, here ) ) {
-            add_msg( m_info, "准星未对准可触及的相邻目标，请调整视角再按 E。" );
-            return std::nullopt;
-        }
-        const tripoint_bub_ms selected = here.get_bub( candidate->position );
-        const action_id requested_action = *pending_direction_action;
-        if( requested_action == ACTION_GRAB &&
-            ( selected == you.pos_bub( here ) ||
-              candidate->type == fp3d_targeting::kind::creature ||
-              ( !here.has_furn( selected ) && !here.veh_at( selected ) ) ) ) {
-            add_msg( m_info, "拖拽需要对准相邻家具或车辆，请重新对准后按 E。" );
-            return std::nullopt;
-        }
-        if( requested_action == ACTION_PICKUP &&
-            ( !here.could_see_items( selected, you ) || here.i_at( selected ).empty() ) ) {
-            add_msg( m_info, "这个位置没有可拾取的物品，请对准物品后按 E。" );
-            return std::nullopt;
-        }
-        if( requested_action == ACTION_CHAT &&
-            !get_creature_tracker().creature_at<npc>( selected ) ) {
-            add_msg( m_info, "请用准星对准相邻人物，再按 E 交谈。" );
-            return std::nullopt;
-        }
-        pending_direction_action.reset();
-        return request{ requested_action, selected };
+        return confirm_direction_selection( candidate, you, here, false );
     }
-    if( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) {
+    if( !fp3d_compositor::overhead() &&
+        ( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) ) {
         const auto standing = you.pos_bub( here );
         if( here.has_flag( ter_furn_flag::TFLAG_GOES_UP, standing ) ||
             here.has_flag( ter_furn_flag::TFLAG_GOES_DOWN, standing ) ||
@@ -812,11 +908,15 @@ std::optional<request> resolve( const std::string &command,
         return request{ ACTION_SMASH, p, false };
     }
     if( command == "FP3D_PICKUP" ) {
-        if( !here.could_see_items( p, you ) || here.i_at( p ).empty() ) {
+        const auto tile = here.maptile_at( p );
+        const bool storage = has_pickup_storage( here, p );
+        if( !here.could_see_items( p, you ) || ( tile.get_item_count() == 0 && !storage ) ) {
             add_msg( m_info, "目标位置没有可拾取的物品。" );
             return std::nullopt;
         }
-        return request{ ACTION_PICKUP, p, true };
+        const bool choose_source = storage || tile.get_item_count() > 1 ||
+                                   tile.get_uppermost_item().is_container();
+        return request{ ACTION_PICKUP, p, true, choose_source };
     }
     if( command == "FP3D_INTERACT" || command == "FP3D_INTERACT_LONG" ) {
         const bool opens = here.ter( p ).obj().open || here.furn( p ).obj().open;

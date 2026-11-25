@@ -1,4 +1,5 @@
 #include "fp3d_compositor.h"
+#include "fp3d_aiming.h"
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <cstdlib>
@@ -12,6 +13,8 @@
 #include "overmapbuffer.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_shaderpacks.h"
+#include "fp3d_materials.h"
+#include "fp3d_survival_style.h"
 #include "options_helpers.h"
 #include "sdl_wrappers.h"
 #include "sdl_geometry.h"
@@ -401,11 +404,7 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     };
     const auto save_menu = [&]( const char *filename ) {
         if( const char *directory = std::getenv( "CDDA_2D_PANEL_QA_DIR" ) ) {
-            std::vector<Uint32> pixels( 1280 * 720 );
-            REQUIRE( ReadRenderPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
-                                          pixels.data(), 1280 * 4 ) == 0 );
-            SDL_Surface_Ptr picture( CreateSurfaceFromPixels( pixels.data(), 1280,
-                                     720, 32, 1280 * 4, SDL_PIXELFORMAT_RGBA8888 ) );
+            SDL_Surface_Ptr picture( SDL_RenderReadPixels( renderer.get(), nullptr ) );
             REQUIRE( picture );
             const auto path = std::filesystem::path( directory ) / filename;
             CHECK( IMG_SavePNG( picture.get(), path.u8string().c_str() ) );
@@ -737,5 +736,420 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
     fp3d_compositor::set_input_context( "DEFAULTMODE" );
     CHECK_FALSE( fp3d_compositor::menu_text_input() );
     ImGui::GetIO().WantTextInput = false;
+
+    // Use real character art and an equipable overlay in the SDL renderer.
+    you.name = "超长中文姓名用于检查人物档案在小窗口内是否正确换行";
+    you.male = true;
+    const char *external_tiles = std::getenv( "CDDA_SURVIVAL_QA_TILESET" );
+    const std::string primary_tiles = external_tiles ? external_tiles : "UltimateCataclysm";
+    override_option tiles( "TILES", primary_tiles );
+    tilecontext->load_tileset( primary_tiles, false, false, false );
+    const auto texture_pixels = [&]( SDL_Texture *texture ) {
+        SDL_Texture *previous = SDL_GetRenderTarget( renderer.get() );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), texture ) );
+        on_out_of_scope restore_target( [&]() {
+            SDL_SetRenderTarget( renderer.get(), previous );
+        } );
+        float w = 0;
+        float h = 0;
+        REQUIRE( SDL_GetTextureSize( texture, &w, &h ) );
+        std::vector<Uint32> pixels( static_cast<size_t>( w * h ) );
+        REQUIRE( ReadRenderPixels( renderer.get(), nullptr, SDL_PIXELFORMAT_RGBA8888,
+                                  pixels.data(), static_cast<int>( w ) * 4 ) == 0 );
+        return pixels;
+    };
+    auto bare_portrait = fp3d_materials::character_icon( you );
+    REQUIRE( bare_portrait );
+    const auto bare_pixels = texture_pixels( bare_portrait.get() );
+    const auto backpack = you.wear_item( item( itype_id( "backpack" ) ), false );
+    REQUIRE( backpack );
+    auto worn_portrait = fp3d_materials::character_icon( you );
+    REQUIRE( worn_portrait );
+    CHECK( texture_pixels( worn_portrait.get() ) != bare_pixels );
+    you.toggle_trait( trait_id( "QUICK" ) );
+    {
+        override_option alternative( "TILES", "Chibi_Ultica" );
+        tilecontext->load_tileset( "Chibi_Ultica", false, false, false );
+        auto alternate_portrait = fp3d_materials::character_icon( you );
+        CHECK( alternate_portrait );
+    }
+    tilecontext->load_tileset( primary_tiles, false, false, false );
+
+    const auto before_turn = calendar::turn;
+    const int before_moves = you.get_moves();
+    const auto before_rng = rng_get_engine();
+    const auto original_background = ImGui::GetColorU32( ImGuiCol_WindowBg );
+    const std::array<point, 3> resolutions = { point( 640, 480 ), point( 1280, 720 ),
+                                              point( 1920, 1080 ) };
+    for( const point &resolution : resolutions ) {
+        REQUIRE( SDL_SetWindowSize( window.get(), resolution.x, resolution.y ) );
+        REQUIRE( SDL_SyncWindow( window.get() ) );
+        // Hidden SDL windows may keep the original swapchain dimensions after
+        // resizing. Render to a matching target so the screenshot is exact.
+        SDL_Texture_Ptr frame_target( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA32,
+                                      SDL_TEXTUREACCESS_TARGET, resolution.x, resolution.y ) );
+        REQUIRE( frame_target );
+        SDL_Texture *previous_target = SDL_GetRenderTarget( renderer.get() );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), frame_target.get() ) );
+        on_out_of_scope restore_target( [&]() {
+            SDL_SetRenderTarget( renderer.get(), previous_target );
+        } );
+        for( const int percent : { 100, 125, 150 } ) {
+            for( const int camera_mode : { 0, 1, 2 } ) {
+                CAPTURE( resolution, percent, camera_mode );
+                fp3d_compositor::apply_modes( camera_mode != 0, true );
+                if( camera_mode != 0 &&
+                    fp3d_compositor::preferred_overhead() != ( camera_mode == 2 ) ) {
+                    fp3d_compositor::toggle_camera();
+                }
+                fp3d_compositor::set_input_context( "FP3D_PANEL" );
+                auto profile = fp3d_modern_ui::create( you, here, percent, false, 1 );
+                for( int frame = 0; frame < 3; ++frame ) {
+                    draw_menu( *profile );
+                }
+                auto *profile_child = find_child( "/人物档案" );
+                auto *center_child = find_child( "/人物分类" );
+                auto *detail_child = find_child( "/人物详情" );
+                REQUIRE( profile_child );
+                REQUIRE( center_child );
+                REQUIRE( detail_child );
+                CHECK( profile_child->Pos.x < center_child->Pos.x );
+                CHECK( center_child->Pos.x < detail_child->Pos.x );
+                CHECK( detail_child->Pos.x + detail_child->Size.x <= resolution.x );
+                CHECK( detail_child->Pos.y + detail_child->Size.y <= resolution.y );
+                CHECK( ImGui::GetColorU32( ImGuiCol_WindowBg ) == original_background );
+                if( resolution == point( 1280, 720 ) && percent == 100 && camera_mode == 0 ) {
+                    const char *shots[] = { "character-body.png", "character-equipment.png",
+                                           "character-attributes.png", "character-traits.png" };
+                    auto *tabs = GImGui->TabBars.GetByKey( center_child->GetID( "人物分类" ) );
+                    REQUIRE( tabs );
+                    REQUIRE( tabs->Tabs.Size == 4 );
+                    for( int i = 0; i < tabs->Tabs.Size; ++i ) {
+                        const auto &tab = tabs->Tabs[i];
+                        const ImGuiID tab_id = tab.ID;
+                        const float x = tabs->BarRect.Min.x + tab.Offset + tab.Width * .5f;
+                        const float y = ( tabs->BarRect.Min.y + tabs->BarRect.Max.y ) * .5f;
+                        for( int frame = 0; frame < 4; ++frame ) {
+                            ImGui::GetIO().AddMousePosEvent( x, y );
+                            ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
+                            draw_menu( *profile );
+                        }
+                        CHECK( tabs->SelectedTabId == tab_id );
+                        if( i == 1 ) {
+                            const float before_height = detail_child->ContentSize.y;
+                            const ImVec2 first_gear( center_child->DC.CursorStartPos.x + 30.f,
+                                                     center_child->DC.CursorStartPos.y + 135.f );
+                            for( int frame = 0; frame < 4; ++frame ) {
+                                ImGui::GetIO().AddMousePosEvent( first_gear.x, first_gear.y );
+                                ImGui::GetIO().AddMouseButtonEvent( 0, frame == 1 );
+                                draw_menu( *profile );
+                            }
+                            CHECK( detail_child->ContentSize.y > before_height );
+                        }
+                        save_menu( shots[i] );
+                    }
+                } else if( resolution == point( 640, 480 ) && percent == 150 && camera_mode == 0 ) {
+                    save_menu( "character-480p-150.png" );
+                } else if( resolution == point( 1920, 1080 ) && percent == 125 && camera_mode == 2 ) {
+                    save_menu( "character-1080p-125.png" );
+                }
+            }
+        }
+    }
+    CHECK( calendar::turn == before_turn );
+    CHECK( you.get_moves() == before_moves );
+    CHECK( rng_get_engine() == before_rng );
+
+    fp3d_compositor::apply_modes( false, true );
+    fp3d_compositor::set_input_context( "FP3D_PANEL" );
+    const tripoint_bub_ms ground = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( ground, ter_str_id( "t_floor" ) );
+    here.furn_set( ground, furn_str_id( "f_null" ) );
+    here.add_item( ground, item( itype_id( "rock" ) ), 144 );
+    here.build_map_cache( ground.z() );
+    here.update_visibility_cache( ground.z() );
+    REQUIRE( here.i_at( ground ).size() >= 128 );
+    REQUIRE( SDL_SetWindowSize( window.get(), 1280, 720 ) );
+    REQUIRE( SDL_SyncWindow( window.get() ) );
+    auto inventory = fp3d_modern_ui::create( you, here, 100, false, 0 );
+    for( int frame = 0; frame < 3; ++frame ) {
+        draw_menu( *inventory );
+    }
+    auto *nearby = find_child( "/##拾取列表" );
+    REQUIRE( nearby );
+    CHECK( nearby->ScrollMax.y > 1000 );
+    save_menu( "inventory-long-list.png" );
+    inventory.reset();
+
+    item kit( itype_id( "bottle_plastic" ) );
+    REQUIRE( kit.put_in( item( itype_id( "bandages" ) ), pocket_type::CONTAINER ).success() );
+    kit.set_var( "fp3d_inventory_tree_open", "1" );
+    REQUIRE( ( **backpack ).put_in( kit, pocket_type::CONTAINER ).success() );
+    REQUIRE( ( **backpack ).put_in( item( itype_id( "hammer" ) ), pocket_type::CONTAINER ).success() );
+    inventory = fp3d_modern_ui::create( you, here, 100, false, 0 );
+    for( int frame = 0; frame < 3; ++frame ) {
+        draw_menu( *inventory );
+    }
+    auto *carried = find_child( "/我的物品" );
+    REQUIRE( carried );
+    const float folded_height = carried->ContentSize.y;
+    ( **backpack ).set_var( "fp3d_inventory_tree_open", "1" );
+    for( int frame = 0; frame < 3; ++frame ) {
+        draw_menu( *inventory );
+    }
+    CHECK( carried->ContentSize.y > folded_height );
+    const float folded_pocket_height = carried->ContentSize.y;
+    ( **backpack ).set_var( "fp3d_inventory_pocket_open_0", "1" );
+    for( int frame = 0; frame < 3; ++frame ) {
+        draw_menu( *inventory );
+    }
+    CHECK( carried->ContentSize.y > folded_pocket_height );
+    save_menu( "inventory-compact-tree.png" );
+
+    const auto inventory_mouse = [&]( const ImVec2 &position, bool down ) {
+        ImGui::GetIO().AddMousePosEvent( position.x, position.y );
+        ImGui::GetIO().AddMouseButtonEvent( ImGuiMouseButton_Left, down );
+        draw_menu( *inventory );
+    };
+    const ImVec2 carried_first( carried->DC.CursorStartPos.x + 65, carried->DC.CursorStartPos.y + 221 );
+    const ImVec2 carried_second( carried_first.x + 95, carried_first.y + 38 );
+    inventory_mouse( carried_first, false );
+    inventory_mouse( carried_first, true );
+    inventory_mouse( carried_second, true );
+    inventory_mouse( carried_second, false );
+    CHECK( std::count_if( carried->DrawList->VtxBuffer.begin(), carried->DrawList->VtxBuffer.end(),
+    []( const ImDrawVert &vertex ) {
+        return vertex.col == fp3d_survival_style::selected;
+    } ) >= 24 );
+    save_menu( "inventory-box-selection.png" );
+    inventory_mouse( carried_first, false );
+    inventory_mouse( carried_first, true );
+    inventory_mouse( ImVec2( carried_first.x + 80, carried_first.y ), true );
+    REQUIRE( ImGui::GetDragDropPayload() );
+    CHECK( ImGui::GetDragDropPayload()->IsDataType( "FP3D_ITEM" ) );
+    inventory_mouse( carried_first, false );
+    inventory.reset();
+
+    here.i_clear( ground );
+    item pickup_bottle( itype_id( "bottle_plastic" ) );
+    item bandage( itype_id( "bandages" ) );
+    bandage.set_damage( bandage.max_damage() / 2 );
+    REQUIRE( pickup_bottle.put_in( bandage, pocket_type::CONTAINER ).success() );
+    REQUIRE( pickup_bottle.put_in( item( itype_id( "needle_bone" ) ), pocket_type::CONTAINER ).success() );
+    pickup_bottle.set_var( "fp3d_inventory_tree_open", "0" );
+    here.add_item_or_charges( ground, pickup_bottle );
+    here.add_item_or_charges( ground, bandage );
+    here.add_item_or_charges( ground, item( itype_id( "needle_bone" ) ) );
+    here.furn_set( ground, furn_str_id( "f_locker" ) );
+    here.build_map_cache( ground.z() );
+    here.update_visibility_cache( ground.z() );
+    auto pickup = fp3d_modern_ui::create( you, here, 100, false, 0, {}, here.get_abs( ground ) );
+    const auto mouse_frame = [&]( const ImVec2 &position, bool down ) {
+        ImGui::GetIO().AddMousePosEvent( position.x, position.y );
+        ImGui::GetIO().AddMouseButtonEvent( 0, down );
+        draw_menu( *pickup );
+    };
+    for( int frame = 0; frame < 3; ++frame ) {
+        draw_menu( *pickup );
+    }
+    auto *sources = find_child( "/##拾取来源" );
+    auto *pickup_list = find_child( "/##拾取列表" );
+    REQUIRE( sources );
+    REQUIRE( pickup_list );
+    const float ground_list_height = pickup_list->ContentSize.y;
+    const float icon_stride = 44.f + 8.f;
+    CHECK( sources->ContentSize.x == Approx( 44.f + icon_stride ).margin( 1.f ) );
+    const ImVec2 locker_source( sources->DC.CursorStartPos.x + icon_stride + 22,
+                               sources->DC.CursorStartPos.y + 22 );
+    mouse_frame( locker_source, false );
+    mouse_frame( locker_source, true );
+    mouse_frame( locker_source, false );
+    draw_menu( *pickup );
+    CHECK( pickup_list->ContentSize.y > ground_list_height );
+    const float start_y = pickup_list->DC.CursorStartPos.y;
+    const ImVec2 first_item( pickup_list->DC.CursorStartPos.x + 30, start_y + 67 );
+    const ImVec2 second_item( first_item.x + 100, start_y + 108 );
+    mouse_frame( first_item, false );
+    mouse_frame( first_item, true );
+    mouse_frame( second_item, true );
+    mouse_frame( second_item, false );
+    size_t highlights = 0;
+    for( const auto &vertex : pickup_list->DrawList->VtxBuffer ) {
+        highlights += vertex.col == fp3d_survival_style::selected;
+    }
+    CHECK( highlights >= 24 );
+    save_menu( "pickup-box-selection.png" );
+    mouse_frame( first_item, false );
+    mouse_frame( first_item, true );
+    mouse_frame( ImVec2( first_item.x - 80, first_item.y ), true );
+    REQUIRE( ImGui::GetDragDropPayload() );
+    CHECK( ImGui::GetDragDropPayload()->IsDataType( "FP3D_ITEM" ) );
+    mouse_frame( first_item, false );
+
+    for( const int percent : { 125, 150 } ) {
+        pickup.reset();
+        pickup = fp3d_modern_ui::create( you, here, percent, false, 0, {}, here.get_abs( ground ) );
+        for( int frame = 0; frame < 3; ++frame ) {
+            draw_menu( *pickup );
+        }
+        sources = find_child( "/##拾取来源" );
+        pickup_list = find_child( "/##拾取列表" );
+        REQUIRE( sources );
+        REQUIRE( pickup_list );
+        CHECK( sources->CalcFontSize() == Approx( GImGui->FontBaseSize * percent / 100.f ) );
+        CHECK( pickup_list->CalcFontSize() == Approx( GImGui->FontBaseSize * percent / 100.f ) );
+        const float empty = pickup_list->ContentSize.y;
+        const float factor = percent / 100.f;
+        const ImVec2 scaled_locker( sources->DC.CursorStartPos.x + ( icon_stride + 22 ) * factor,
+                                    sources->DC.CursorStartPos.y + 22 * factor );
+        mouse_frame( scaled_locker, false );
+        mouse_frame( scaled_locker, true );
+        mouse_frame( scaled_locker, false );
+        draw_menu( *pickup );
+        CHECK( pickup_list->ContentSize.y > empty );
+        save_menu( percent == 125 ? "pickup-125.png" : "pickup-150.png" );
+    }
+
+    pickup.reset();
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    fp3d_compositor::apply_modes( true, true );
+    if( fp3d_compositor::view_3d() ) {
+        fp3d_compositor::restore_view_mode( "overhead" );
+        REQUIRE( fp3d_compositor::overhead() );
+        fp3d_compositor::aiming::set_active( true );
+        const auto aim_tile = here.get_abs( ground );
+        fp3d_compositor::aiming::set_target( aim_tile );
+        const int moves_before_orbit = you.get_moves();
+        const auto time_before_orbit = calendar::turn;
+        const float yaw_before = fp3d_compositor::overhead_azimuth();
+        const float distance_before = fp3d_compositor::overhead_distance();
+        const bool captured_mouse = ImGui::GetIO().WantCaptureMouse;
+        ImGui::GetIO().WantCaptureMouse = false;
+        SDL_Event middle{};
+        middle.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        middle.button.windowID = SDL_GetWindowID( window.get() );
+        middle.button.button = SDL_BUTTON_MIDDLE;
+        middle.button.x = 320;
+        middle.button.y = 240;
+        REQUIRE( fp3d_compositor::process_event( middle ) );
+        SDL_Event drag{};
+        drag.type = SDL_EVENT_MOUSE_MOTION;
+        drag.motion.windowID = middle.button.windowID;
+        drag.motion.state = SDL_BUTTON_MMASK;
+        drag.motion.x = 350;
+        drag.motion.y = 240;
+        drag.motion.xrel = 30;
+        CHECK( fp3d_compositor::process_event( drag ) );
+        CHECK( fp3d_compositor::overhead_azimuth() == Approx( yaw_before - 10.5f ) );
+        SDL_Event wheel{};
+        wheel.type = SDL_EVENT_MOUSE_WHEEL;
+        wheel.wheel.windowID = middle.button.windowID;
+        wheel.wheel.mouse_x = 350;
+        wheel.wheel.mouse_y = 240;
+        wheel.wheel.y = 1;
+        CHECK( fp3d_compositor::process_event( wheel ) );
+        CHECK( fp3d_compositor::overhead_distance() == Approx( distance_before - 1.5f ) );
+        ImGui::GetIO().WantCaptureMouse = true;
+        CHECK_FALSE( fp3d_compositor::process_event( wheel ) );
+        ImGui::GetIO().WantCaptureMouse = false;
+        wheel.wheel.y = -1;
+        CHECK( fp3d_compositor::process_event( wheel ) );
+        drag.motion.xrel = -30;
+        CHECK( fp3d_compositor::process_event( drag ) );
+        middle.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        CHECK( fp3d_compositor::process_event( middle ) );
+        CHECK_FALSE( fp3d_compositor::process_event( drag ) );
+        middle.button.button = SDL_BUTTON_LEFT;
+        CHECK_FALSE( fp3d_compositor::process_event( middle ) );
+        middle.button.button = SDL_BUTTON_RIGHT;
+        CHECK_FALSE( fp3d_compositor::process_event( middle ) );
+        CHECK( fp3d_compositor::aiming::target() == aim_tile );
+        CHECK( you.get_moves() == moves_before_orbit );
+        CHECK( calendar::turn == time_before_orbit );
+        ImGui::GetIO().WantCaptureMouse = captured_mouse;
+        fp3d_compositor::aiming::set_active( false );
+        set_time_to_day();
+        here.furn_set( ground, furn_str_id( "f_locker" ) );
+        here.build_map_cache( ground.z() );
+        here.update_visibility_cache( ground.z() );
+        fp3d_compositor::publish_camera( you, here, true );
+        const auto submit_world = [&]() {
+            fp3d_compositor::compose();
+            fp3d_compositor::gpu_world_qa_after_present( SDL_RenderPresent( renderer.get() ) );
+            REQUIRE( SDL_WaitForGPUIdle( SDL_GetGPURendererDevice( renderer.get() ) ) );
+        };
+        submit_world();
+        REQUIRE( fp3d_compositor::copy_view() );
+        fp3d_compositor::set_input_context( "FP3D_PANEL" );
+        pickup = fp3d_modern_ui::create( you, here, 100, false, 0, {}, here.get_abs( ground ) );
+        for( int frame = 0; frame < 3; ++frame ) {
+            draw_menu( *pickup );
+        }
+        sources = find_child( "/##拾取来源" );
+        REQUIRE( sources );
+        const auto white_pixels = [&]() {
+            REQUIRE( fp3d_compositor::draw_menu_background( 0, 0, 1280, 720 ) );
+            SDL_Surface_Ptr frame( SDL_RenderReadPixels( renderer.get(), nullptr ) );
+            REQUIRE( frame );
+            SDL_Surface_Ptr pixels( SDL_ConvertSurface( frame.get(), SDL_PIXELFORMAT_RGBA32 ) );
+            REQUIRE( pixels );
+            size_t count = 0;
+            for( int y = 0; y < pixels->h; ++y ) {
+                const auto *row = static_cast<const Uint8 *>( pixels->pixels ) + y * pixels->pitch;
+                for( int x = 0; x < pixels->w; ++x ) {
+                    const Uint8 *p = row + x * 4;
+                    count += p[0] >= 250 && p[1] >= 250 && p[2] >= 250;
+                }
+            }
+            return count;
+        };
+        const size_t normal_pixels = white_pixels();
+        const ImVec2 locker_button( sources->DC.CursorStartPos.x + icon_stride + 22,
+                                   sources->DC.CursorStartPos.y + 22 );
+        mouse_frame( locker_button, false );
+        mouse_frame( locker_button, true );
+        mouse_frame( locker_button, false );
+        submit_world();
+        const size_t highlighted_pixels = white_pixels();
+        CHECK( highlighted_pixels > normal_pixels + 100 );
+        draw_menu( *pickup, false );
+        const auto *pickup_window = sources->RootWindow;
+        REQUIRE( pickup_window );
+        CHECK( pickup_window->Size.y == Approx( ImGui::GetIO().DisplaySize.y * .93f ).margin( 1.f ) );
+        CHECK( pickup_window->Pos.y == Approx( ImGui::GetIO().DisplaySize.y * .035f ).margin( 1.f ) );
+        save_menu( "pickup-highlight-3d.png" );
+        pickup.reset();
+        submit_world();
+        CHECK( white_pixels() + 100 < highlighted_pixels );
+
+        const auto player = you.pos_bub( here );
+        here.furn_set( ground, furn_str_id( "f_null" ) );
+        for( int x : { -2, -1, 1, 2 } ) {
+            here.ter_set( ground + tripoint_rel_ms( x, 0, 0 ), ter_str_id( "t_wall" ) );
+        }
+        for( int x = -3; x <= 3; ++x ) {
+            here.ter_set( ground + tripoint_rel_ms( x, -3, 0 ), ter_str_id( "t_pavement" ) );
+        }
+        here.ter_set( ground, ter_str_id( "t_curtains" ) );
+        you.setpos( here, ground, false );
+        fp3d_snapshot::prepare_view( you, here );
+        fp3d_compositor::set_curtain_peek( here.get_abs( ground ), point( 0, -1 ) );
+        fp3d_compositor::set_input_context( "LOOK" );
+        REQUIRE( fp3d_compositor::active() );
+        fp3d_compositor::publish_camera( you, here, true );
+        submit_world();
+        REQUIRE( fp3d_compositor::draw_menu_background( 0, 0, 1280, 720 ) );
+        save_menu( "curtain-peek-overhead.png" );
+        fp3d_compositor::restore_view_mode( "first_person" );
+        REQUIRE( fp3d_compositor::active() );
+        fp3d_compositor::publish_camera( you, here, false );
+        submit_world();
+        REQUIRE( fp3d_compositor::draw_menu_background( 0, 0, 1280, 720 ) );
+        save_menu( "curtain-peek-first-person.png" );
+        you.setpos( here, player, false );
+        fp3d_compositor::set_curtain_peek( std::nullopt );
+        CHECK_FALSE( fp3d_compositor::active() );
+        CHECK_FALSE( fp3d_compositor::copy_view() );
+    }
 }
 #endif

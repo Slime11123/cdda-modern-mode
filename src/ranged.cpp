@@ -96,6 +96,7 @@
 #include "fp3d_materials.h"
 #include "fp3d_simple_ui.h"
 #include "fp3d_snapshot.h"
+#include "fp3d_survival_style.h"
 #endif
 
 static const ammo_effect_str_id ammo_effect_ACT_ON_RANGED_HIT( "ACT_ON_RANGED_HIT" );
@@ -3359,6 +3360,9 @@ bool target_ui::set_cursor_pos( const tripoint_bub_ms &new_pos )
         fp3d_compositor::aiming::set_target( dst_critter && you->sees( here, *dst_critter ) ?
                                            std::optional<tripoint_abs_ms>( here.get_abs( dst ) ) :
                                            std::nullopt );
+        // The marker layer needs the aim tile itself, creature or not.
+        fp3d_compositor::aiming::set_aim_tile( dst.z() == you->posz() ?
+                std::optional<tripoint_abs_ms>( here.get_abs( dst ) ) : std::nullopt );
     }
 #endif
 
@@ -4010,23 +4014,88 @@ void target_ui::draw_terrain_overlay()
 }
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+namespace
+{
+// The modern aiming HUD is laid out in "em" units derived from the scaled
+// ImGui font height, so one factor (the unified modern UI scale) drives text,
+// icons, buttons, spacing, borders, rounding and hit areas together. At the
+// 1920x1080 design size with the default font height these values are the
+// design pixels written in the comments.
+struct aim_hud_metrics {
+    float em;       // scaled font height (24 design px)
+    float pad;      // panel padding (12)
+    float gap;      // item spacing (6)
+    float radius;   // corner rounding (5)
+    float border;   // hairline thickness (1)
+    float icon;     // weapon icon edge (60)
+    float button;   // primary button height (42)
+    float bar;      // steadiness bar height (10)
+    explicit aim_hud_metrics( float font_size )
+        : em( font_size )
+        , pad( font_size * .5f )
+        , gap( font_size * .25f )
+        , radius( font_size * .2f )
+        , border( std::max( 1.0f, font_size / 24.0f ) )
+        , icon( font_size * 2.5f )
+        , button( font_size * 1.75f )
+        , bar( font_size * .42f ) {}
+};
+
+// Thin separators and section headings shared by every block of the panel.
+// An empty label draws only the divider, so a block that needs no caption does
+// not waste a whole text line.
+void aim_hud_section( const char *label, const aim_hud_metrics &m )
+{
+    ImGui::Spacing();
+    if( label && *label ) {
+        ImGui::PushStyleColor( ImGuiCol_Text, fp3d_survival_style::color( fp3d_survival_style::accent ) );
+        ImGui::TextUnformatted( label );
+        ImGui::PopStyleColor();
+    }
+    ImGui::PushStyleColor( ImGuiCol_Separator, fp3d_survival_style::color( fp3d_survival_style::item ) );
+    ImGui::Separator();
+    ImGui::PopStyleColor();
+    ImGui::Dummy( ImVec2( 0, m.gap * .5f ) );
+}
+}
+#endif
+
+#if defined(TILES) && defined(ENABLE_FP3D)
 void target_ui::draw_modern_aim()
 {
-    const fp3d_simple_ui::scoped_theme theme;
+    // Same yellow/black modern palette as the rest of the modern UI, kept
+    // translucent so the 3D scene stays readable behind the panels.
+    const fp3d_survival_style::scoped_theme theme( .92f );
     const ImGuiViewport &view = *ImGui::GetMainViewport();
-    const float pad = 10.f;
-    const float panel_width = std::min( view.Size.x * .47f,
-                                       std::max( view.Size.x * .32f, ImGui::GetFontSize() * 22.f ) );
+    const aim_hud_metrics m( ImGui::GetFontSize() );
+    const float pad = m.pad;
+    // Panel width follows the design ratio but never eats the scene on narrow
+    // or ultrawide windows.
+    const float panel_width = std::clamp( view.Size.x * .34f,
+                                          std::min( view.Size.x * .24f, m.em * 13.f ),
+                                          std::min( view.Size.x * .42f, m.em * 21.f ) );
     const float map_width = view.Size.x - panel_width;
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
-                                       ImGuiWindowFlags_NoFocusOnAppearing;
+                                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoCollapse;
     constexpr ImGuiWindowFlags autosize = flags | ImGuiWindowFlags_AlwaysAutoResize;
+
     const auto button = [&]( const std::string &label, const char *action,
                              const ImVec2 &size = ImVec2( 0, 0 ) ) {
         if( ImGui::Button( label.c_str(), size ) ) {
             aim_button_action = action;
         }
+    };
+    // Accent button for the primary action, neutral for the rest.
+    const auto accent_button = [&]( const std::string &label, const char *action,
+                                    const ImVec2 &size ) {
+        ImGui::PushStyleColor( ImGuiCol_Button, fp3d_survival_style::color( fp3d_survival_style::selected ) );
+        ImGui::PushStyleColor( ImGuiCol_ButtonHovered, fp3d_survival_style::color( fp3d_survival_style::hover ) );
+        ImGui::PushStyleColor( ImGuiCol_Text, fp3d_survival_style::color( fp3d_survival_style::heading ) );
+        ImGui::PushStyleColor( ImGuiCol_Border, fp3d_survival_style::color( fp3d_survival_style::accent ) );
+        button( label, action, size );
+        ImGui::PopStyleColor( 4 );
     };
     const auto info = []( const std::string &line, const nc_color &color = c_light_gray ) {
         cataimgui::draw_colored_text( line, color, ImGui::GetContentRegionAvail().x );
@@ -4034,13 +4103,21 @@ void target_ui::draw_modern_aim()
     const auto aim_name = []( const aim_type &type ) {
         return string_format( _( "%s %s" ), type.has_threshold ? type.name : _( "Current" ), _( "Aim" ) );
     };
+    const auto bound_key = [this]( const std::string &action ) {
+        const std::vector<input_event> keys = ctxt.keys_bound_to( action, /*maximum_modifier_count=*/1 );
+        return keys.empty() ? std::string() : keys.front().short_description();
+    };
 
+    // ---------------------------------------------------------------- exit
     ImGui::SetNextWindowPos( ImVec2( view.Pos.x + pad, view.Pos.y + pad ) );
-    if( ImGui::Begin( "##aiming_exit", nullptr, autosize | ImGuiWindowFlags_NoBackground ) ) {
-        button( string_format( "%s  Esc", _( "Exit" ) ), "QUIT" );
+    if( ImGui::Begin( "##aiming_exit", nullptr, autosize ) ) {
+        const std::string key = bound_key( "QUIT" );
+        button( key.empty() ? _( "Exit" ) : string_format( _( "Exit  %s" ), key ), "QUIT",
+                ImVec2( 0, ImGui::GetFrameHeight() * 1.35f ) );
     }
     ImGui::End();
 
+    // ------------------------------------------------------- current target
     ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width * .56f, view.Pos.y + pad ),
                              ImGuiCond_Always, ImVec2( .5f, 0 ) );
     ImGui::SetNextWindowSizeConstraints( ImVec2( 0, 0 ), ImVec2( map_width * .62f, view.Size.y ) );
@@ -4051,45 +4128,140 @@ void target_ui::draw_modern_aim()
     }
     ImGui::End();
 
-    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width, view.Pos.y + pad ) );
-    ImGui::SetNextWindowSize( ImVec2( panel_width - pad, view.Size.y * .87f - pad ) );
-    if( ImGui::Begin( "##aiming_weapon", nullptr, flags ) ) {
-        const float icon_size = ImGui::GetFontSize() * 3.6f;
-        if( ImGui::BeginTable( "##weapon_summary", 2 ) ) {
-            ImGui::TableSetupColumn( "##stats", ImGuiTableColumnFlags_WidthStretch );
-            ImGui::TableSetupColumn( "##icon", ImGuiTableColumnFlags_WidthFixed, icon_size );
-            ImGui::TableNextColumn();
-            info( uitext_title(), c_red );
-            for( const std::string &line : cursor_info() ) {
-                info( line );
+    // ---------------------------------------------------------- action bar
+    // Drawn before the weapon panel so its measured height reserves the space
+    // it actually needs; a wrapped bar can never be covered by the panel.
+    float bar_height = m.button + 2 * pad;
+    {
+        struct quick_action {
+            std::string label;
+            const char *action;
+            bool enabled;
+        };
+        std::vector<quick_action> actions;
+        const auto add = [&actions]( std::string label, const char *action, bool enabled ) {
+            actions.push_back( { std::move( label ), action, enabled } );
+        };
+        const std::string ammo_key = bound_key( "SWITCH_AMMO" );
+        const std::string mode_key = bound_key( "SWITCH_MODE" );
+        add( _( "Select nearest target" ), "CLOSEST_TARGET", !targets.empty() );
+        add( _( "Next target" ), "NEXT_TARGET", !targets.empty() );
+        add( ammo_key.empty() ? _( "Reload" ) : string_format( _( "Reload  %s" ), ammo_key ),
+             "SWITCH_AMMO", true );
+        add( mode_key.empty() ? _( "Switch firing mode" ) :
+             string_format( _( "Switch firing mode  %s" ), mode_key ), "SWITCH_MODE", true );
+        // Every other legitimate control of the native targeting screen stays
+        // reachable: snap-to-target, target self and the reload-and-shoot
+        // unload toggle are real actions, not decoration.
+        add( string_format( "%s: %s", _( "Snap to target" ),
+                            snap_to_target ? _( "On" ) : _( "Off" ) ),
+             "TOGGLE_SNAP_TO_TARGET", true );
+        add( _( "Target self" ), "CENTER", true );
+        if( mode == TargetMode::Fire && relevant && relevant->has_flag( flag_RELOAD_AND_SHOOT ) ) {
+            add( unload_RAS_weapon ? _( "Unload after quitting" ) :
+                 _( "Keep loaded after quitting" ), "TOGGLE_UNLOAD_RAS_WEAPON", true );
+        }
+
+        ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width * .5f, view.Pos.y + view.Size.y - pad ),
+                                 ImGuiCond_Always, ImVec2( .5f, 1 ) );
+        ImGui::SetNextWindowSizeConstraints( ImVec2( 0, 0 ), ImVec2( map_width - 2 * pad, view.Size.y ) );
+        ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( pad, pad * .75f ) );
+        ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( m.gap, m.gap ) );
+        ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, m.radius * .8f );
+        if( ImGui::Begin( "##aiming_actions", nullptr, autosize ) ) {
+            // Flow layout: wrap instead of overflowing the viewport at any scale.
+            const float spacing = ImGui::GetStyle().ItemSpacing.x;
+            const float available = map_width - 2 * pad - 2 * pad * .75f;
+            const float row_height = ImGui::GetFrameHeight() * 1.35f;
+            float used = 0.0f;
+            for( size_t index = 0; index < actions.size(); ++index ) {
+                ImGui::PushID( static_cast<int>( index ) );
+                const float width = ImGui::CalcTextSize( actions[index].label.c_str() ).x +
+                                    2 * ImGui::GetStyle().FramePadding.x + 2 * m.border;
+                if( index > 0 && used + spacing + width > available ) {
+                    used = 0.0f;
+                } else if( index > 0 ) {
+                    ImGui::SameLine();
+                }
+                ImGui::BeginDisabled( !actions[index].enabled );
+                button( actions[index].label, actions[index].action, ImVec2( width, row_height ) );
+                ImGui::EndDisabled();
+                used += ( used > 0.0f ? spacing : 0.0f ) + ImGui::GetItemRectSize().x;
+                ImGui::PopID();
             }
-            ImGui::Spacing();
-            for( const std::string &line : gun_info() ) {
+            bar_height = ImGui::GetWindowSize().y;
+        }
+        ImGui::End();
+        ImGui::PopStyleVar( 3 );
+    }
+
+    // --------------------------------------------------------- weapon panel
+    // The panel is exactly as tall as its content: a short weapon block no
+    // longer stretches down the whole screen. The height constraint keeps it
+    // above the action bar, and only clamps (with scrolling) when the content
+    // genuinely is that tall.
+    const float panel_content_width = panel_width - pad;
+    const float panel_max_height = std::max( m.button * 6, view.Size.y - bar_height - 3 * pad );
+    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width, view.Pos.y + pad ) );
+    ImGui::SetNextWindowSizeConstraints( ImVec2( panel_content_width, 0 ),
+                                         ImVec2( panel_content_width, panel_max_height ) );
+    ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( pad, pad ) );
+    ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( m.gap, m.gap ) );
+    ImGui::PushStyleVar( ImGuiStyleVar_WindowRounding, m.radius );
+    ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, m.radius * .8f );
+    ImGui::PushStyleVar( ImGuiStyleVar_FrameBorderSize, 0.f );
+    if( ImGui::Begin( "##aiming_weapon", nullptr, flags | ImGuiWindowFlags_AlwaysAutoResize ) ) {
+        const bool can_fire = status == Status::Good;
+        // ---- A. weapon identity, ammo and firing mode ----------------------
+        if( ImGui::BeginTable( "##weapon_summary", 2,
+                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings ) ) {
+            ImGui::TableSetupColumn( "##stats", ImGuiTableColumnFlags_WidthStretch );
+            ImGui::TableSetupColumn( "##icon", ImGuiTableColumnFlags_WidthFixed, m.icon );
+            ImGui::TableNextColumn();
+            ImGui::PushStyleColor( ImGuiCol_Text,
+                                   fp3d_survival_style::color( fp3d_survival_style::accent ) );
+            ImGui::TextWrapped( "%s", remove_color_tags( uitext_title() ).c_str() );
+            ImGui::PopStyleColor();
+            const std::array<std::string, 2> gun = gun_info();
+            for( const std::string &line : gun ) {
                 if( !line.empty() ) {
                     info( line );
                 }
             }
-            info( recoil_info() );
             ImGui::TableNextColumn();
             if( weapon_icon ) {
                 ImGui::Image( reinterpret_cast<ImTextureID>( weapon_icon.get() ),
-                              ImVec2( icon_size, icon_size ) );
+                              ImVec2( m.icon, m.icon ) );
             } else {
-                info( relevant->symbol(), relevant->color() );
+                ImGui::PushStyleColor( ImGuiCol_Text,
+                                       fp3d_survival_style::color( fp3d_survival_style::accent ) );
+                const std::string symbol = relevant ? relevant->symbol() : std::string( "?" );
+                ImGui::TextUnformatted( symbol.c_str() );
+                ImGui::PopStyleColor();
             }
             ImGui::EndTable();
         }
 
-        const bool can_fire = status == Status::Good;
+        // ---- B. shot parameters (labels already come from the native lines) -
+        aim_hud_section( "", m );
+        for( const std::string &line : cursor_info() ) {
+            info( line );
+        }
+        info( recoil_info() );
+
+        // ---- C. steadiness and hit markers --------------------------------
         const auto predictions = can_fire ? predict_gun_aim( *this, *you, ctxt,
                                  *relevant->gun_current_mode(), dst, activity->reload_loc ) :
                                  std::vector<aim_type_prediction>();
-        ImGui::Spacing();
+        aim_hud_section( _( "Steadiness" ), m );
         if( can_fire ) {
             // The default prediction already accounts for the selected aim threshold.
             const aim_type_prediction &selected = predictions.front();
-            ImGui::PushStyleColor( ImGuiCol_PlotHistogram, ImGui::GetStyleColorVec4( ImGuiCol_CheckMark ) );
-            ImGui::ProgressBar( selected.steadiness, ImVec2( -1, 0 ), _( "Steadiness" ) );
+            ImGui::PushStyleColor( ImGuiCol_PlotHistogram,
+                                   fp3d_survival_style::color( fp3d_survival_style::accent ) );
+            ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, m.radius );
+            ImGui::ProgressBar( selected.steadiness, ImVec2( -1, m.bar ), "" );
+            ImGui::PopStyleVar();
             ImGui::PopStyleColor();
             if( get_option<std::string>( "ACCURACY_DISPLAY" ) == "numbers" ) {
                 for( const auto &chance : selected.chances ) {
@@ -4101,20 +4273,25 @@ void target_ui::draw_modern_aim()
                 std::vector<std::string> symbols;
                 for( const auto &rating : selected.ratings ) {
                     symbols.push_back( string_format( "<color_%s>%s</color> = %s", rating.color,
-                                                       rating.symbol,
-                                                       pgettext( "aim_confidence", rating.label.c_str() ) ) );
+                                                      rating.symbol,
+                                                      pgettext( "aim_confidence", rating.label.c_str() ) ) );
                 }
                 info( enumerate_as_string( symbols, []( const std::string &symbol ) {
                     return symbol;
                 }, enumeration_conjunction::none ) );
                 info( confidence_bar( selected, 20 ) );
             }
+        } else {
+            ImGui::PushStyleColor( ImGuiCol_Text,
+                                   fp3d_survival_style::color( fp3d_survival_style::danger ) );
+            ImGui::TextWrapped( "%s", status == Status::OutOfAmmo ? _( "OUT OF AMMO" ) :
+                                status == Status::OutOfRange ? _( "Out of range" ) :
+                                _( "Cannot fire" ) );
+            ImGui::PopStyleColor();
         }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        info( _( "Aiming method" ) );
+        // ---- D. aiming method and shot cost -------------------------------
+        aim_hud_section( _( "Aiming method" ), m );
         ImGui::SetNextItemWidth( -1 );
         if( ImGui::BeginCombo( "##aiming_method", aim_name( *aim_mode ).c_str() ) ) {
             for( auto it = aim_types.begin(); it != aim_types.end(); ++it ) {
@@ -4125,48 +4302,28 @@ void target_ui::draw_modern_aim()
             }
             ImGui::EndCombo();
         }
-
         const std::string moves = can_fire ? colorize( std::to_string( predictions.front().moves ),
                                   c_light_blue ) : "-";
         ImGui::Spacing();
         info( string_format( "%s: %s", _( "Moves to fire" ), moves ) );
-        ImGui::Spacing();
+
+        // ---- E. shot actions ----------------------------------------------
+        ImGui::PushStyleColor( ImGuiCol_Separator, fp3d_survival_style::color( fp3d_survival_style::item ) );
+        ImGui::Separator();
+        ImGui::PopStyleColor();
         ImGui::BeginDisabled( !can_fire );
-        const ImVec2 action_size( -1, ImGui::GetFrameHeight() * 1.25f );
+        const ImVec2 action_size( -1, m.button );
         button( _( "Continue aiming" ), "AIM", action_size );
-        button( pgettext( "verb", "Fire" ), "FIRE", action_size );
+        accent_button( pgettext( "verb", "Fire" ), "FIRE", action_size );
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled( !can_fire );
+        // "Stop Aiming" is the existing key-binding name, so it is already
+        // translated in every language catalog.
+        button( _( "Stop Aiming" ), "STOPAIM", ImVec2( -1, m.button * .8f ) );
         ImGui::EndDisabled();
     }
     ImGui::End();
-
-    ImGui::SetNextWindowPos( ImVec2( view.Pos.x + map_width * .5f, view.Pos.y + view.Size.y - pad ),
-                             ImGuiCond_Always, ImVec2( .5f, 1 ) );
-    if( ImGui::Begin( "##aiming_actions", nullptr, autosize | ImGuiWindowFlags_NoBackground ) ) {
-        const std::array<std::string, 4> labels = {
-            _( "Select nearest target" ), _( "Next target" ), string_format( "%s  R", _( "Reload" ) ),
-            _( "Switch firing mode" )
-        };
-        const std::array<const char *, 4> actions = {
-            "CLOSEST_TARGET", "NEXT_TARGET", "SWITCH_AMMO", "SWITCH_MODE"
-        };
-        const ImGuiStyle &style = ImGui::GetStyle();
-        float button_width = 0;
-        for( const std::string &label : labels ) {
-            button_width = std::max( button_width, ImGui::CalcTextSize( label.c_str() ).x );
-        }
-        button_width += 2 * style.FramePadding.x;
-        const float space = map_width - 2 * style.WindowPadding.x - 2 * pad;
-        const size_t columns = 4 * button_width + 3 * style.ItemSpacing.x <= space ? 4 : 2;
-        for( size_t i = 0; i < labels.size(); ++i ) {
-            if( i % columns != 0 ) {
-                ImGui::SameLine();
-            }
-            ImGui::BeginDisabled( i < 2 && targets.empty() );
-            button( labels[i], actions[i], ImVec2( button_width, ImGui::GetFrameHeight() * 1.25f ) );
-            ImGui::EndDisabled();
-        }
-    }
-    ImGui::End();
+    ImGui::PopStyleVar( 5 );
 }
 #endif
 

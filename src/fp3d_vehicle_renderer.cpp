@@ -1681,12 +1681,17 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
                             const fp3d_camera::pose &pose,
                             const fp3d_gpu_camera_math::matrix4 &projection, int width, int height,
                             fp3d_geometry::mesh &mesh,
-                            std::vector<fp3d_geometry::draw_range> &ranges )
+                            std::vector<fp3d_geometry::draw_range> &ranges,
+                            const tripoint_abs_ms *highlighted_cargo )
 {
     fp3d_geometry::primitive_mesh_sink sink( mesh, ranges );
     gpu_vehicle_counts counts;
     const fp3d_camera::frustum view( pose.yaw, pose.pitch, static_cast<float>( width ) / height );
     for( const auto &v : scene.vehicles ) {
+        sink.highlight( highlighted_cargo && std::any_of( v.parts.begin(), v.parts.end(),
+        [&]( const part_view &part ) {
+            return part.native_position == *highlighted_cargo;
+        } ) );
         const auto first = mesh.vertices.size();
         const auto profile = build_shell( v );
         const silhouette shape = build_silhouette( v, profile );

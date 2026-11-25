@@ -41,10 +41,25 @@ unsigned material_revision = 0;
 std::unordered_map<std::string, unsigned> slots;
 // Colour-atlas insertion order is the authoritative 64x64 slot order.
 std::vector<std::string> slot_keys;
+std::unordered_map<unsigned, sprite_alpha_mask> sprite_alpha_masks;
 std::size_t auxiliary_cursor = 0;
 std::unordered_map<std::string, fp3d_material_aux::maps> auxiliary_cache;
 std::vector<auxiliary_tile> auxiliary_slots;
 std::unordered_map<std::string, std::array<float, 3>> vehicle_colors;
+// Native animation frames per sprite key. Cleared with the atlas because every
+// frame occupies a real atlas slot; both the atlas build and the per-frame draw
+// read this one table instead of resolving the tileset again.
+struct sprite_animation_frame {
+    std::string key;
+    unsigned loc_rand = 0; // native tick offset that selects this frame
+    int ticks = 1;
+};
+struct sprite_animation {
+    std::vector<sprite_animation_frame> frames;
+    int total_ticks = 0;
+};
+std::unordered_map<std::string, sprite_animation> sprite_animations;
+
 season_type season = SPRING;
 float texture_width = 1;
 float texture_height = 1;
@@ -55,10 +70,12 @@ void clear_slots()
 {
     slots.clear();
     slot_keys.clear();
+    sprite_alpha_masks.clear();
     auxiliary_cursor = 0;
     auxiliary_slots.clear();
     auxiliary_cache.clear();
     vehicle_colors.clear();
+    sprite_animations.clear();
 }
 
 unsigned stable_seed( const std::string &id )
@@ -128,7 +145,8 @@ bool paint( int index, const SDL_Rect &slot )
     return sprite->render_copy_ex( *renderer_owner, &dest, 0, nullptr, SDL_FLIP_NONE ) == 0;
 }
 
-bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot )
+bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot,
+                   bool frame_lock = false, unsigned loc_rand = 0 )
 {
     struct layer {
         const texture *source;
@@ -139,8 +157,14 @@ bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot )
     float min_y = 0;
     float max_x = std::max( 1, selected->get_tile_width() );
     float max_y = std::max( 1, selected->get_tile_height() );
-    const auto add = [&]( const tile_type & tile, const std::string & seed ) {
-        const auto sprites = choose_sprites( tile, seed );
+    const auto add = [&]( const tile_type & tile, const std::string & seed,
+                          bool lock_frame = false ) {
+        // A locked frame reads the tileset's own weighted frame list with the
+        // native tick offset, so every atlas slot holds one real 2D frame.
+        // Only the body tile is frame-locked: equipment overlays are separate
+        // tiles and keep their existing stable pick.
+        const auto sprites = lock_frame ? choose_sprites_at( tile, loc_rand ) :
+                             choose_sprites( tile, seed );
         for( const int index : {
                  image.kind == fp3d_snapshot::sprite_kind::held_item && sprites.foreground >= 0 ?
                  -1 : sprites.background, sprites.foreground
@@ -167,7 +191,7 @@ bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot )
     if( !base ) {
         return false;
     }
-    add( *base, image.id );
+    add( *base, image.id, frame_lock );
     if( image.kind == fp3d_snapshot::sprite_kind::item && image.multiple_items ) {
         if( const tile_type *highlight = selected->find_tile_type( "highlight_item" ) ) {
             add( *highlight, "highlight_item" );
@@ -211,6 +235,17 @@ sprite_choice choose_sprites( const tile_type &tile, const std::string &id )
     const unsigned seed = stable_seed( id );
     const auto *bg = tile.bg.pick( seed );
     const auto *fg = tile.fg.pick( seed );
+    return { bg && !bg->empty() ? bg->front() : -1,
+             fg && !fg->empty() ? fg->front() : -1 };
+}
+
+sprite_choice choose_sprites_at( const tile_type &tile, unsigned loc_rand )
+{
+    // Native cata_tiles::draw_tile_at passes `( ticks + seed ) % total_weight`
+    // to the same weighted lists; the weights are frame durations in 17 ms
+    // ticks. Nothing here re-reads an image or consumes gameplay RNG.
+    const auto *bg = tile.bg.pick( loc_rand );
+    const auto *fg = tile.fg.pick( loc_rand );
     return { bg && !bg->empty() ? bg->front() : -1,
              fg && !fg->empty() ? fg->front() : -1 };
 }
@@ -377,6 +412,36 @@ void set_tileset( std::shared_ptr<const tileset> set, const SDL_Renderer_Ptr &re
     failed = false;
     DebugLog( D_INFO, D_MAIN ) << "fp3d: material source=" << selected->get_tileset_id()
                                << "; invalidated atlas";
+}
+
+SDL_Texture_Ptr character_icon( const Character &character )
+{
+    if( !tilecontext || !renderer_owner || !*renderer_owner ) {
+        return {};
+    }
+    constexpr int size = 192;
+    SDL_Renderer *renderer = renderer_owner->get();
+    SDL_Texture_Ptr icon( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA32,
+                          SDL_TEXTUREACCESS_TARGET, size, size ) );
+    if( !icon ) {
+        return {};
+    }
+    saved_renderer_state saved( renderer );
+    if( !SDL_SetRenderTarget( renderer, icon.get() ) ) {
+        return {};
+    }
+    SetLogicalRenderSize( renderer, 0, 0 );
+    SDL_SetRenderScale( renderer, 1, 1 );
+    SDL_SetRenderViewport( renderer, nullptr );
+    SDL_SetRenderClipRect( renderer, nullptr );
+    SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
+    if( !SDL_RenderClear( renderer ) ||
+        !tilecontext->draw_character_preview( character, SDL_Rect{ 0, 0, size, size }, {} ) ) {
+        return {};
+    }
+    SDL_SetTextureBlendMode( icon.get(), SDL_BLENDMODE_BLEND );
+    SDL_SetTextureScaleMode( icon.get(), SDL_SCALEMODE_NEAREST );
+    return icon;
 }
 
 SDL_Texture_Ptr item_icon( const fp3d_snapshot::sprite &image )
@@ -549,7 +614,124 @@ std::vector<field_frame> field_animation_gpu( const fp3d_snapshot::sprite &image
     return resolve_field_animation( image, lookup_gpu );
 }
 
-void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview )
+namespace
+{
+struct sprite_frame_source {
+    std::string key;
+    unsigned loc_rand; // native tick offset that selects this frame
+    int ticks;
+};
+
+// Enumerate one sprite's frames exactly as the selected tileset stores them.
+// The 2D renderer reads the same weighted lists, where a frame's weight is how
+// many 17 ms ticks it stays on screen. Packs without frame art keep the single
+// existing static key, so their atlas and appearance are unchanged.
+std::vector<sprite_frame_source> sprite_frame_sources( const fp3d_snapshot::sprite &image )
+{
+    std::vector<sprite_frame_source> frames;
+    if( !selected ) {
+        return frames;
+    }
+    const tile_type *tile = resolve_sprite( *selected, image, season );
+    const std::string key = sprite_key( image );
+    if( tile && tile->animated ) {
+        unsigned tick = 0;
+        for( const auto &frame : tile->fg ) {
+            if( frame.obj.empty() || frame.obj.front() < 0 || frame.weight <= 0 ) {
+                continue;
+            }
+            frames.push_back( { key + ":" + std::to_string( frames.size() ), tick,
+                                static_cast<int>( frame.weight ) } );
+            tick += static_cast<unsigned>( frame.weight );
+        }
+    }
+    if( frames.size() < 2 ) {
+        frames.clear();
+        frames.push_back( { key, 0, 1 } );
+    }
+    return frames;
+}
+
+// One cached, owned copy of those frames per sprite key. The atlas build and
+// every drawn frame both read it, so a visible creature never re-runs tileset
+// lookups per frame.
+const sprite_animation &animation_for( const fp3d_snapshot::sprite &image )
+{
+    const std::string key = sprite_key( image );
+    auto entry = sprite_animations.find( key );
+    if( entry != sprite_animations.end() ) {
+        return entry->second;
+    }
+    if( sprite_animations.size() > 8192 ) {
+        // Bound the cache on long sessions; every entry rebuilds cheaply.
+        sprite_animations.clear();
+    }
+    sprite_animation animation;
+    for( const auto &frame : sprite_frame_sources( image ) ) {
+        animation.frames.push_back( { frame.key, frame.loc_rand, frame.ticks } );
+        animation.total_ticks += std::max( 0, frame.ticks );
+    }
+    if( animation.frames.empty() ) {
+        animation.frames.push_back( { key, 0, 1 } );
+        animation.total_ticks = 1;
+    }
+    return sprite_animations.emplace( key, std::move( animation ) ).first->second;
+}
+} // namespace
+
+std::vector<field_frame> sprite_animation_gpu( const fp3d_snapshot::sprite &image )
+{
+    std::vector<field_frame> result;
+    for( const auto &frame : animation_for( image ).frames ) {
+        result.push_back( { frame.ticks, lookup_gpu( frame.key ) } );
+    }
+    return result;
+}
+
+std::optional<uv_rect> sprite_frame_uv( const fp3d_snapshot::sprite &image,
+                                       std::int64_t now_ms, unsigned phase )
+{
+    const sprite_animation &animation = animation_for( image );
+    if( animation.total_ticks <= 0 ) {
+        return std::nullopt;
+    }
+    // cata_tiles advances one frame per 17 ms of wall clock (about 60 fps of
+    // animation) and offsets every tile by its own hash so a crowd does not
+    // pulse in lockstep. Using the clock instead of the frame index keeps the
+    // 3D view identical at any render frame rate.
+    unsigned tick = static_cast<unsigned>( ( now_ms / 17 + static_cast<std::int64_t>( phase ) ) %
+                                          animation.total_ticks );
+    for( const auto &frame : animation.frames ) {
+        const unsigned duration = static_cast<unsigned>( std::max( 0, frame.ticks ) );
+        if( tick < duration ) {
+            if( auto uv = lookup_gpu( frame.key ) ) {
+                return uv;
+            }
+            break;
+        }
+        tick -= duration;
+    }
+    // A reclaimed frame slot must still show the creature rather than a purple
+    // billboard: fall back to the sprite's own resident or first-frame art.
+    if( auto uv = lookup_gpu( sprite_key( image ) ) ) {
+        return uv;
+    }
+    return lookup_gpu( animation.frames.front().key );
+}
+
+const sprite_alpha_mask *sprite_alpha( const fp3d_snapshot::sprite &image, std::int64_t now_ms )
+{
+    const auto uv = sprite_frame_uv( image, now_ms,
+                    static_cast<unsigned>( std::hash<tripoint_abs_ms>{}( image.position ) ) );
+    if( !uv ) { return nullptr; }
+    const unsigned index = static_cast<int>( uv->top * atlas_size ) / slot_size * slots_per_row +
+                           static_cast<int>( uv->left * atlas_size ) / slot_size;
+    const auto it = sprite_alpha_masks.find( index );
+    return it == sprite_alpha_masks.end() ? nullptr : &it->second;
+}
+
+void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::cell *preview,
+              const fp3d_snapshot::sprite *pickup_item )
 {
     if( !selected || !renderer_owner || !*renderer_owner || failed ) {
         return;
@@ -604,6 +786,10 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         int field_intensity = 1;
         int field_connections = 0;
         int field_sprite = -1;
+        // One real animation frame of a sprite: the native tick offset that the
+        // tileset's own weighted list maps back to this exact frame.
+        bool animated_frame = false;
+        unsigned sprite_loc_rand = 0;
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
@@ -811,6 +997,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         }
     };
+    if( pickup_item ) {
+        add( sprite_key( *pickup_item ), pickup_item );
+    }
     if( preview ) {
         add_cell( *preview );
     }
@@ -833,9 +1022,41 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         }
     }
+    // Every visible actor keeps its native idle animation: one atlas slot per
+    // real tileset frame, never a per-frame texture upload or a second pass.
+    // Frame lists come from the same owned cache the renderer reads.
+    std::vector<std::pair<std::string, std::string>> animation_aliases;
     for( const auto &image : scene.sprites ) {
-        if( image.kind != fp3d_snapshot::sprite_kind::field ) {
-            add( sprite_key( image ), &image );
+        if( image.kind == fp3d_snapshot::sprite_kind::field ) {
+            continue;
+        }
+        const std::string base = sprite_key( image );
+        const sprite_animation &animation = animation_for( image );
+        if( animation.frames.size() <= 1 ) {
+            add( base, &image );
+            continue;
+        }
+        std::string first;
+        for( const auto &frame : animation.frames ) {
+            if( slots.count( frame.key ) ||
+                slots.size() + pending.size() >= max_slots ||
+                std::any_of( pending.begin(), pending.end(), [&]( const request & entry ) {
+                return entry.key == frame.key;
+            } ) ) {
+                continue;
+            }
+            if( first.empty() ) {
+                first = frame.key;
+            }
+            request entry;
+            entry.key = frame.key;
+            entry.image = &image;
+            entry.animated_frame = true;
+            entry.sprite_loc_rand = frame.loc_rand;
+            pending.push_back( std::move( entry ) );
+        }
+        if( !first.empty() ) {
+            animation_aliases.emplace_back( base, std::move( first ) );
         }
     }
     if( pending.empty() ) {
@@ -1017,7 +1238,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         }
         if( entry.image ) {
-            painted = paint_sprite( *entry.image, slot );
+            painted = entry.animated_frame ?
+                      paint_sprite( *entry.image, slot, true, entry.sprite_loc_rand ) :
+                      paint_sprite( *entry.image, slot );
         }
         if( entry.field_sprite >= 0 ) {
             painted = paint( entry.field_sprite, slot );
@@ -1158,8 +1381,31 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 }
             }
         }
+        if( painted && entry.image && entry.image->kind == fp3d_snapshot::sprite_kind::monster ) {
+            // Once per newly populated atlas slot, including animation frames.
+            // Hover/picking only use this CPU bitmask; no per-frame readback.
+            std::array<Uint8, slot_size * slot_size * 4> rgba{};
+            if( ReadRenderPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32, rgba.data(), slot_size * 4 ) == 0 ) {
+                sprite_alpha_mask mask;
+                mask.width = mask.height = slot_size;
+                mask.pixels.resize( slot_size * slot_size );
+                for( int i = 0; i < slot_size * slot_size; ++i ) { mask.pixels[i] = rgba[i * 4 + 3] >= 32; }
+                sprite_alpha_masks.insert_or_assign( index, std::move( mask ) );
+            }
+        } else {
+            sprite_alpha_masks.erase( index );
+        }
         slots.emplace( id, index );
         slot_keys.push_back( id );
+    }
+    // An animated sprite's base key points at its first frame, so a reclaimed
+    // frame slot degrades to static art instead of a purple billboard. The
+    // alias shares one physical slot and never enters the atlas order.
+    for( const auto &alias : animation_aliases ) {
+        const auto frame = slots.find( alias.second );
+        if( frame != slots.end() ) {
+            slots.emplace( alias.first, frame->second );
+        }
     }
     // Appending slots preserves every existing UV. Only atlas resets above
     // invalidate cached geometry; a new terrain ID changes its own chunk key.

@@ -236,8 +236,10 @@ class terrain_recipes
 class terrain_index
 {
     public:
-        explicit terrain_index( bool retain_recipes = true, bool resident = false ) :
-            retain_models_on_gpu( resident ), retain_recipes_( retain_recipes ) {}
+        explicit terrain_index( bool retain_recipes = true, bool resident = false,
+                                bool split_terrain_instances = false ) :
+            retain_models_on_gpu( resident ), split_terrain_instances( split_terrain_instances ),
+            retain_recipes_( retain_recipes ) {}
 
         using shore_cache = fp3d_shore_cache<tripoint_abs_ms>;
         struct chunk {
@@ -270,6 +272,8 @@ class terrain_index
 
         fp3d_cell_index cells;
         const bool retain_models_on_gpu;
+        const bool split_terrain_instances;
+        static constexpr size_t split_page_budget = 96;
         fp3d_geometry::model_mesh_cache<model_key> model_meshes;
         fp3d_geometry::resident_model_meshes<model_key> resident_models;
         using page_key = std::pair<tripoint_abs_ms, model_key>;
@@ -675,14 +679,27 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         bool enable_local_shadows = false, bool enable_sun_shadow = false,
         const fp3d_scene::blueprint *blueprint = nullptr,
         const fp3d_targeting::edge_outline *target_outline = nullptr, terrain_index *cache = nullptr,
-        bool reuse_material_slots = false )
+        bool reuse_material_slots = false,
+        const fp3d_compositor::pickup_highlight *pickup = nullptr,
+        const tripoint_abs_ms *peek_window = nullptr )
 {
     if( !width || !height || width > 4096 || height > 4096 ) {
         return std::nullopt;
     }
     fp3d_regression::turn_probe timing( "gpu_prepare_materials" );
+    using pickup_kind = fp3d_compositor::pickup_highlight::kind;
+    std::optional<fp3d_snapshot::sprite> pickup_item;
+    if( pickup && pickup->type == pickup_kind::item ) {
+        pickup_item.emplace();
+        pickup_item->kind = fp3d_snapshot::sprite_kind::item;
+        pickup_item->position = pickup->tile;
+        pickup_item->id = pickup->id;
+        pickup_item->variant = pickup->variant;
+        pickup_item->height = .7f;
+    }
     if( !reuse_material_slots ) {
-        fp3d_materials::prepare( scene, blueprint && blueprint->terrain ? &*blueprint->terrain : nullptr );
+        fp3d_materials::prepare( scene, blueprint && blueprint->terrain ? &*blueprint->terrain : nullptr,
+                                 pickup_item ? &*pickup_item : nullptr );
     }
     timing.stage( "gpu_prepare_view" );
     prepared_world result;
@@ -823,7 +840,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     terrain.ensure( scene, include_landscape );
     timing.stage( "gpu_prepare_terrain_gather" );
     const auto known_cell = [&]( const tripoint_abs_ms &position ) {
-        return terrain.cells.get( position );
+        const auto *tile = terrain.cells.get( position );
+        return tile && overhead && fp3d_snapshot::hidden_by_cutaway( scene, *tile ) ? nullptr : tile;
     };
     const auto &vehicle_roofs = terrain.vehicle_roofs;
     const std::optional<fp3d_materials::uv_rect> unit_uv = fp3d_materials::uv_rect{ 0, 0, 1, 1 };
@@ -886,6 +904,9 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     const std::size_t atlas_slots = fp3d_materials::atlas_slot_count();
     const auto gather_tile = [&]( const fp3d_snapshot::cell &tile, bool preview,
                                   const terrain_index::chunk *chunk, bool plain_terrain ) {
+        if( !preview && overhead && fp3d_snapshot::hidden_by_cutaway( scene, tile ) ) {
+            return;
+        }
         const auto rel = tile.position - scene.origin;
         if( !include_landscape && ( std::abs( rel.x() ) > 24 || std::abs( rel.y() ) > 24 ||
                                     tile.faded_tower || tile.terrain == "t_radio_tower" ) ) {
@@ -903,6 +924,24 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 return;
             }
         }
+        const auto near_room_wall = [&]() {
+            if( preview || !overhead || !scene.pointer_room || !fp3d_snapshot::cutaway_column( scene, tile ) ||
+                tile.position.z() != scene.origin.z() || tile.kind != kind::wall ) {
+                return false;
+            }
+            int neighbours = 0;
+            bool near = false;
+            for( const auto &dir : { tripoint_rel_ms::north, tripoint_rel_ms::east,
+                     tripoint_rel_ms::south, tripoint_rel_ms::west } ) {
+                if( scene.pointer_room->interior.count( tile.position + dir ) ) {
+                    ++neighbours;
+                    near |= dir.x() * ( pose.eye.x - rel.x() ) +
+                            dir.y() * ( pose.eye.y - rel.y() ) < 0;
+                }
+            }
+            // Keep pillars and partitions inside the selected region full height.
+            return neighbours == 1 && near;
+        };
         const auto add_instance = [&]( model_key model, const std::optional<fp3d_materials::uv_rect> &uv,
                                        float height, std::optional<std::array<float, 4>> color = {},
                                        bool unlit = false, instance_group *destination = nullptr ) {
@@ -914,6 +953,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 instance.uv_rect = { uv->left, uv->top, uv->right, uv->bottom };
             }
             instance.tint = color.value_or( std::array<float, 4>{ tint, tint, tint, 1 } );
+            if( !preview && pickup && pickup->type == pickup_kind::furniture &&
+                pickup->tile == tile.position && model.type == shape::furniture ) {
+                instance.offset[3] = fp3d_gpu::white_model_material;
+            }
             if( tile.faded_tower ) {
                 model.faded = true;
                 instance.offset[3] = 2.f;
@@ -970,6 +1013,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                     wall.type = shape::open_wall;
                     wall.param_x = fp3d_scene::water_surface_offset( above->terrain );
                     ++result.uncapped_walls;
+                }
+                if( near_room_wall() ) {
+                    wall.type = shape::capped_wall;
+                    wall.param_x = .45f - fp3d_camera::floor_height;
                 }
                 // A wall under water can have a distinct top height.
                 auto *destination = wall.param_x == 0.f ?
@@ -1057,9 +1104,13 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                            fp3d_ramp::surface{};
         const float bounced = tint * ( .18f + .44f * std::clamp( scene.sky.daylight, 0.f, 1.f ) );
         const auto under_tint = std::array<float, 4>{ bounced, bounced, bounced, 1.f };
+        // A presentation cut must not let daylight through the physical roof.
+        const auto *physical_above = terrain.cells.get( tile.position + tripoint_rel_ms::above );
+        const bool lifted_ceiling = overhead && scene.camera_cutaway &&
+                                    tile.position.z() == scene.origin.z() && fp3d_snapshot::cutaway_column( scene, tile );
         const bool clear_overhead = !tile.ceiling_present && !tile.cutaway_ceiling &&
-                                    !( above && above->floor_present && !above->open_air );
-        if( include_landscape && tile.ceiling_present && !tile.glass_ceiling &&
+                                    !( physical_above && physical_above->floor_present && !physical_above->open_air );
+        if( include_landscape && tile.ceiling_present && !lifted_ceiling && !tile.glass_ceiling &&
             !vehicle_roofs.ceilings.count( tile.position ) &&
             !fp3d_scene::upper_floor_owns_cap( above ) &&
             tile.terrain.compare( 0, 9, "t_treetop" ) != 0 ) {
@@ -1072,7 +1123,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         if( fp3d_snapshot::is_glass_roof( tile.terrain ) ) {
             tile_pane( pane_shape::skylight, storey, std::nullopt );
         }
-        if( tile.ceiling_present && tile.glass_ceiling &&
+        if( tile.ceiling_present && !lifted_ceiling && tile.glass_ceiling &&
             !( above && fp3d_snapshot::is_glass_roof( above->terrain ) ) ) {
             tile_pane( pane_shape::skylight, storey + fp3d_camera::floor_height - .08f, std::nullopt );
         }
@@ -1154,6 +1205,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 model.type = shape::open_wall;
                 model.param_x = fp3d_scene::water_surface_offset( above->terrain );
             }
+            if( near_room_wall() ) {
+                model.type = shape::capped_wall;
+                model.param_x = .45f - fp3d_camera::floor_height;
+            }
         } else if( tile.kind == kind::closed_door || tile.kind == kind::open_door ||
                    tile.kind == kind::damaged_door || ( include_landscape && tile.kind == kind::glass ) ) {
             if( !include_landscape && glass_door ) { return; }
@@ -1177,10 +1232,19 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                            storey, fp3d_materials::lookup_gpu( "$window:" + tile.terrain ) );
             }
             if( tile.pane == fp3d_snapshot::window_pane::covered ) {
-                model_key curtain{ shape::curtain };
-                curtain.quarter_turns = model.quarter_turns;
-                add_instance( curtain, fp3d_materials::lookup_gpu( "$window:" + tile.terrain ),
-                              storey, {}, true );
+                if( peek_window && *peek_window == tile.position ) {
+                    const auto fabric = fp3d_materials::lookup_gpu( "$window:" + tile.terrain );
+                    tile_pane( model.quarter_turns ? pane_shape::turned_window : pane_shape::window,
+                               storey, fabric, .22f );
+                    if( fabric ) {
+                        panes.back().instance.offset[3] = fp3d_gpu::soft_curtain_material;
+                    }
+                } else {
+                    model_key curtain{ shape::curtain };
+                    curtain.quarter_turns = model.quarter_turns;
+                    add_instance( curtain, fp3d_materials::lookup_gpu( "$window:" + tile.terrain ),
+                                  storey, {}, true );
+                }
             }
         } else if( ( include_landscape || !memory ) && !tile.exterior_only &&
                    water_height < 0 ) {
@@ -1475,6 +1539,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         return terrain_index::shore_cache::block_of( absolute );
     };
     bool has_resident = false;
+    size_t split_pages = 0;
     for( const auto &[model, group] : groups ) {
         const auto build = [&]( fp3d_geometry::mesh &mesh ) { emit_model( model, mesh ); };
         // Only opaque model geometry is resident. Keep transparent and
@@ -1504,11 +1569,55 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         if( !draw.index_count ) {
             continue;
         }
+        const bool terrain_model = model.type == shape::floor || model.type == shape::open_wall ||
+                                   model.type == shape::capped_wall;
+        auto &queue = model.blueprint ? blueprint_models :
+                      ( model.faded || model.type == shape::furniture_glass ||
+                        model.type == shape::kiln_fire ) ? translucent_models : result.batches;
+        const auto emit_batch = [&]( const batch &part ) {
+            queue.push_back( part );
+            if( model.surface != reflective_surface::none ) {
+                const bool water = model.type == shape::water;
+                const float roughness = water ? .13f : model.surface == reflective_surface::concrete ? .69f : .48f;
+                const float optical_depth = water ?
+                                            ( model.surface == reflective_surface::water_deep ? .95f : .35f ) : 0.f;
+                result.reflective_batches.push_back( { part,
+                    { water ? 1.f : wetness, roughness, model.water_sky ? 1.f : 0.f, optical_depth }
+                } );
+            }
+        };
         if( draw.resident ) {
             result.resident_instance_count += group.size();
-            const bool can_page = ( model.type == shape::floor || model.type == shape::open_wall ||
-                                    model.type == shape::capped_wall ) &&
-                                  group.size() <= terrain_index::instance_pages::page_size;
+            if( terrain_model && cache->split_terrain_instances &&
+                split_pages < terrain_index::split_page_budget &&
+                group.size() > terrain_index::instance_pages::page_size ) {
+                std::map<tripoint_abs_ms, instance_group> blocks;
+                for( const auto &item : group ) {
+                    blocks[draw_block( item )].push_back( item );
+                }
+                for( const auto &[block, items] : blocks ) {
+                    const auto page = split_pages < terrain_index::split_page_budget ?
+                                      cache->resident_pages.write( { block, model }, items, encode_resident ) :
+                                      std::nullopt;
+                    if( page ) {
+                        batch part = draw;
+                        part.first_instance = *page;
+                        part.instance_count = static_cast<Uint32>( items.size() );
+                        part.paged_instances = true;
+                        emit_batch( part );
+                        ++split_pages;
+                    } else {
+                        std::transform( items.begin(), items.end(), std::back_inserter( instance_stream ),
+                                        encode_resident );
+                    }
+                }
+                draw.instance_count = static_cast<Uint32>( instance_stream.size() ) - draw.first_instance;
+                if( draw.instance_count ) {
+                    emit_batch( draw );
+                }
+                continue;
+            }
+            const bool can_page = terrain_model && group.size() <= terrain_index::instance_pages::page_size;
             if( can_page ) {
                 const auto block = draw_block( group.front() );
                 if( std::all_of( group.begin() + 1, group.end(), [&]( const auto &item ) {
@@ -1521,19 +1630,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 }
             }
         }
-        auto &queue = model.blueprint ? blueprint_models :
-                      ( model.faded || model.type == shape::furniture_glass ||
-                        model.type == shape::kiln_fire ) ? translucent_models : result.batches;
-        queue.push_back( draw );
-        if( model.surface != reflective_surface::none ) {
-            const bool water = model.type == shape::water;
-            const float roughness = water ? .13f : model.surface == reflective_surface::concrete ? .69f : .48f;
-            const float optical_depth = water ?
-                                        ( model.surface == reflective_surface::water_deep ? .95f : .35f ) : 0.f;
-            result.reflective_batches.push_back( { result.batches.back(),
-                { water ? 1.f : wetness, roughness, model.water_sky ? 1.f : 0.f, optical_depth }
-            } );
-        }
+        emit_batch( draw );
         if( !draw.paged_instances ) {
             if( draw.resident ) {
                 std::transform( group.begin(), group.end(), std::back_inserter( instance_stream ),
@@ -1565,10 +1662,12 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     timing.stage( "gpu_prepare_dynamic_geometry" );
     std::vector<fp3d_geometry::draw_range> vehicle_ranges;
     result.vehicle_geometry = fp3d_vehicle::append_gpu_vehicle_geometry( scene, pose, result.camera,
-                              width, height, result.geometry, vehicle_ranges );
+                              width, height, result.geometry, vehicle_ranges,
+                              pickup && pickup->type == pickup_kind::vehicle ? &pickup->tile : nullptr );
     std::map<float, Uint32> vehicle_materials;
     for( const auto &range : vehicle_ranges ) {
-        const float mode = range.textured ? -range.alpha_cutoff.value_or( .5f ) :
+        const float mode = range.highlighted ? fp3d_gpu::white_model_material :
+                           range.textured ? -range.alpha_cutoff.value_or( .5f ) :
                            range.unlit ? 2.f : 1.f;
         const auto [instance, inserted] = vehicle_materials.emplace( mode, result.instances.size() );
         if( inserted ) {
@@ -1636,11 +1735,11 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         }
     };
     std::unordered_set<tripoint_abs_ms> storage_items;
-    for( const auto &image : scene.sprites ) {
+    const auto draw_world_sprite = [&]( const fp3d_snapshot::sprite &image, bool highlighted ) {
         using sprite_kind = fp3d_snapshot::sprite_kind;
         if( image.kind == sprite_kind::field || image.kind == sprite_kind::held_item ||
             ( image.is_avatar && !overhead ) || image.height <= 0.f ) {
-            continue;
+            return;
         }
         const auto rel = image.position - scene.origin;
         const auto *support = known_cell( image.position );
@@ -1649,21 +1748,31 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             fp3d_furniture::shows_contents( support->furniture->shape ) ) {
             if( support->known != fp3d_snapshot::knowledge::visible || support->exterior_only ||
                 !storage_items.insert( image.position ).second ) {
-                continue;
+                return;
             }
         }
         const float base = rel.z() * fp3d_camera::floor_height + image.elevation;
-        const float half = image.height * .5f;
+        // The drawn height comes from the 3D actor-size setting. The quad is
+        // anchored at the feet and centred on the tile, so shrinking keeps
+        // ground contact and centre alignment; picking still uses the native
+        // `image.height` so reach and hit rules never follow a display option.
+        const float height = image.height * image.display_scale;
+        const float half = height * .5f;
         if( !sprite_view.contains( rel.x() + up[0] * half - pose.eye.x,
                                    base + up[1] * half - pose.eye.height,
-                                   rel.y() + up[2] * half - pose.eye.y, image.height * .74f ) ) {
-            continue;
+                                   rel.y() + up[2] * half - pose.eye.y, height * .74f ) ) {
+            return;
         }
         const bool bedding = !overhead && item && support && support->furniture &&
                              ( support->furniture->shape == furniture_kind::bed ||
                                support->furniture->shape == furniture_kind::bed_frame );
-        const Uint32 mesh = sprite_mesh( bedding, image.height );
-        auto uv = fp3d_materials::lookup_gpu( fp3d_materials::sprite_key( image ) );
+        const Uint32 mesh = sprite_mesh( bedding, height );
+        // The native idle animation of this actor, resolved to the frame the 2D
+        // tileset would show at this instant. Every frame is already an atlas
+        // slot, so switching costs one table lookup and no texture upload.
+        const unsigned animation_phase =
+            static_cast<unsigned>( std::hash<tripoint_abs_ms>{}( image.position ) );
+        auto uv = fp3d_materials::sprite_frame_uv( image, now, animation_phase );
         const float flash = image.kind == sprite_kind::monster ?
                             fp3d_compositor::hit_flash( image.position ) : 0.f;
         fp3d_gpu::mesh_instance sprite;
@@ -1678,6 +1787,9 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             const float flash_tint = .9f - .72f * flash;
             sprite.tint = { flash > 0.f ? 1.f : .9f, flash_tint, flash_tint, 1.f };
         }
+        if( highlighted ) {
+            sprite.offset[3] = uv ? fp3d_gpu::white_sprite_material : fp3d_gpu::white_model_material;
+        }
         if( image.is_avatar ) {
             overlays.emplace_back( mesh, sprite );
         } else {
@@ -1685,7 +1797,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         }
         ++result.sprite_count;
         if( bedding ) {
-            continue; // The legacy flat bedding path returns before drawing badges.
+            return; // The legacy flat bedding path returns before drawing badges.
         }
 
         unsigned displayed = 0;
@@ -1698,8 +1810,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 return;
             }
             constexpr float size = .30f;
-            const float side = image.height * .33f + displayed * ( size + .02f );
-            const float rise = image.height + .16f - size * .5f - fp3d_geometry::billboard_lift;
+            const float side = height * .33f + displayed * ( size + .02f );
+            const float rise = height + .16f - size * .5f - fp3d_geometry::billboard_lift;
             fp3d_gpu::mesh_instance badge;
             badge.offset = { rel.x() + right[0] * side + up[0] * rise, base + up[1] * rise,
                              rel.y() + right[2] * side + up[2] * rise, fp3d_gpu::unlit_cutout( .5f ) };
@@ -1713,6 +1825,21 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         for( const auto &id : image.status_icons ) {
             add_badge( id );
         }
+    };
+    for( const auto &image : scene.sprites ) {
+        if( const auto *support = terrain.cells.get( image.position );
+            overhead && support && fp3d_snapshot::hidden_by_cutaway( scene, *support ) ) { continue; }
+        if( pickup_item && image.kind == fp3d_snapshot::sprite_kind::item &&
+            image.position == pickup_item->position ) {
+            pickup_item->height = image.height;
+            pickup_item->display_scale = image.display_scale;
+            pickup_item->elevation = image.elevation;
+            continue;
+        }
+        draw_world_sprite( image, false );
+    }
+    if( pickup_item ) {
+        draw_world_sprite( *pickup_item, true );
     }
     result.opaque_batches = static_cast<Uint32>( result.batches.size() );
     if( include_landscape && !scene.unknown.empty() ) {
@@ -1781,6 +1908,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     std::unordered_map<std::string, field_animation> field_animations;
     std::vector<field_draw> fields;
     for( const auto &image : scene.sprites ) {
+        if( const auto *support = terrain.cells.get( image.position );
+            overhead && support && fp3d_snapshot::hidden_by_cutaway( scene, *support ) ) { continue; }
         if( image.kind != fp3d_snapshot::sprite_kind::field || image.height <= 0.f ) {
             continue;
         }
@@ -2036,7 +2165,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 emit( a, -ca[3] );
             };
             cue.begin( primitive::quads );
-            for( size_t i = 0; i < target_outline->corners.size(); ++i ) {
+            for( const auto &edge : target_outline->segments ) { segment( edge[0], edge[1] ); }
+            for( size_t i = 0; target_outline->segments.empty() && i < target_outline->corners.size(); ++i ) {
                 const auto &a = target_outline->corners[i];
                 const auto &b = target_outline->corners[( i + 1 ) % target_outline->corners.size()];
                 segment( a, b );
@@ -2050,7 +2180,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 }
             }
             cue.end();
-            append_cue( first, { 1, 1, 1, 1 } );
+            append_cue( first, target_outline->color );
         }
     }
     result.blend_end = static_cast<Uint32>( result.batches.size() );
@@ -3025,6 +3155,11 @@ class live_world
                 metrics.dynamic_upload_bytes = has_dynamic ? slot.mesh.delta_bytes() : 0;
                 metrics.instance_upload_bytes = dynamic_instances ? slot.instances.delta_bytes() : 0;
                 metrics.resident_instance_upload_bytes = static_instances ? resident_instances_.delta_bytes() : 0;
+                if( static_instances ) {
+                    metrics.resident_page_upload_bytes = resident_instances_.delta_prefix_upload_bytes();
+                    metrics.resident_instance_merged_gap_bytes = resident_instances_.delta_merged_gap_bytes();
+                    metrics.resident_packed_instances = static_cast<unsigned>( world.resident_instances.size() );
+                }
                 metrics.command_upload_bytes = slot.commands.delta_bytes();
                 metrics.upload_copies = static_cast<unsigned>(
                                             ( update_resident ? resident_mesh_.delta_copy_count() : 0 ) +

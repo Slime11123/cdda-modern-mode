@@ -3332,6 +3332,7 @@ class Character : public Creature, public visitable
          * As above, but includes all creatures the player can detect well enough to target
          * with ranged weapons, e.g. with infrared vision.
          */
+        bool is_targetable_creature( const Creature &critter, int range, bool melee ) const;
         std::vector<Creature *> get_targetable_creatures( int range, bool melee ) const;
         /**
          * Returns all vehicles that this player can see and that are in the given

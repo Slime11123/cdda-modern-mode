@@ -1,6 +1,7 @@
 #include "fp3d_modern_ui.h"
 #include "fp3d_aiming.h"
 #include "fp3d_compositor.h"
+#include "modern_2d_camera.h"
 #include "fp3d_regression.h"
 
 #if defined(TILES) && defined(ENABLE_FP3D)
@@ -19,6 +20,7 @@
 
 
 #include "avatar.h"
+#include "creature_tracker.h"
 #include "debug.h"
 #include "game.h"
 #include "fp3d_camera.h"
@@ -56,6 +58,10 @@ bool panel_input = false;
 bool modern_aiming = false;
 bool aiming_input = false;
 std::optional<tripoint_abs_ms> aimed_creature;
+// Tile the aim cursor actually rests on (creature, item or empty tile). Only
+// used to place the modern HUD markers; selection and firing still come from
+// the native targeting code.
+std::optional<tripoint_abs_ms> aimed_tile;
 bool available = false;
 // Native GPU UI bring-up has no 3D renderer yet. Keep 3D unavailable
 // independently of shared 2D presentation and input.
@@ -74,7 +80,11 @@ struct gpu_view_state {
     bool overhead;
     float aspect;
     float pointer_reach;
+    unsigned pickup_revision = 0;
+    unsigned contents_generation = 0;
 };
+std::optional<fp3d_compositor::pickup_highlight> pickup_source_highlight;
+unsigned pickup_revision = 0;
 std::optional<gpu_view_state> pending_gpu_view;
 fp3d_gpu::frame_presentation<gpu_view_state> gpu_views;
 
@@ -106,6 +116,16 @@ float pitch = 0.0f;
 bool overhead_view = false;
 fp3d_camera::orbit orbit_camera;
 bool orbit_dragging = false;
+right_camera_drag camera_drag;
+modern_2d_camera overhead_pan;
+std::optional<tripoint_abs_ms> pointer_room;
+std::optional<tripoint_abs_ms> curtain_peek;
+point curtain_direction;
+
+bool first_person_curtain_peek()
+{
+    return curtain_peek && enabled && !overhead_view;
+}
 // A right-click the overhead view consumed, waiting for the world dispatcher to
 // turn it into an ordinary secondary select.
 bool secondary_select_pending = false;
@@ -123,6 +143,7 @@ std::optional<fp3d_snapshot::scene_snapshot> latest_scene;
 fp3d_gpu_world_qa::terrain_index live_terrain_index( true, true );
 std::optional<fp3d_hud::data> latest_2d_hud;
 unsigned published_generation = 0;
+unsigned contents_generation = 0; // Native publications only; camera masks do not change atlas contents.
 unsigned prepared_generation = 0;
 fp3d_camera::follower camera;
 fp3d_camera::rider_follower boarded_camera;
@@ -143,6 +164,17 @@ float viewport_x = 0;
 float viewport_y = 0;
 float viewport_width = 0;
 float viewport_height = 0;
+
+void reset_pointer_room()
+{
+    pointer_room.reset();
+    if( latest_scene && latest_scene->pointer_room ) {
+        latest_scene->pointer_room.reset();
+        latest_scene->render_generation = ++published_generation;
+        pending_gpu_view.reset();
+        gpu_world_qa_pending.reset();
+    }
+}
 
 // One camera pose for the world FBO, reticle ray and target details.
 fp3d_camera::offset visual_camera( unsigned now )
@@ -169,6 +201,43 @@ fp3d_camera::offset visual_camera( unsigned now )
 // parameters.
 fp3d_camera::pose camera_pose( unsigned now )
 {
+    if( overhead_view && curtain_peek && latest_scene ) {
+        const auto rel = *curtain_peek - latest_scene->origin;
+        auto peek = orbit_camera;
+        const float length = std::hypot( curtain_direction.x, curtain_direction.y );
+        if( length > 0 ) {
+            peek.azimuth = std::atan2( curtain_direction.x, -curtain_direction.y ) *
+                           ( 180.f / 3.14159265f );
+            return fp3d_camera::orbit_pose( peek, rel.x() + 1.5f * curtain_direction.x / length,
+                                            rel.y() + 1.5f * curtain_direction.y / length );
+        }
+        return fp3d_camera::orbit_pose( peek, rel.x(), rel.y() );
+    }
+    if( first_person_curtain_peek() ) {
+        const float length = std::hypot( curtain_direction.x, curtain_direction.y );
+        if( length > 0 ) {
+            return { static_cast<float>( std::atan2( curtain_direction.x, -curtain_direction.y ) *
+                                         180.0 / 3.141592653589793 ), 0.f,
+                     { -.44f * curtain_direction.x / length, -.44f * curtain_direction.y / length, 1.65f } };
+        }
+    }
+    if( latest_scene && panel_input && pickup_source_highlight ) {
+        const auto rel = pickup_source_highlight->tile - latest_scene->origin;
+        if( overhead_view ) {
+            auto preview = orbit_camera;
+            preview.distance = pickup_source_highlight->type == pickup_highlight::kind::vehicle ? 12.f : 8.f;
+            return fp3d_camera::orbit_pose( preview, rel.x(), rel.y() );
+        }
+        const auto eye = visual_camera( now );
+        const float x = rel.x() - eye.x;
+        const float y = rel.y() - eye.y;
+        const float distance = std::hypot( x, y );
+        if( distance > .1f ) {
+            constexpr float degrees = 180.f / 3.14159265f;
+            return { std::atan2( x, -y ) * degrees,
+                     std::atan2( eye.height - .75f, distance ) * degrees, eye };
+        }
+    }
     if( !overhead_view || !latest_scene ) {
         return { yaw, pitch, visual_camera( now ) };
     }
@@ -177,7 +246,12 @@ fp3d_camera::pose camera_pose( unsigned now )
     const fp3d_camera::offset follow = latest_scene->rider && boarded_camera.active() ?
                                        boarded_camera.relative_to( latest_scene->origin, now ) :
                                        camera.relative_to( latest_scene->origin, now );
-    return fp3d_camera::orbit_pose( orbit_camera, follow.x, follow.y );
+    const point pan = overhead_pan.pixels();
+    const float angle = orbit_camera.azimuth * 3.14159265f / 180.f;
+    const float scale = orbit_camera.distance / 850.f;
+    return fp3d_camera::orbit_pose( orbit_camera,
+                                  follow.x + ( pan.x * std::cos( angle ) - pan.y * std::sin( angle ) ) * scale,
+                                  follow.y + ( pan.x * std::sin( angle ) + pan.y * std::cos( angle ) ) * scale );
 }
 
 float overhead_pointer_reach()
@@ -194,7 +268,8 @@ std::optional<gpu_view_state> targeting_view()
         const float aspect = texture_height > 0 ? static_cast<float>( texture_width ) / texture_height : 1.f;
         return gpu_view_state{ camera_pose( SDL_GetTicks() ), latest_scene->origin,
                                latest_scene->geometry_generation, latest_scene->render_generation,
-                               fp3d_materials::revision(), overhead_view, aspect, overhead_pointer_reach() };
+                               fp3d_materials::revision(), overhead_view, aspect, overhead_pointer_reach(),
+                               0, contents_generation };
     }
     const auto &view = gpu_views.target_view();
     if( !view || view->origin != latest_scene->origin || view->overhead != overhead_view ||
@@ -210,7 +285,7 @@ std::optional<gpu_view_state> targeting_view()
 void update_pointer( int x, int y )
 {
     pointer.inside = false;
-    if( !overhead_view || !available || !renderer ) {
+    if( !renderer ) {
         return;
     }
     int logical_width = 0;
@@ -242,9 +317,9 @@ void update_pointer( int x, int y )
 // mouse position, using the exact pose the frame is drawn with. Cached because
 // the HUD, the prompt and the outline all ask for it every frame.
 std::optional<fp3d_targeting::target> pointing_target( const fp3d_camera::pose &pose, float aspect,
-        float reach )
+        float reach, bool fresh = false )
 {
-    if( !latest_scene || !pointer.inside ) {
+    if( !latest_scene || !pointer.inside || right_camera_dragging() ) {
         return std::nullopt;
     }
     static unsigned generation = 0;
@@ -254,16 +329,18 @@ std::optional<fp3d_targeting::target> pointing_target( const fp3d_camera::pose &
     static float previous_aspect = 0;
     static float previous_reach = 0;
     static std::optional<fp3d_targeting::target> cached;
-    if( generation != latest_scene->render_generation ||
+    // Pixel-exact sprite alpha picking must not reuse a neighbour's hit after a
+    // small mouse movement. HUD text has its own presentation hysteresis.
+    const bool pointer_moved = pointer.ndc_x != previous_x || pointer.ndc_y != previous_y;
+    if( fresh || generation != latest_scene->render_generation ||
         previous_pose.yaw != pose.yaw || previous_pose.pitch != pose.pitch ||
         previous_pose.eye.x != pose.eye.x || previous_pose.eye.y != pose.eye.y ||
         previous_pose.eye.height != pose.eye.height ||
-        previous_x != pointer.ndc_x || previous_y != pointer.ndc_y ||
-        previous_aspect != aspect || previous_reach != reach ) {
+        pointer_moved || previous_aspect != aspect || previous_reach != reach ) {
         // Reach covers the whole orbit distance plus the pickable depth behind
         // the pivot, so a zoomed-out camera can still select what it shows.
         cached = fp3d_targeting::ray( *latest_scene, pose.yaw, pose.pitch, pose.eye, reach,
-                                      pointer.ndc_x, pointer.ndc_y, aspect );
+                                      pointer.ndc_x, pointer.ndc_y, aspect, true );
         generation = latest_scene->render_generation;
         previous_pose = pose;
         previous_x = pointer.ndc_x;
@@ -278,7 +355,7 @@ void sync_mouse()
 {
     // The overhead camera needs a free, visible cursor; only the first-person
     // camera owns relative mouse capture.
-    const bool capture = available && enabled && draw_permitted && latest_scene && window &&
+    const bool capture = !curtain_peek && available && enabled && draw_permitted && latest_scene && window &&
                          !overhead_view && SDL_GetKeyboardFocus() == window;
     const bool keyboard_world = overhead_view && enabled && draw_permitted && !aiming_input && window &&
                                 SDL_GetKeyboardFocus() == window;
@@ -320,8 +397,10 @@ void clear_map_overlays()
 
 void add_map_overlay( map_overlay overlay )
 {
-    if( aiming_input && aimed_creature == overlay.position &&
-        ( overlay.id == "cursor" || overlay.id == "line_target" ) ) {
+    // The modern aiming HUD draws its own thin line of fire and target marker,
+    // so the native cursor/line tiles stay out of the way. Targeting, occlusion
+    // and hit resolution are untouched: only the sprite is skipped.
+    if( aiming_input && ( overlay.id == "cursor" || overlay.id == "line_target" ) ) {
         return;
     }
     native_map_overlays.push_back( std::move( overlay ) );
@@ -400,21 +479,73 @@ void attach( SDL_Renderer *new_renderer, SDL_Window *new_window )
                               << "; SDL GPU 3D available=" << available;
 }
 
+static bool process_overhead_camera_event( const SDL_Event &event )
+{
+    if( !overhead_view || !enabled || !draw_permitted || !window ) {
+        return false;
+    }
+    const SDL_WindowID id = SDL_GetWindowID( window );
+    const bool aim_panel = aiming_input && ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse;
+    if( event.type == SDL_EVENT_MOUSE_MOTION && event.motion.windowID == id ) {
+        update_pointer( event.motion.x, event.motion.y );
+        if( orbit_dragging ) {
+            if( event.motion.state & SDL_BUTTON_MMASK ) {
+                orbit_camera.azimuth = std::remainder(
+                                           orbit_camera.azimuth - event.motion.xrel * .35f, 360.f );
+            } else {
+                orbit_dragging = false;
+            }
+            return true;
+        }
+    } else if( event.type == SDL_EVENT_MOUSE_WHEEL && event.wheel.windowID == id ) {
+        update_pointer( event.wheel.mouse_x, event.wheel.mouse_y );
+        if( pointer.inside && !aim_panel ) {
+            orbit_camera.distance = std::clamp( orbit_camera.distance - event.wheel.y * 1.5f,
+                                                fp3d_camera::orbit_min_distance,
+                                                fp3d_camera::orbit_max_distance );
+            return true;
+        }
+    } else if( ( event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ) &&
+               event.button.windowID == id && event.button.button == SDL_BUTTON_MIDDLE ) {
+        update_pointer( event.button.x, event.button.y );
+        if( event.type == SDL_EVENT_MOUSE_BUTTON_UP ) {
+            const bool was_dragging = orbit_dragging;
+            orbit_dragging = false;
+            return was_dragging;
+        }
+        if( pointer.inside && !aim_panel ) {
+            orbit_dragging = true;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool process_event( const SDL_Event &event )
 {
     if( !requested() ) {
         return false;
     }
-    if( !draw_permitted || aiming_input ) {
-        return false;
-    }
     if( event.type == SDL_EVENT_WINDOW_FOCUS_LOST ) {
+        reset_pointer_room();
+        camera_drag.cancel();
         held_swing.reset();
         swing_pending = false;
         orbit_dragging = false;
         secondary_select_pending = false;
         secondary_select_tile.reset();
         dispatched_secondary_tile.reset();
+    }
+    if( !draw_permitted || curtain_peek ) {
+        return false;
+    }
+    // Camera gestures are consumed before the targeting input handler. All
+    // other aiming input stays with the targeting panel.
+    if( process_overhead_camera_event( event ) ) {
+        return true;
+    }
+    if( aiming_input ) {
+        return false;
     }
     sync_mouse();
     // F6 inside the 3D world switches between the eye camera and the overhead
@@ -435,65 +566,91 @@ bool process_event( const SDL_Event &event )
     // dispatcher, which resolves them against the pointer pick instead of the
     // (undrawn) 2D terrain window. Wheel and drag never reach inventory, attack
     // or auto-travel.
-    const bool overhead_world = overhead_view && enabled && draw_permitted && window &&
+    const bool overhead_world = overhead_view && enabled && world_input && draw_permitted && window &&
                                 SDL_GetKeyboardFocus() == window;
-    if( overhead_world ) {
+    if( overhead_world || modern_2d_input() ) {
         if( event.type == SDL_EVENT_MOUSE_MOTION ) {
-            update_pointer( event.motion.x, event.motion.y );
-            if( orbit_dragging ) {
-                if( event.motion.state & SDL_BUTTON_MMASK ) {
-                    orbit_camera.azimuth = std::remainder(
-                                               orbit_camera.azimuth - event.motion.xrel * .35f, 360.0f );
-                } else {
-                    orbit_dragging = false;
+            camera_drag.move( point( event.motion.x, event.motion.y ) );
+            if( overhead_world && event.motion.windowID == SDL_GetWindowID( window ) &&
+                ( event.motion.state & SDL_BUTTON_RMASK ) ) {
+                // Native MOUSE_MOVE opens liveview and redraws/captures the map.
+                // Right-drag is a camera gesture, including its threshold phase.
+                return true;
+            }
+        }
+        if( ( event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ) &&
+            event.button.windowID == SDL_GetWindowID( window ) &&
+            event.button.button == SDL_BUTTON_RIGHT ) {
+            const point cursor( event.button.x, event.button.y );
+            update_pointer( cursor.x, cursor.y );
+            if( event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ) {
+                if( pointer.inside ) {
+                    camera_drag.begin( cursor, SDL_GetTicks() );
                 }
                 return true;
             }
-            return false;
-        }
-        if( event.type == SDL_EVENT_MOUSE_WHEEL ) {
-            int mouse_x = 0;
-            int mouse_y = 0;
-            MousePositionPixels( &mouse_x, &mouse_y );
-            update_pointer( mouse_x, mouse_y );
-            if( pointer.inside ) {
-                orbit_camera.distance = std::clamp(
-                                            orbit_camera.distance - event.wheel.y * 1.5f,
-                                            fp3d_camera::orbit_min_distance,
-                                            fp3d_camera::orbit_max_distance );
+            camera_drag.move( cursor );
+            const bool click = camera_drag.release();
+            if( overhead_world ) {
+                reset_pointer_room();
+                if( click && pointer.inside ) {
+                    secondary_select_tile = pointer_tile();
+                    secondary_select_pending = secondary_select_tile.has_value();
+                    secondary_select_mouse = cursor;
+                }
                 return true;
             }
-            return false; // Outside the world viewport the wheel stays native.
+            return !click;
+        }
+    }
+    // A lone modifier press never reaches the native dispatcher (the SDL bridge
+    // drops it so it cannot act as both a modifier and a command). A 3D profile
+    // may still bind one to a command - run/walk on Shift, the status panel on
+    // Alt - so hand those to the gesture queue ourselves. Keys the profile does
+    // not bind stay untouched, and the key-up edge only closes the hold state.
+    if( modern_2d && captures_game_input() &&
+        ( event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP ) &&
+        ( event.key.key == SDLK_LSHIFT || event.key.key == SDLK_RSHIFT ||
+          event.key.key == SDLK_LCTRL || event.key.key == SDLK_RCTRL ||
+          event.key.key == SDLK_LALT || event.key.key == SDLK_RALT ) ) {
+        const input_event modifier_key( event.key.key, input_event_t::keyboard_code );
+        const auto command = fp3d_input::context().input_to_action( modifier_key );
+        if( command != "ERROR" && ( !overhead_world || command == "FP3D_RUN" ) ) {
+            if( command == "FP3D_RUN" && event.type == SDL_EVENT_KEY_DOWN ) {
+                const bool shift = event.key.key == SDLK_LSHIFT || event.key.key == SDLK_RSHIFT;
+                if( event.key.repeat || ( shift && ( event.key.mod & ( SDL_KMOD_CTRL | SDL_KMOD_ALT |
+                                                     SDL_KMOD_GUI ) ) ) ) {
+                    return true;
+                }
+            }
+            if( fp3d_input::world_gestures().event( modifier_key,
+                    event.type == SDL_EVENT_KEY_DOWN, SDL_GetTicks() ) ) {
+                return true;
+            }
+        }
+    }
+    if( overhead_world ) {
+        if( event.type == SDL_EVENT_TEXT_INPUT && event.text.text &&
+            event.text.text[0] && !event.text.text[1] &&
+            fp3d_input::context().input_to_action( input_event(
+                    static_cast<unsigned char>( event.text.text[0] ), input_event_t::keyboard_code ) ) ==
+            "FP3D_INTERACT" ) {
+            return true; // Do not dispatch the consumed physical key again as native text.
+        }
+        // Use the existing short/long interact gesture with the free cursor,
+        // before ordinary keyboard actions fall through to native examine.
+        if( event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP ) {
+            const auto key = sdl_keysym_to_keycode_evt( event.key );
+            if( fp3d_input::context().input_to_action( key ) == "FP3D_INTERACT" ) {
+                if( event.type == SDL_EVENT_KEY_DOWN && event.key.repeat ) { return true; }
+                return fp3d_input::world_gestures().event( key,
+                        event.type == SDL_EVENT_KEY_DOWN, SDL_GetTicks() );
+            }
         }
         if( event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ) {
             update_pointer( event.button.x, event.button.y );
-            const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-            if( event.button.button == SDL_BUTTON_MIDDLE ) {
-                orbit_dragging = down;
-                return true;
-            }
-            if( event.button.button == SDL_BUTTON_RIGHT ) {
-                // The 3D profile binds the right button to aiming, so the native
-                // secondary-select binding cannot arrive here. Take the click and
-                // queue one plain secondary select for the tile under the cursor;
-                // the world dispatcher then opens the same dropdown modern 2D
-                // uses. Never consumed by an unrelated action.
-                if( down && pointer.inside ) {
-                    // SDL counts successive presses as double/triple clicks.
-                    // Every press still opens a menu, with its own fixed target.
-                    secondary_select_tile = pointer_tile();
-                    secondary_select_pending = secondary_select_tile.has_value();
-                    secondary_select_mouse = point( event.button.x, event.button.y );
-                    DebugLog( D_INFO, D_MAIN ) << "fp3d: overhead_context v4 click="
-                                               << secondary_select_mouse << ", picked="
-                                               << secondary_select_pending;
-                }
-                return true;
-            }
-            // Left clicks are handed to the native dispatcher, which resolves
-            // them against the pointer pick instead of the (undrawn) terrain.
-            return false;
         }
+        return false;
     }
     // Gameplay uses key codes. Discard delayed composition/text messages so
     // an IME prefix cannot become a second game command after capture starts.
@@ -551,7 +708,7 @@ bool menu_text_input()
 
 bool captures_game_input()
 {
-    return requested() && available && enabled && draw_permitted && !aiming_input &&
+    return requested() && available && enabled && draw_permitted && !aiming_input && !curtain_peek &&
            latest_scene && window &&
            SDL_GetKeyboardFocus() == window;
 }
@@ -572,6 +729,9 @@ void toggle_camera()
         return;
     }
     overhead_view = !overhead_view;
+    camera_drag.cancel();
+    overhead_pan = {};
+    reset_pointer_room();
     // One physical press must leave no half-finished input behind in either
     // direction, and the old pointer pick may never be reused as a target.
     orbit_dragging = false;
@@ -642,6 +802,32 @@ float overhead_distance()
     return orbit_camera.distance;
 }
 
+static bool visible_pointer_monster( const fp3d_targeting::target &target )
+{
+    if( !g || target.type != fp3d_targeting::kind::creature ) { return false; }
+    const auto p = get_map().get_bub( target.position );
+    if( !get_map().inbounds( p ) ) { return false; }
+    const Creature *critter = get_creature_tracker().creature_at( p, true );
+    return critter && critter->is_monster() && !critter->is_dead_state() &&
+           get_avatar().sees( get_map(), *critter );
+}
+
+bool world_pointer_input()
+{
+    return world_input && window && SDL_GetKeyboardFocus() == window;
+}
+
+std::optional<tripoint_abs_ms> pointer_monster( bool fresh )
+{
+    if( !overhead() || !world_pointer_input() || !latest_scene || !pointer.inside || !draw_permitted ||
+        latest_scene->origin != get_avatar().pos_abs() ) { return std::nullopt; }
+    const auto frame = targeting_view();
+    if( !frame ) { return std::nullopt; }
+    const auto target = pointing_target( frame->camera, frame->aspect, frame->pointer_reach, fresh );
+    return target && visible_pointer_monster( *target ) ?
+           std::optional<tripoint_abs_ms>( target->position ) : std::nullopt;
+}
+
 std::optional<tripoint_abs_ms> pointer_tile()
 {
     if( !overhead_view || !latest_scene || !pointer.inside || !draw_permitted ) {
@@ -655,35 +841,19 @@ std::optional<tripoint_abs_ms> pointer_tile()
     }
     const auto &pose = frame->camera;
     const auto target = pointing_target( pose, frame->aspect, frame->pointer_reach );
-    if( target && target->position.z() == latest_scene->origin.z() ) {
+    if( target && target->position.z() == latest_scene->origin.z() && overhead_tile_visible( target->position ) ) {
         return target->position;
     }
     // A facade or another storey's roof may be the first mesh hit. The tile
     // menu still needs a map square on the player's floor, rather than silently
     // dropping the right-click. Unproject onto that floor and keep the same
     // snapshot visibility gate; this never invents an unseen destination.
-    constexpr float radians = 3.14159265358979323846f / 180.0f;
-    const float sy = std::sin( pose.yaw * radians );
-    const float cy = std::cos( pose.yaw * radians );
-    const float sp = std::sin( pose.pitch * radians );
-    const float cp = std::cos( pose.pitch * radians );
-    const float horizontal = pointer.ndc_x * fp3d_camera::horizontal_tangent();
-    const float vertical = pointer.ndc_y * fp3d_camera::horizontal_tangent() / frame->aspect;
-    const float dz = -sp + cp * vertical;
-    if( dz >= -.000001f ) {
-        return std::nullopt;
-    }
-    const float distance = -pose.eye.height / dz;
-    if( distance < fp3d_camera::near_clip || distance > fp3d_camera::far_clip ) {
-        return std::nullopt;
-    }
-    const float x = pose.eye.x + distance * ( sy * cp + cy * horizontal + sp * sy * vertical );
-    const float y = pose.eye.y + distance * ( -cy * cp + sy * horizontal - sp * cy * vertical );
+    const auto floor = fp3d_camera::pointer_floor( pose, frame->aspect, pointer.ndc_x, pointer.ndc_y );
+    if( !floor ) { return std::nullopt; }
     const tripoint_abs_ms position = latest_scene->origin + tripoint_rel_ms(
-                                        static_cast<int>( std::floor( x + .5f ) ),
-                                        static_cast<int>( std::floor( y + .5f ) ), 0 );
-    return overhead_tile_visible( position ) ? std::optional<tripoint_abs_ms>( position ) :
-           std::nullopt;
+                                        static_cast<int>( std::floor( ( *floor )[0] + .5f ) ),
+                                        static_cast<int>( std::floor( ( *floor )[1] + .5f ) ), 0 );
+    return overhead_tile_visible( position ) ? std::optional<tripoint_abs_ms>( position ) : std::nullopt;
 }
 
 bool overhead_tile_visible( const tripoint_abs_ms &position )
@@ -726,6 +896,9 @@ std::optional<tripoint_abs_ms> take_secondary_select_target()
 
 void apply_modes( bool three_d, bool modern )
 {
+    camera_drag.cancel();
+    overhead_pan = {};
+    reset_pointer_room();
     enabled = three_d && available;
     if( gpu_live_world && !enabled ) {
         gpu_live_world->hide();
@@ -779,6 +952,30 @@ bool modern_2d_input()
            SDL_GetKeyboardFocus() == window;
 }
 
+bool right_camera_dragging()
+{
+    return camera_drag.dragging( SDL_GetTicks() );
+}
+
+void set_curtain_peek( std::optional<tripoint_abs_ms> position, const point &direction )
+{
+    curtain_peek = position;
+    curtain_direction = direction;
+    if( !position ) {
+        latest_scene.reset();
+        pending_gpu_view.reset();
+        gpu_world_qa_pending.reset();
+        gpu_views.clear();
+        if( gpu_live_world ) {
+            gpu_live_world->hide();
+        }
+    }
+    sync_mouse();
+    if( g ) {
+        g->invalidate_main_ui_adaptor();
+    }
+}
+
 bool survival_menu_available()
 {
     // Shared menus follow the game session, not the camera or movement bindings.
@@ -812,13 +1009,13 @@ void publish_hud( fp3d_hud::data hud )
 
 bool covers_map( const tripoint_abs_ms &center )
 {
-    return active() && latest_scene && latest_scene->origin == center &&
+    return !curtain_peek && active() && latest_scene && latest_scene->origin == center &&
            ( !gpu_live_world || gpu_live_world->texture() );
 }
 
 bool active()
 {
-    return available && enabled && draw_permitted;
+    return available && enabled && ( draw_permitted || curtain_peek.has_value() );
 }
 
 bool turn_based()
@@ -842,6 +1039,17 @@ void set_blueprint( std::optional<fp3d_scene::blueprint> preview )
 {
     construction_preview = std::move( preview );
     prepared_generation = 0;
+}
+
+void set_pickup_highlight( std::optional<pickup_highlight> source )
+{
+    if( !( pickup_source_highlight == source ) ) {
+        pickup_source_highlight = std::move( source );
+        ++pickup_revision;
+        if( g && turn_based() ) {
+            g->invalidate_main_ui_adaptor();
+        }
+    }
 }
 
 std::vector<std::string> hud_lines()
@@ -874,8 +1082,10 @@ std::vector<std::string> hud_lines()
         const auto &expanded = hud.expanded;
         lines.insert( lines.end(), expanded.begin(), expanded.end() );
     }
-    if( const std::string selection = fp3d_interaction::direction_selection_hint(); !selection.empty() ) {
-        lines.push_back( selection );
+    if( !overhead_view ) {
+        if( const std::string selection = fp3d_interaction::direction_selection_hint(); !selection.empty() ) {
+            lines.push_back( selection );
+        }
     }
     if( !enabled || !modern_2d ) {
         return lines;
@@ -929,21 +1139,51 @@ const std::vector<fp3d_hud::data::message_entry> &target_details()
     if( !g || !turn_based() || !draw_permitted || construction_preview ) {
         return empty;
     }
-    const auto target = interaction_target();
-    if( !target || target->origin != get_avatar().pos_abs() ) {
-        return empty;
-    }
     static unsigned generation = 0;
     static std::optional<fp3d_targeting::target> previous;
     static std::vector<fp3d_hud::data::message_entry> lines;
+    static unsigned retain_until = 0;
+    const auto forget = [&]() {
+        previous.reset();
+        lines.clear();
+        retain_until = 0;
+        return &empty;
+    };
+    const auto target = interaction_target();
+    if( !target ) {
+        // The pointer query can miss for a frame or two while the GPU view and
+        // the captured snapshot hand over. Hold the last answer briefly instead
+        // of blinking, then drop it so no stale text stays on screen.
+        if( previous && !lines.empty() && SDL_GetTicks() < retain_until ) {
+            return lines;
+        }
+        return *forget();
+    }
+    if( target->origin != get_avatar().pos_abs() ) {
+        return *forget();
+    }
     if( generation != latest_scene->render_generation || !previous ||
         target->position != previous->position || target->type != previous->type ||
         target->id != previous->id || target->vehicle_part != previous->vehicle_part ||
         target->vehicle_origin != previous->vehicle_origin ) {
         lines = fp3d_hud::inspect( get_avatar(), get_map(), *target );
+        // QA only (CDDA_FP3D_HINT_DEBUG=1): show which target won the pick and
+        // why a creature line may be missing. Never enabled in normal play.
+        if( std::getenv( "CDDA_FP3D_HINT_DEBUG" ) ) {
+            const map &here = get_map();
+            const Creature *who = here.inbounds( here.get_bub( target->position ) ) ?
+                                  get_creature_tracker().creature_at( here.get_bub( target->position ) ) : nullptr;
+            const std::string tag = string_format(
+                                        "hint t=%d id=%s lines=%d who=%s sees=%d",
+                                        static_cast<int>( target->type ), target->id, static_cast<int>( lines.size() ),
+                                        who ? who->disp_name() : "-",
+                                        who ? static_cast<int>( get_avatar().sees( here, *who ) ) : -1 );
+            lines.insert( lines.begin(), { tag, c_light_cyan } );
+        }
         previous = target;
         generation = latest_scene->render_generation;
     }
+    retain_until = SDL_GetTicks() + 200;
     return lines;
 }
 
@@ -964,12 +1204,20 @@ std::string interaction_prompt()
     // 3D gestures resolve raw SDL key codes even when the original menus use
     // character input. get_desc would incorrectly hide those physical bindings.
     return "按[" + ( bindings.empty() ? std::string( "未绑定" ) :
-                    remove_color_tags( bindings.front().long_description() ) ) + "]互动";
+                    remove_color_tags( bindings.front().long_description() ) ) +
+           ( overhead_view ? "]与鼠标指向目标互动" : "]互动" );
 }
 bool draw_menu_background( int x, int y, int width, int height )
 {
     SDL_Texture *native_view = gpu_live_world && turn_based() ? gpu_live_world->texture() : nullptr;
-    if( draw_permitted || ( !native_view && !turn_based() ) ) { return false; }
+    if( curtain_peek ) {
+        // Keep the previous 3D frame until the peek snapshot completes.
+        if( !native_view ) {
+            return false;
+        }
+    } else if( draw_permitted || ( !native_view && !turn_based() ) ) {
+        return false;
+    }
     if( !native_view && !menu_background ) { menu_background = copy_view(); }
     const bool clipped = SDL_RenderClipEnabled( renderer );
     SDL_Rect previous;
@@ -1133,6 +1381,10 @@ void set_input_context( const std::string &category )
 {
     panel_input = category == "FP3D_PANEL";
     world_input = category == "DEFAULTMODE";
+    if( !world_input ) {
+        reset_pointer_room();
+        camera_drag.cancel();
+    }
     aiming_input = modern_aiming && category == "TARGET";
     if( world_input || category == "MAIN_MENU" ) {
         in_world = world_input;
@@ -1231,6 +1483,7 @@ void publish( fp3d_snapshot::scene_snapshot scene )
         boarded_camera.reset();
     }
     scene.render_generation = ++published_generation;
+    contents_generation = scene.render_generation;
     if( !scene.geometry_generation ) {
         fp3d_snapshot::reuse_geometry( scene, latest_scene ? &*latest_scene : nullptr );
     }
@@ -1242,6 +1495,49 @@ bool gpu_world_qa_requested()
 {
     const char *path = std::getenv( "CDDA_FP3D_GPU_WORLD_QA_PATH" );
     return gpu_2d_available && !gpu_live_world && !gpu_world_qa_attempted && path && *path;
+}
+
+static std::optional<fp3d_targeting::edge_outline> pointer_sprite_outline(
+    const fp3d_snapshot::scene_snapshot &scene, const fp3d_targeting::target &target,
+    const fp3d_camera::pose &pose, float aspect )
+{
+    using fp3d_snapshot::sprite_kind;
+    const auto sprite = std::find_if( scene.sprites.begin(), scene.sprites.end(),
+    [&]( const fp3d_snapshot::sprite & image ) {
+        return !image.is_avatar && image.position == target.position && image.id == target.id &&
+               ( target.type == fp3d_targeting::kind::item ? image.kind == sprite_kind::item :
+                 image.kind == sprite_kind::character || image.kind == sprite_kind::monster );
+    } );
+    if( sprite == scene.sprites.end() ) {
+        return std::nullopt;
+    }
+    const auto p = sprite->position - scene.origin;
+    const std::array<float, 3> base{ static_cast<float>( p.x() ),
+                                    p.z() * fp3d_camera::floor_height + sprite->elevation,
+                                    static_cast<float>( p.y() ) };
+    const fp3d_camera::frustum camera( pose.yaw, pose.pitch, aspect );
+    const std::array<float, 3> right{ camera.right_x(), 0.f, camera.right_z() };
+    const std::array<float, 3> up{ camera.up_x(), camera.up_y(), camera.up_z() };
+    const float height = sprite->height * sprite->display_scale;
+    const float half = height * .5f;
+    const float top = height - fp3d_geometry::billboard_lift;
+    using fp3d_geometry::billboard_position;
+    fp3d_targeting::edge_outline outline{ { billboard_position( base, right, up, -half, 0.f ),
+            billboard_position( base, right, up, half, 0.f ),
+            billboard_position( base, right, up, half, top ),
+            billboard_position( base, right, up, -half, top ) } };
+    if( const auto *alpha = fp3d_materials::sprite_alpha( *sprite, SDL_GetTicks() ) ) {
+        const auto vertex = [&]( float x, float y ) {
+            float u = x / alpha->width;
+            if( sprite->mirrored ) { u = 1.f - u; }
+            return billboard_position( base, right, up, ( u - .5f ) * height,
+                                       ( 1.f - y / alpha->height ) * top );
+        };
+        alpha->edges( 0, 0, alpha->width, alpha->height, [&]( int x1, int y1, int x2, int y2 ) {
+            outline.segments.push_back( { vertex( x1, y1 ), vertex( x2, y2 ) } );
+        } );
+    }
+    return outline;
 }
 
 static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
@@ -1262,9 +1558,26 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
             height = std::max( 1l, std::lround( area[3] * scale ) );
         }
     }
+    const float aspect = static_cast<float>( width ) / height;
     const auto aim = gpu_live_world && !aiming_input ?
-                     interaction_target( view, static_cast<float>( width ) / height, overhead_pointer_reach() ) :
-                     std::nullopt;
+                     interaction_target( view, aspect, overhead_pointer_reach() ) : std::nullopt;
+    const bool selecting_with_pointer = overhead && fp3d_interaction::direction_selection_pending();
+    std::optional<fp3d_targeting::edge_outline> outline;
+    if( aim && ( !selecting_with_pointer ||
+                 ( world_input && g && fp3d_interaction::direction_selection_accepts(
+                       *aim, get_avatar(), get_map() ) ) ) ) {
+        outline = aim->outline;
+        const bool hover_monster = overhead && world_pointer_input() && !selecting_with_pointer &&
+                                   visible_pointer_monster( *aim );
+        if( ( selecting_with_pointer || hover_monster ) && !outline &&
+            ( aim->type == fp3d_targeting::kind::item || aim->type == fp3d_targeting::kind::creature ) ) {
+            outline = pointer_sprite_outline( scene, *aim, view, aspect );
+        }
+        if( outline && hover_monster && fp3d_interaction::can_quick_melee( get_avatar(), get_map(),
+                get_map().get_bub( aim->position ) ) ) {
+            outline->color = { 1.f, .12f, .12f, 1.f };
+        }
+    }
     const bool post_enabled = gpu_live_world != nullptr;
     const std::string selection = post_enabled ? fp3d_shaderpacks::selected() : "off";
     const float builtin_style = selection == "cinematic" ? 1.f : selection == "warm" ? 2.f : 0.f;
@@ -1277,8 +1590,10 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
                            daylight_shadows &&
                            fp3d_shaderpacks::shadows_enabled() && fp3d_shaderpacks::quality() >= 3,
                            gpu_live_world && construction_preview ? &*construction_preview : nullptr,
-                           aim && aim->outline ? &*aim->outline : nullptr,
-                           gpu_live_world ? &live_terrain_index : nullptr, reuse_material_slots );
+                           outline ? &*outline : nullptr,
+                           gpu_live_world ? &live_terrain_index : nullptr, reuse_material_slots,
+                           panel_input && pickup_source_highlight ? &*pickup_source_highlight : nullptr,
+                           curtain_peek ? &*curtain_peek : nullptr );
     if( gpu_world_qa_pending && ( pack || builtin_style > 0 ) ) {
         if( fp3d_shaderpacks::quality() == 3 && fp3d_shaderpacks::pbr_enabled() &&
             fp3d_shaderpacks::pbr_strength_percent() > 0 && scene.sky.sun_y > .08f ) {
@@ -1383,7 +1698,7 @@ void gpu_world_qa_after_present( bool presented )
     }
     if( !gpu_world_qa_pending ) return;
     if( gpu_live_world ) {
-        if( active() && in_world && latest_scene && pending_gpu_view &&
+        if( ( active() || ( panel_input && turn_based() ) ) && in_world && latest_scene && pending_gpu_view &&
             pending_gpu_view->render_generation == latest_scene->render_generation &&
             pending_gpu_view->overhead == overhead_view && gpu_live_world->ready() ) {
             gpu_live_world->collect_auxiliary();
@@ -1393,6 +1708,12 @@ void gpu_world_qa_after_present( bool presented )
             const auto result = gpu_live_world->submit( *gpu_world_qa_pending );
             if( result == fp3d_gpu::submission_result::submitted ) {
                 gpu_views.submit( *pending_gpu_view );
+                if( ( panel_input || curtain_peek ) && g ) {
+                    g->invalidate_main_ui_adaptor();
+                    if( panel_input ) {
+                        ui_manager::invalidate_all_ui_adaptors();
+                    }
+                }
                 if( selftest ) {
                     ++frames;
                 }
@@ -1414,9 +1735,11 @@ void gpu_world_qa_after_present( bool presented )
 
 void publish_camera( avatar &you, const map &here, bool cut_overhead )
 {
+    const bool native_peek = cut_overhead && curtain_peek.has_value();
+    const bool reveal = native_peek;
     publish( fp3d_snapshot::capture_camera_reusing( you, here,
-             latest_scene ? &*latest_scene : nullptr, fp3d_snapshot::render_above,
-             fp3d_snapshot::render_below, cut_overhead ) );
+             latest_scene ? &*latest_scene : nullptr,
+             fp3d_snapshot::render_above, fp3d_snapshot::render_below, cut_overhead, reveal, native_peek, pointer_room ) );
 }
 
 void begin_action()
@@ -1488,6 +1811,42 @@ void movement_finished( const tripoint_abs_ms &before, const tripoint_abs_ms &af
 bool tick()
 {
     sync_mouse();
+    static uint64_t last_pan = 0;
+    const uint64_t now = SDL_GetTicks();
+    if( now - last_pan >= 16 ) {
+        const bool panning = overhead() && world_input && active() && right_camera_dragging();
+        const auto area = viewport_pixels();
+        const point size( std::max( 2, area[2] ), std::max( 2, area[3] ) );
+        const point center = size / 2;
+        const point cursor = panning && pointer.inside ?
+                             point( ( pointer.ndc_x + 1 ) * .5f * size.x,
+                                    ( 1 - pointer.ndc_y ) * .5f * size.y ) : center;
+        overhead_pan.update( overhead(), cursor, size, ( now - last_pan ) / 1000.f );
+        last_pan = now;
+        std::optional<tripoint_abs_ms> target;
+        if( panning && pointer.inside && latest_scene && window && !aiming_input &&
+            SDL_GetKeyboardFocus() == window ) {
+            // Recompute after pan/rotation/zoom even when the mouse stands still.
+            const auto floor = fp3d_camera::pointer_floor( camera_pose( now ),
+                               static_cast<float>( size.x ) / size.y, pointer.ndc_x, pointer.ndc_y );
+            if( floor ) {
+                target = latest_scene->origin + tripoint_rel_ms(
+                             static_cast<int>( std::floor( ( *floor )[0] + .5f ) ),
+                             static_cast<int>( std::floor( ( *floor )[1] + .5f ) ), 0 );
+            }
+        }
+        if( target != pointer_room ) {
+            pointer_room = target;
+            if( latest_scene && g && fp3d_snapshot::update_pointer_room(
+                    *latest_scene, get_avatar(), get_map(), target ) ) {
+                // Camera-only changes must not invalidate the native terrain UI:
+                // that calls prepare_view/capture on the entire loaded map.
+                latest_scene->render_generation = ++published_generation;
+                pending_gpu_view.reset();
+                gpu_world_qa_pending.reset();
+            }
+        }
+    }
     if( requested() && window ) {
         std::string title = std::string( "CDDA 0.I-1 - " ) + ( enabled ? "3D" : "2D" ) +
                             ( modern_2d ? " / 现代键位" : " / 经典键位" ) +
@@ -1550,7 +1909,10 @@ bool tick()
             DebugLog( D_INFO, D_MAIN ) << "fp3d: SELFTEST resize/fullscreen round trip complete";
         }
     }
-    return active();
+    const auto &submitted = gpu_views.submitted_view();
+    const unsigned desired = pickup_source_highlight ? pickup_revision : 0;
+    return active() || ( panel_input && turn_based() &&
+                         ( submitted ? submitted->pickup_revision : 0 ) != desired );
 }
 
 void gpu_world_qa_capture_composite()
@@ -1613,9 +1975,173 @@ static void draw_map_overlays( const fp3d_camera::pose &overlay_camera,
     SDL_SetRenderClipRect( renderer, clipped ? &old_clip : nullptr );
 }
 
+// ---------------------------------------------------------------- aiming HUD
+// World-space aiming markers for the overhead view. Everything here is closed
+// except for one point and one stroke: the current aim tile gets four corner
+// brackets and a thin ground ring, and a dim dashed line of fire connects the
+// avatar to it. Positions come from the same camera projection the world render
+// uses, so the markers follow camera movement, orbit and zoom exactly, and the
+// hit resolution of the native targeting code is never touched.
+namespace
+{
+inline SDL_Color aim_accent()
+{
+    // #E5B940
+    return SDL_Color{ 0xE5, 0xB9, 0x40, 0xFF };
+}
+inline SDL_Color aim_muted()
+{
+    // #9FA6AD
+    return SDL_Color{ 0x9F, 0xA6, 0xAD, 0xFF };
+}
+
+void aim_stroke( const std::vector<SDL_Point> &points, const SDL_Color &color, Uint8 alpha )
+{
+    if( points.size() < 2 ) {
+        return;
+    }
+    SDL_SetRenderDrawColor( renderer, color.r, color.g, color.b, alpha );
+    RenderLinesPixels( renderer, points.data(), static_cast<int>( points.size() ) );
+}
+
+// One corner bracket: two short strokes meeting at the corner.
+void aim_bracket( float x, float y, float horizontal, float vertical, float arm,
+                  const SDL_Color &color, Uint8 alpha )
+{
+    aim_stroke( { { static_cast<int>( std::lround( x ) ), static_cast<int>( std::lround( y ) ) },
+        { static_cast<int>( std::lround( x + horizontal * arm ) ), static_cast<int>( std::lround( y ) ) } },
+    color, alpha );
+    aim_stroke( { { static_cast<int>( std::lround( x ) ), static_cast<int>( std::lround( y ) ) },
+        { static_cast<int>( std::lround( x ) ), static_cast<int>( std::lround( y + vertical * arm ) ) } },
+    color, alpha );
+}
+
+// Thin ground ring: a flattened ellipse so it reads as lying on the floor
+// instead of as a second reticle.
+void aim_ground_ring( float cx, float cy, float radius, float squash,
+                      const SDL_Color &color, Uint8 alpha )
+{
+    constexpr int segments = 28;
+    std::vector<SDL_Point> points;
+    points.reserve( segments + 1 );
+    for( int i = 0; i <= segments; ++i ) {
+        const float angle = 2.f * 3.14159265358979323846f * static_cast<float>( i ) / segments;
+        points.push_back( { static_cast<int>( std::lround( cx + std::cos( angle ) * radius ) ),
+                            static_cast<int>( std::lround( cy + std::sin( angle ) * radius * squash ) ) } );
+    }
+    aim_stroke( points, color, alpha );
+}
+}
+
+static void draw_aiming_markers( const fp3d_camera::pose &camera, const tripoint_abs_ms &origin,
+                                 const SDL_Rect &clip, float aspect )
+{
+    if( !aimed_tile || clip.w <= 0 || clip.h <= 0 ) {
+        return;
+    }
+    struct screen_point {
+        float x = 0.f;
+        float y = 0.f;
+        float tile = 0.f;
+    };
+    const auto project = [&]( const tripoint_abs_ms &position, float height,
+    screen_point & out ) {
+        const auto offset = position - origin;
+        const auto projected = fp3d_camera::project( camera, aspect, offset.x(), height, offset.y() );
+        if( !projected ) {
+            return false;
+        }
+        const auto &p = *projected;
+        out.x = clip.x + ( p[0] + 1.f ) * .5f * clip.w;
+        out.y = clip.y + ( 1.f - p[1] ) * .5f * clip.h;
+        out.tile = clip.w / ( 2.f * fp3d_camera::horizontal_tangent() * std::max( p[2], .05f ) );
+        // Reject markers whose anchor sits well outside the 3D viewport; the
+        // clip rect alone would still let a long stroke smear along an edge.
+        const float margin = std::max( out.tile, 4.f ) * 3.f;
+        return out.x > clip.x - margin && out.x < clip.x + clip.w + margin &&
+               out.y > clip.y - margin && out.y < clip.y + clip.h + margin;
+    };
+
+    screen_point target;
+    if( !project( *aimed_tile, .05f, target ) ) {
+        return;
+    }
+    screen_point source;
+    const bool has_source = project( origin, .05f, source );
+
+    SDL_BlendMode previous_blend = SDL_BLENDMODE_NONE;
+    SDL_GetRenderDrawBlendMode( renderer, &previous_blend );
+    Uint8 r = 0;
+    Uint8 g = 0;
+    Uint8 b = 0;
+    Uint8 a = 0;
+    SDL_GetRenderDrawColor( renderer, &r, &g, &b, &a );
+    SDL_Rect clip_before{};
+    SDL_GetRenderClipRect( renderer, &clip_before );    const bool was_clipped = SDL_RenderClipEnabled( renderer );
+    SDL_SetRenderClipRect( renderer, &clip );
+    SDL_SetRenderDrawBlendMode( renderer, SDL_BLENDMODE_BLEND );
+
+    const float tile = std::max( target.tile, 6.f );
+
+    // Line of fire: dim, dashed and thin, so it never competes with the world.
+    if( has_source && ( std::fabs( source.x - target.x ) > 1.f ||
+                        std::fabs( source.y - target.y ) > 1.f ) ) {
+        const float dx = target.x - source.x;
+        const float dy = target.y - source.y;
+        const float length = std::hypot( dx, dy );
+        const float dash = std::max( 4.f, tile * .22f );
+        const float nx = dx / length;
+        const float ny = dy / length;
+        for( float run = 0.f; run < length; run += dash * 2.f ) {
+            const float end = std::min( run + dash, length );
+            aim_stroke( { { static_cast<int>( std::lround( source.x + nx * run ) ),
+                    static_cast<int>( std::lround( source.y + ny * run ) ) },
+                { static_cast<int>( std::lround( source.x + nx * end ) ),
+                    static_cast<int>( std::lround( source.y + ny * end ) ) } },
+            aim_accent(), 105 );
+        }
+    }
+
+    // Weak highlight for the tile under the mouse when it differs from the aim
+    // tile (keyboard aiming), never a second full lock frame.
+    if( const auto hovered = pointer_tile(); hovered && *hovered != *aimed_tile ) {
+        screen_point hover;
+        if( project( *hovered, .05f, hover ) ) {
+            const float half = std::max( hover.tile, 6.f ) * .42f;
+            aim_bracket( hover.x - half, hover.y - half, 1.f, 1.f, half * .45f, aim_muted(), 70 );
+            aim_bracket( hover.x + half, hover.y - half, -1.f, 1.f, half * .45f, aim_muted(), 70 );
+            aim_bracket( hover.x - half, hover.y + half, 1.f, -1.f, half * .45f, aim_muted(), 70 );
+            aim_bracket( hover.x + half, hover.y + half, -1.f, -1.f, half * .45f, aim_muted(), 70 );
+        }
+    }
+
+    // Current target: four corner brackets plus a thin ring at its feet. Only
+    // the aimed tile is marked, so no field of large frames appears.
+    const bool creature = aimed_creature && *aimed_creature == *aimed_tile;
+    const float half = tile * ( creature ? .62f : .5f );
+    const float arm = half * ( creature ? .55f : .4f );
+    const Uint8 alpha = creature ? 235 : 150;
+    aim_bracket( target.x - half, target.y - half, 1.f, 1.f, arm, aim_accent(), alpha );
+    aim_bracket( target.x + half, target.y - half, -1.f, 1.f, arm, aim_accent(), alpha );
+    aim_bracket( target.x - half, target.y + half, 1.f, -1.f, arm, aim_accent(), alpha );
+    aim_bracket( target.x + half, target.y + half, -1.f, -1.f, arm, aim_accent(), alpha );
+    if( creature ) {
+        aim_ground_ring( target.x, target.y + tile * .1f, tile * .52f, .34f, aim_accent(), 150 );
+    } else {
+        aim_ground_ring( target.x, target.y + tile * .1f, tile * .38f, .32f, aim_muted(), 90 );
+    }
+
+    SDL_SetRenderClipRect( renderer, was_clipped ? &clip_before : nullptr );
+    SDL_SetRenderDrawBlendMode( renderer, previous_blend );
+    SDL_SetRenderDrawColor( renderer, r, g, b, a );
+}
+
 static void draw_gpu_hand_and_reticle( const SDL_FRect &view, const gpu_view_state &frame )
 {
-    if( frame.overhead || !latest_scene || latest_scene->origin != frame.origin ) {
+    // The SDL compositor displays the last submitted world frame, which can
+    // trail the live avatar snapshot by one movement update. The hand is a
+    // screen-space avatar overlay and must not disappear during that handoff.
+    if( frame.overhead || !latest_scene ) {
         return;
     }
     const unsigned now = SDL_GetTicks();
@@ -1677,13 +2203,19 @@ void compose()
 {
     gpu_views.begin_composition();
     auto preparation = fp3d_gpu::preparation_mode::defer;
-    if( gpu_live_world && active() && in_world && latest_scene && !gpu_world_qa_pending ) {
+    const bool panel_highlight = panel_input && turn_based();
+    const unsigned desired_pickup_revision = panel_highlight && pickup_source_highlight ? pickup_revision : 0;
+    if( gpu_live_world && ( active() || panel_highlight ) && in_world && latest_scene &&
+        !gpu_world_qa_pending ) {
         const auto &submitted = gpu_views.submitted_view();
+        const bool pickup_changed = ( submitted ? submitted->pickup_revision : 0 ) != desired_pickup_revision;
         const bool materials_current = submitted && !construction_preview &&
-                                       submitted->render_generation == latest_scene->render_generation &&
+                                       submitted->contents_generation == contents_generation &&
                                        submitted->material_revision == fp3d_materials::revision() &&
                                        submitted->overhead == overhead_view;
-        preparation = gpu_live_world->preparation( materials_current );
+        if( !panel_highlight || pickup_changed ) {
+            preparation = gpu_live_world->preparation( materials_current && !pickup_changed );
+        }
     }
     if( preparation != fp3d_gpu::preparation_mode::defer ) {
         const auto area = viewport_pixels();
@@ -1699,14 +2231,14 @@ void compose()
                 latest_scene->geometry_generation, latest_scene->render_generation,
                 gpu_world_qa_pending->material_revision, overhead_view,
                 static_cast<float>( gpu_world_qa_pending->width ) / gpu_world_qa_pending->height,
-                overhead_pointer_reach()
+                overhead_pointer_reach(), desired_pickup_revision, contents_generation
             };
         }
     }
     SDL_Texture *native_view = gpu_live_world ? gpu_live_world->texture() :
                                gpu_world_qa_preview && !gpu_world_qa_composited ?
                                gpu_world_qa_preview->color() : nullptr;
-    if( native_view && ( gpu_live_world ? active() && in_world : modern_2d_world() ) ) {
+    if( native_view && ( gpu_live_world ? active() && in_world && !curtain_peek : modern_2d_world() ) ) {
         int width = 0;
         int height = 0;
         GetLogicalRenderSize( renderer, &width, &height );
@@ -1724,9 +2256,12 @@ void compose()
             gpu_views.world_composed();
             const auto &frame = gpu_views.target_view();
             if( frame && frame->overhead ) {
-                draw_map_overlays( frame->camera, frame->origin,
-                                   { static_cast<int>( view.x ), static_cast<int>( view.y ),
-                                     static_cast<int>( view.w ), static_cast<int>( view.h ) }, frame->aspect );
+                const SDL_Rect view_clip{ static_cast<int>( view.x ), static_cast<int>( view.y ),
+                                          static_cast<int>( view.w ), static_cast<int>( view.h ) };
+                draw_map_overlays( frame->camera, frame->origin, view_clip, frame->aspect );
+                if( aiming_input ) {
+                    draw_aiming_markers( frame->camera, frame->origin, view_clip, frame->aspect );
+                }
             } else if( frame ) {
                 draw_gpu_hand_and_reticle( view, *frame );
             }
@@ -1736,6 +2271,10 @@ void compose()
 
 void release()
 {
+    camera_drag.cancel();
+    overhead_pan = {};
+    reset_pointer_room();
+    curtain_peek.reset();
     native_map_overlays.clear();
     overlay_icons.clear();
     overlay_icon_revision = 0;
@@ -1762,6 +2301,7 @@ void release()
     available = enabled = selftest = gpu_2d_available = false;
     panel_input = modern_aiming = aiming_input = false;
     aimed_creature.reset();
+    aimed_tile.reset();
     modern_2d = in_world = world_input = overlay_input = false;
     overhead_view = false;
     orbit_dragging = false;
@@ -1784,10 +2324,10 @@ namespace aiming
 void set_active( bool active )
 {
     modern_aiming = active;
-    if( active ) {
-        orbit_dragging = false;
-    } else {
+    orbit_dragging = false;
+    if( !active ) {
         aimed_creature.reset();
+        aimed_tile.reset();
     }
     set_input_context( active ? "TARGET" : "DEFAULTMODE" );
 }
@@ -1805,6 +2345,16 @@ void set_target( std::optional<tripoint_abs_ms> position )
 std::optional<tripoint_abs_ms> target()
 {
     return aiming_input ? aimed_creature : std::nullopt;
+}
+
+void set_aim_tile( std::optional<tripoint_abs_ms> position )
+{
+    aimed_tile = position;
+}
+
+std::optional<tripoint_abs_ms> aim_tile()
+{
+    return aiming_input ? aimed_tile : std::nullopt;
 }
 
 std::optional<tripoint_abs_ms> pick( const point &mouse )

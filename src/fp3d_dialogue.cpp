@@ -1,3 +1,4 @@
+#include "fp3d_survival_style.h"
 #include "fp3d_dialogue.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
@@ -17,7 +18,7 @@ namespace fp3d_dialogue
 {
 namespace
 {
-const ImVec4 gold( 1, .86f, .38f, 1 );
+const ImVec4 gold = fp3d_survival_style::color( fp3d_survival_style::heading );
 }
 
 window::window( const npc &speaker, const std::string &history, int &selection,
@@ -30,6 +31,8 @@ window::window( const npc &speaker, const std::string &history, int &selection,
     background( fp3d_compositor::copy_view() )
 {
     force_to_back = true;
+    use_default_theme = false;
+    window_flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
     selected = 0;
     ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     fp3d_input::world_gestures().cancel();
@@ -135,26 +138,12 @@ void window::draw()
                 ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize,
                 ImVec2( 0, modern_2d ? 0 : 1 ), ImVec2( 1, modern_2d ? 1 : 0 ) );
     }
-    ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .035f, .033f, .03f,
-                          modern_2d ? 1.0f : .78f ) );
-    ImGui::PushStyleColor( ImGuiCol_ChildBg, ImVec4( .045f, .043f, .038f, .35f ) );
-    ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
-    ImGui::PushStyleColor( ImGuiCol_TextDisabled, ImVec4( .70f, .64f, .48f, 1 ) );
-    ImGui::PushStyleColor( ImGuiCol_Border, ImVec4( .68f, .54f, .28f, .55f ) );
-    ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .18f, .15f, .10f, .72f ) );
-    ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( .43f, .32f, .17f, .85f ) );
-    ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( .65f, .46f, .20f, .9f ) );
-    ImGui::PushStyleColor( ImGuiCol_Header, ImVec4( .43f, .31f, .15f, .70f ) );
-    ImGui::PushStyleColor( ImGuiCol_HeaderHovered, ImVec4( .50f, .36f, .16f, .8f ) );
-    ImGui::PushStyleColor( ImGuiCol_HeaderActive, ImVec4( .65f, .46f, .20f, .9f ) );
-    ImGui::PushStyleColor( ImGuiCol_PopupBg, ImVec4( .045f, .04f, .03f, .97f ) );
-    ImGui::PushStyleColor( ImGuiCol_TitleBgActive, ImVec4( .30f, .22f, .11f, 1 ) );
+    const fp3d_survival_style::scoped_theme theme( fp3d_compositor::view_3d() ? .95f : 1.f );
     ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 18 * scale, 16 * scale ) );
     ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 10 * scale, 8 * scale ) );
     ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, 4 * scale );
     cataimgui::window::draw();
     ImGui::PopStyleVar( 3 );
-    ImGui::PopStyleColor( 13 );
 }
 
 void window::draw_controls()
@@ -167,7 +156,7 @@ void window::draw_controls()
     const float avatar_size = 80 * scale;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     ImGui::GetWindowDrawList()->AddRectFilled( origin,
-            ImVec2( origin.x + avatar_size, origin.y + avatar_size ), IM_COL32( 78, 62, 35, 150 ), 5 );
+            ImVec2( origin.x + avatar_size, origin.y + avatar_size ), fp3d_survival_style::container, 5 );
     if( portrait ) {
         // Crop the upper body, preserving the source aspect ratio.
         ImGui::Image( ( ImTextureID )( intptr_t )portrait.get(), ImVec2( avatar_size, avatar_size ),
@@ -175,7 +164,7 @@ void window::draw_controls()
     } else {
         ImGui::Dummy( ImVec2( avatar_size, avatar_size ) );
         ImGui::GetWindowDrawList()->AddText( ImVec2( origin.x + 24 * scale, origin.y + 24 * scale ),
-                                             IM_COL32( 255, 219, 97, 255 ), "?" );
+                                             fp3d_survival_style::accent, "?" );
     }
     ImGui::SameLine();
     ImGui::BeginGroup();

@@ -17,6 +17,7 @@ struct draw_range {
     bool textured;
     std::optional<float> alpha_cutoff;
     bool unlit = false;
+    bool highlighted = false;
 };
 
 // Each draw range uses the same atlas but retains whether its original
@@ -29,6 +30,9 @@ class primitive_mesh_sink
             target_( target ), ranges_( ranges ) {}
         void normal( float x, float y, float z ) {
             current_.normal = { x, y, z };
+        }
+        void highlight( bool highlighted ) {
+            highlighted_ = highlighted;
         }
         void texcoord( float u, float v ) {
             current_.uv = { u, v };
@@ -115,10 +119,11 @@ class primitive_mesh_sink
                 const auto n = static_cast<std::uint32_t>( added );
                 if( !ranges_.empty() && ranges_.back().textured == textured_ &&
                     ranges_.back().alpha_cutoff == alpha_cutoff_ && ranges_.back().unlit == unlit_ &&
+                    ranges_.back().highlighted == highlighted_ &&
                     ranges_.back().first_index + ranges_.back().index_count == first_index ) {
                     ranges_.back().index_count += n;
                 } else {
-                    ranges_.push_back( { first_index, n, textured_, alpha_cutoff_, unlit_ } );
+                    ranges_.push_back( { first_index, n, textured_, alpha_cutoff_, unlit_, highlighted_ } );
                 }
             }
             open_ = false;
@@ -134,6 +139,7 @@ class primitive_mesh_sink
         std::optional<float> alpha_cutoff_;
         bool open_ = false;
         bool unlit_ = false;
+    bool highlighted_ = false;
 };
 
 inline constexpr std::array<std::array<float, 2>, 3> landscape_tree_positions{ {

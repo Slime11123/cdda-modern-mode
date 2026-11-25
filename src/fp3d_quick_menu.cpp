@@ -1,4 +1,5 @@
 #include "fp3d_quick_menu.h"
+#include "fp3d_survival_style.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <cmath>
@@ -113,8 +114,8 @@ class wheel : public cataimgui::window
                 const auto extent = ImGui::CalcTextSize( value );
                 draw->AddText( ImVec2( x - extent.x / 2, y - extent.y / 2 ), color, value );
             };
-            const ImU32 white = IM_COL32( 255, 255, 255, 255 );
-            const ImU32 gold = IM_COL32( 255, 220, 80, 255 );
+            const ImU32 white = fp3d_survival_style::text;
+            const ImU32 gold = fp3d_survival_style::accent;
             const float step = page_size() == 0 ? 0 : 2 * pi / page_size();
             for( int local = 0; local < page_size(); ++local ) {
                 const int index = page * 8 + local;
@@ -127,10 +128,10 @@ class wheel : public cataimgui::window
                 };
                 const bool active = index == selected && options[index].enabled;
                 path();
-                draw->PathFillConcave( active ? IM_COL32( 88, 78, 18, 225 ) :
-                                       IM_COL32( 22, 21, 19, 205 ) );
+                draw->PathFillConcave( active ? fp3d_survival_style::selected :
+                                       fp3d_survival_style::panel );
                 path();
-                draw->PathStroke( active ? gold : IM_COL32( 220, 220, 220, 160 ),
+                draw->PathStroke( active ? gold : fp3d_survival_style::item,
                                   ImDrawFlags_Closed, active ? 2 : 1 );
                 const float radius = ( inner + outer ) / 2;
                 const float wrap = ( outer - inner ) * 1.05f;
@@ -149,12 +150,8 @@ class wheel : public cataimgui::window
                                !options[index].enabled ? gold : active ? gold : white,
                                label.c_str(), nullptr, wrap );
             }
-            draw->AddCircleFilled( center, inner - 3, IM_COL32( 16, 15, 14, 205 ), 48 );
+            draw->AddCircleFilled( center, inner - 3, fp3d_survival_style::background, 48 );
             text( heading.c_str(), center.x, center.y - font * ( pages() > 1 ? 1.9f : .8f ), white );
-            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1, 1, 1, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( .15f, .14f, .12f, .9f ) );
-            ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( .35f, .29f, .14f, 1 ) );
-            ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( .45f, .35f, .16f, 1 ) );
             if( pages() > 1 ) {
                 const std::string counter = std::to_string( page + 1 ) + " / " + std::to_string( pages() );
                 text( counter.c_str(), center.x, center.y - font * .8f, white );
@@ -167,7 +164,6 @@ class wheel : public cataimgui::window
             ImGui::SetCursorScreenPos( ImVec2( center.x - inner * .65f,
                                               center.y + font * ( pages() > 1 ? 1.5f : .3f ) ) );
             if( ImGui::Button( "返回", ImVec2( inner * 1.3f, font * 1.4f ) ) ) { is_open = false; }
-            ImGui::PopStyleColor( 4 );
             if( selected >= 0 ) {
                 text( native_options.empty() ? options[selected].description : options[selected].label,
                       center.x, center.y + outer + font, white );
@@ -192,6 +188,7 @@ class wheel : public cataimgui::window
                            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse ),
             background( fp3d_compositor::copy_view() ), scale( std::clamp( percent, 100, 150 ) / 100.0f ),
             heading( caption ) {
+            use_default_theme = false;
             for( const auto &choice : choices ) {
                 if( choice.visible ) {
                     options.push_back( choice );
@@ -226,7 +223,10 @@ class wheel : public cataimgui::window
                                 ImVec2( viewport[0] + viewport[2], viewport[1] + viewport[3] ),
                                 ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
             }
-            draw->AddRectFilled( ImVec2( 0, 0 ), size, IM_COL32( 0, 0, 0, 80 ) );
+            ImVec4 shade = fp3d_survival_style::color( fp3d_survival_style::background );
+            shade.w = .32f;
+            draw->AddRectFilled( ImVec2( 0, 0 ), size, ImGui::ColorConvertFloat4ToU32( shade ) );
+            const fp3d_survival_style::scoped_theme theme( 1.f );
             cataimgui::window::draw();
         }
         std::optional<entry> run() {
@@ -337,6 +337,7 @@ class dropdown : public cataimgui::window
             cataimgui::window( "地块操作", ImGuiWindowFlags_NoTitleBar ),
             background( image ? std::move( image ) : fp3d_compositor::copy_view() ), anchor( position ),
             scale( std::clamp( percent, 100, 150 ) / 100.0f ) {
+            use_default_theme = false;
             for( const auto &option : choices ) {
                 if( option.visible ) { options.push_back( option ); }
             }
@@ -359,9 +360,8 @@ class dropdown : public cataimgui::window
                                     ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
                 }
             }
-            ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( .045f, .043f, .038f, 1 ) );
+            const fp3d_survival_style::scoped_theme theme( 1.f );
             cataimgui::window::draw();
-            ImGui::PopStyleColor();
         }
         std::optional<entry> run() {
             input_context context( "MODERN_2D_CONTEXT", keyboard_mode::keycode );

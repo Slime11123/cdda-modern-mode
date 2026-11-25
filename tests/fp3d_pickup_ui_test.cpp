@@ -12,6 +12,104 @@
 #include "player_helpers.h"
 #include "rng.h"
 
+TEST_CASE( "fp3d_direction_selection_keeps_waiting_until_a_reachable_object_is_selected",
+           "[fp3d][interaction]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto near = you.pos_bub( here ) + tripoint_rel_ms::north;
+    const auto far = near + tripoint_rel_ms::north;
+    const furn_str_id rack( "f_rack" );
+    here.furn_set( near, rack );
+    here.furn_set( far, rack );
+    fp3d_snapshot::prepare_view( you, here );
+    const fp3d_targeting::target furniture{
+        you.pos_abs(), here.get_abs( near ), fp3d_targeting::kind::furniture, rack.str()
+    };
+    const fp3d_targeting::target too_far{
+        you.pos_abs(), here.get_abs( far ), fp3d_targeting::kind::furniture, rack.str()
+    };
+    REQUIRE( fp3d_interaction::begin_direction_selection( ACTION_GRAB ) );
+    CHECK( fp3d_interaction::direction_selection_accepts( furniture, you, here ) );
+    CHECK_FALSE( fp3d_interaction::direction_selection_accepts( too_far, you, here ) );
+    CHECK_FALSE( fp3d_interaction::confirm_direction_selection( std::nullopt, you, here, true ) );
+    CHECK_FALSE( fp3d_interaction::confirm_direction_selection( too_far, you, here, true ) );
+    CHECK( fp3d_interaction::direction_selection_pending() );
+    const auto selection = fp3d_interaction::confirm_direction_selection( furniture, you, here, true );
+    REQUIRE( selection );
+    CHECK( selection->action == ACTION_GRAB );
+    CHECK( selection->position == near );
+    CHECK_FALSE( fp3d_interaction::direction_selection_pending() );
+    CHECK_FALSE( fp3d_interaction::confirm_direction_selection( furniture, you, here, true ) );
+
+    REQUIRE( fp3d_interaction::begin_direction_selection( ACTION_GRAB ) );
+    const auto reticle = fp3d_interaction::resolve( "FP3D_INTERACT", furniture, you, here );
+    REQUIRE( reticle );
+    CHECK( reticle->position == near );
+}
+
+TEST_CASE( "fp3d_pickup_sources_include_empty_and_stocked_display_furniture",
+           "[fp3d][inventory][pickup]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto pos = you.pos_bub( here );
+    const auto rack = pos + tripoint_rel_ms::north;
+    const auto case_open = pos + tripoint_rel_ms::east;
+    const auto case_sealed = pos + tripoint_rel_ms::west;
+    here.furn_set( rack, furn_str_id( "f_rack" ) );
+    here.furn_set( case_open, furn_str_id( "f_displaycase_o" ) );
+    here.furn_set( case_sealed, furn_str_id( "f_displaycase" ) );
+    here.add_item_or_charges( case_open, item( itype_id( "bandages" ) ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto view = fp3d_inventory::capture( you, here );
+    const auto source = [&]( const tripoint_bub_ms &p ) {
+        return std::find_if( view.groups.begin(), view.groups.end(), [&]( const auto &group ) {
+            return group.tile == here.get_abs( p ) && !group.source_sprite.empty();
+        } );
+    };
+    REQUIRE( source( rack ) != view.groups.end() );
+    CHECK( source( rack )->source_sprite == "f_rack" );
+    CHECK( source( rack )->entries.empty() );
+    REQUIRE( source( case_open ) != view.groups.end() );
+    CHECK( source( case_open )->source_sprite == "f_displaycase_o" );
+    CHECK( source( case_open )->entries.size() == 1 );
+    CHECK( source( case_sealed ) == view.groups.end() );
+}
+
+TEST_CASE( "right_click_closed_curtains_requests_a_targeted_peek",
+           "[fp3d][interaction][pickup]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const tripoint_bub_ms room( 65, 65, 0 );
+    const auto window = room + tripoint_rel_ms::north;
+    you.setpos( here, room );
+    here.ter_set( room, ter_str_id( "t_floor" ) );
+    here.ter_set( window, ter_str_id( "t_curtains" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto entries = fp3d_interaction::context_2d_entries( window, you, here );
+    const auto choice = std::find_if( entries.begin(), entries.end(), []( const auto &entry ) {
+        return entry.action == ACTION_PEEK;
+    } );
+    REQUIRE( choice != entries.end() );
+    const auto request = fp3d_interaction::resolve_2d_choice( *choice, window, you, here );
+    REQUIRE( request );
+    CHECK( request->action == ACTION_PEEK );
+    CHECK( request->position == window );
+}
+
 TEST_CASE( "fp3d_E_single_item_uses_native_automatic_pockets_and_keeps_charges",
            "[fp3d][interaction][pickup]" )
 {
@@ -112,7 +210,7 @@ TEST_CASE( "fp3d_pickup_view_limits_sources_and_tracks_native_multiple_item_visi
     CHECK( request->targeted_pickup );
     const auto quick_request = fp3d_interaction::resolve( "FP3D_PICKUP", target, you, here );
     REQUIRE( quick_request );
-    CHECK_FALSE( quick_request->targeted_pickup );
+    CHECK( quick_request->targeted_pickup );
     here.i_at( p ).erase( here.i_at( p ).begin() );
     scene = fp3d_snapshot::capture( you, here );
     REQUIRE( image_at( scene ) != scene.sprites.end() );

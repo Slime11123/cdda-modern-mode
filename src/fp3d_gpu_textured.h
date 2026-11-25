@@ -53,6 +53,20 @@ inline constexpr char textured_fragment_hlsl[] = R"hlsl(
 Texture2D<float4> atlas : register(t0, space2);
 SamplerState atlas_sampler : register(s0, space2);
 float4 material_color(float2 uv, float4 color, float mode) {
+    if (mode == -5.0) {
+        float4 fabric = atlas.Sample(atlas_sampler, uv) * 2.0;
+        fabric += atlas.Sample(atlas_sampler, uv, int2(-2, 0));
+        fabric += atlas.Sample(atlas_sampler, uv, int2(2, 0));
+        fabric += atlas.Sample(atlas_sampler, uv, int2(0, -2));
+        fabric += atlas.Sample(atlas_sampler, uv, int2(0, 2));
+        return fabric * color / 6.0;
+    }
+    if (mode == -4.0) {
+        if (atlas.Sample(atlas_sampler, uv).a <= 0.5) discard;
+        return float4(1, 1, 1, 1);
+    }
+    if (mode == 4.0)
+        return float4(1, 1, 1, 1);
     float4 c = (mode > 0.0 ? float4(1, 1, 1, 1) : atlas.Sample(atlas_sampler, uv)) * color;
     if (mode > -2.0) {
         float cutoff = mode < 0.0 ? -mode : (mode > 1.0 ? 0.0 : 0.5);
@@ -293,7 +307,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0,
             float forward_depth : TEXCOORD2, float3 world_position : TEXCOORD3,
             float3 world_normal : TEXCOORD4, float3 ambient_color : TEXCOORD5) : SV_Target0 {
     float4 c = material_color(uv, color, material_mode);
-    if (material_mode == 3.0)
+    if (material_mode == 3.0 || abs(material_mode) == 4.0)
         return c;
     bool lit = (material_mode >= -1.0 && material_mode <= 1.0) || material_mode == -3.0;
     float shadow = 0.0;
@@ -318,6 +332,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0,
 )hlsl";
 inline constexpr float lit_texture_without_cutout = -3.f;
 inline constexpr float unknown_background_material = 3.f;
+inline constexpr float white_model_material = 4.f;
+inline constexpr float white_sprite_material = -4.f;
+inline constexpr float soft_curtain_material = -5.f;
 
 constexpr float unlit_cutout( float threshold )
 {

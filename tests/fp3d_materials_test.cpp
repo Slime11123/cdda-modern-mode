@@ -277,4 +277,105 @@ TEST_CASE( "fp3d_materials_atlas_preserves_renderer_without_native_gpu_interop",
     REQUIRE( remaining.size() == 1 );
     CHECK( remaining.front() == requested[1] );
 }
+
+TEST_CASE( "fp3d_sprite_animation_follows_native_frame_weights", "[fp3d][materials][animation]" )
+{
+    // The 2D renderer reads a tile's fg list with a tick counter, and each
+    // frame's weight is how many 17 ms ticks it stays visible. The 3D atlas
+    // must reproduce that mapping exactly instead of freezing one frame.
+    tile_type animated;
+    animated.animated = true;
+    animated.fg.add( { 900 }, 2 );
+    animated.fg.add( { 901 }, 3 );
+    animated.fg.add( { 902 }, 1 );
+    // Six ticks per loop: 0-1 -> 900, 2-4 -> 901, 5 -> 902, then it wraps.
+    CHECK( fp3d_materials::choose_sprites_at( animated, 0 ).foreground == 900 );
+    CHECK( fp3d_materials::choose_sprites_at( animated, 1 ).foreground == 900 );
+    CHECK( fp3d_materials::choose_sprites_at( animated, 2 ).foreground == 901 );
+    CHECK( fp3d_materials::choose_sprites_at( animated, 4 ).foreground == 901 );
+    CHECK( fp3d_materials::choose_sprites_at( animated, 5 ).foreground == 902 );
+    CHECK( fp3d_materials::choose_sprites_at( animated, 6 ).foreground == 900 );
+    CHECK( fp3d_materials::choose_sprites_at( animated, 605 ).foreground == 902 );
+
+    // A static tile keeps the stable per-ID pick the 3D view already used, so
+    // packs without frame art are unchanged.
+    tile_type plain;
+    plain.fg.add( { 910 }, 1 );
+    plain.fg.add( { 911 }, 1 );
+    const fp3d_materials::sprite_choice stable = fp3d_materials::choose_sprites( plain, "mon_example" );
+    CHECK( fp3d_materials::choose_sprites( plain, "mon_example" ).foreground == stable.foreground );
+    // Ticks beyond the tile's own weight wrap inside the same list.
+    CHECK( fp3d_materials::choose_sprites_at( plain, 0 ).foreground ==
+           fp3d_materials::choose_sprites_at( plain, 2 ).foreground );
+}
+TEST_CASE( "fp3d_sprite_animation_keeps_every_native_frame_in_the_atlas",
+           "[fp3d][materials][animation]" )
+{
+    SDL_Surface_Ptr surface( CreateSurfaceWithFormat( 0, 128, 128, 32,
+                             SDL_PIXELFORMAT_RGBA8888 ) );
+    REQUIRE( surface );
+    SDL_Renderer_Ptr renderer( SDL_CreateSoftwareRenderer( surface.get() ) );
+    REQUIRE( renderer );
+    auto set = std::make_shared<tileset>();
+    // A tileset tile that really declares idle animation: two frames of 2 and 3
+    // ticks. Frame art cannot exist without loaded images, but the frame slots,
+    // their keys and their 17 ms tick order are all real.
+    tile_type animated;
+    animated.animated = true;
+    animated.fg.add( { 0 }, 2 );
+    animated.fg.add( { 1 }, 3 );
+    set->create_tile_type( "mon_fp3d_animated", std::move( animated ) );
+    set->create_tile_type( "mon_fp3d_static", tile_type{} );
+    fp3d_materials::set_tileset( set, renderer );
+    on_out_of_scope cleanup( []() {
+        fp3d_materials::release();
+    } );
+
+    fp3d_snapshot::sprite actor;
+    actor.kind = fp3d_snapshot::sprite_kind::monster;
+    actor.id = "mon_fp3d_animated";
+    actor.height = 1.8f;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sprites.push_back( actor );
+    fp3d_materials::prepare( scene );
+
+    const auto frames = fp3d_materials::sprite_animation_gpu( actor );
+    REQUIRE( frames.size() == 2 );
+    REQUIRE( frames[0].uv );
+    REQUIRE( frames[1].uv );
+    CHECK( frames[0].ticks == 2 );
+    CHECK( frames[1].ticks == 3 );
+    // Distinct atlas slots, so switching frames never re-uploads a texture.
+    CHECK( ( frames[0].uv->left != frames[1].uv->left ||
+             frames[0].uv->top != frames[1].uv->top ) );
+
+    // 5 ticks per loop, 17 ms each: the visible frame follows the wall clock,
+    // never the render frame rate.
+    const auto same = []( const fp3d_materials::uv_rect & left,
+    const fp3d_materials::uv_rect & right ) {
+        return left.left == right.left && left.top == right.top &&
+               left.right == right.right && left.bottom == right.bottom;
+    };
+    const auto at = [&]( std::int64_t ms, unsigned phase = 0 ) {
+        return fp3d_materials::sprite_frame_uv( actor, ms, phase );
+    };
+    REQUIRE( at( 0 ) );
+    CHECK( same( *at( 0 ), *frames[0].uv ) );
+    CHECK( same( *at( 17 ), *frames[0].uv ) );        // tick 1
+    CHECK( same( *at( 34 ), *frames[1].uv ) );        // tick 2
+    CHECK( same( *at( 68 ), *frames[1].uv ) );        // tick 4
+    CHECK( same( *at( 85 ), *frames[0].uv ) );        // wrapped to tick 0
+    // A different phase desynchronises equal actors on other tiles.
+    CHECK( same( *at( 0, 2 ), *frames[1].uv ) );
+
+    // A static actor keeps its single, existing slot.
+    actor.id = "mon_fp3d_static";
+    fp3d_snapshot::scene_snapshot plain;
+    plain.sprites.push_back( actor );
+    fp3d_materials::prepare( plain );
+    const auto single = fp3d_materials::sprite_animation_gpu( actor );
+    REQUIRE( single.size() == 1 );
+    REQUIRE( single.front().uv );
+    CHECK( same( *at( 17000, 5 ), *single.front().uv ) );
+}
 #endif

@@ -2332,8 +2332,7 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
     }
 
 #if defined(ENABLE_FP3D)
-    // Native direction prompts are hard to operate with a locked 3D mouse.
-    // Arm the action and let the next E select the reticle's adjacent tile.
+    // The active 3D camera selects the adjacent tile before native dispatch.
     // Releasing an already grabbed object needs no second selection.
     if( !mouse_target && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d &&
         ( act == ACTION_GRAB || act == ACTION_OPEN || act == ACTION_CLOSE ||
@@ -2581,6 +2580,12 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
 #if defined(ENABLE_FP3D)
             if( quick_pickup && mouse_target ) {
                 fp3d_interaction::quick_pickup( player_character, here, *mouse_target, targeted_pickup );
+            } else if( act == ACTION_PICKUP && !mouse_target &&
+                       ( fp3d_compositor::modern_2d_input() || fp3d_compositor::overhead() ) ) {
+                if( const auto operation = fp3d_modern_ui::show( player_character, here, true );
+                    operation && operation->kind != fp3d_inventory::operation_kind::completed ) {
+                    fp3d_inventory::execute( *operation, player_character, here );
+                }
             } else
 #endif
             if( mouse_target ) {
@@ -2628,6 +2633,15 @@ bool game::do_regular_action( action_id &act, avatar &player_character,
         }
 
         case ACTION_PEEK:
+#if defined(ENABLE_FP3D)
+            if( mouse_target ) {
+                if( square_dist( player_character.pos_bub( here ), *mouse_target ) <= 1 &&
+                    fp3d_interaction::can_peek_window( player_character, here, *mouse_target ) ) {
+                    peek( *mouse_target );
+                }
+                break;
+            }
+#endif
             peek();
             break;
 
@@ -3233,9 +3247,9 @@ bool game::handle_action()
 #endif
 #if defined(ENABLE_FP3D)
     if( action == "QUIT" && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d &&
-        !fp3d_interaction::direction_selection_hint().empty() ) {
+        fp3d_interaction::direction_selection_pending() ) {
         fp3d_interaction::cancel_direction_selection();
-        add_msg( m_info, "已取消准星目标选择。" );
+        add_msg( m_info, "已取消目标选择。" );
         return false;
     }
 #endif
@@ -3265,7 +3279,9 @@ bool game::handle_action()
         targeted_pickup = arrival->targeted_pickup;
         targeted_melee = arrival->targeted_melee;
     }
-    if( action.compare( 0, 5, "FP3D_" ) == 0 ) {
+    const bool select_overhead_direction = action == "SELECT" && fp3d_compositor::overhead() &&
+                                           fp3d_interaction::direction_selection_pending();
+    if( select_overhead_direction || action.compare( 0, 5, "FP3D_" ) == 0 ) {
         if( !fp3d_compositor::turn_based() &&
             !( ( action == "FP3D_PANEL" || action == "FP3D_ACTIONS" ) &&
                fp3d_compositor::survival_menu_available() ) ) {
@@ -3273,7 +3289,9 @@ bool game::handle_action()
         }
         const auto target = fp3d_compositor::turn_based() ?
                             fp3d_compositor::interaction_target() : std::nullopt;
-        const auto intent = fp3d_interaction::resolve( action, target, player_character, here );
+        const auto intent = select_overhead_direction ?
+                            fp3d_interaction::confirm_direction_selection( target, player_character, here, true ) :
+                            fp3d_interaction::resolve( action, target, player_character, here );
         if( !intent ) {
             return false;
         }
@@ -3378,7 +3396,17 @@ bool game::handle_action()
             // The overhead camera has no native terrain window behind it: the
             // click target is the snapshot cell under the mouse, resolved with
             // the same camera the frame was drawn with.
-            if( fp3d_compositor::overhead() ) {
+            const auto quick_monster = act == ACTION_SELECT ?
+                                       ( fp3d_compositor::overhead() ? fp3d_compositor::pointer_monster( true ) :
+                                         tilecontext ? tilecontext->monster_at_pixel( ctxt.get_raw_input().mouse_pos ) : std::nullopt ) :
+                                       std::nullopt;
+            if( quick_monster && fp3d_interaction::can_quick_melee( player_character, here,
+                    here.get_bub( *quick_monster ) ) ) {
+                mouse_target = here.get_bub( *quick_monster );
+                targeted_melee = true;
+                player_character.clear_destination();
+                destination_preview.clear();
+            } else if( fp3d_compositor::overhead() ) {
                 const auto picked = act == ACTION_SEC_SELECT ?
                                     fp3d_compositor::take_secondary_select_target() :
                                     fp3d_compositor::pointer_tile();
@@ -3407,6 +3435,11 @@ bool game::handle_action()
                 // Note: The following has the potential side effect of
                 // setting auto-move destination state in addition to setting
                 // act.
+#if defined(ENABLE_FP3D)
+                if( targeted_melee ) {
+                    act = ACTION_SMASH; // Explicit target dispatch, never a movement command.
+                } else
+#endif
                 if( !try_get_left_click_action( act, *mouse_target ) ) {
                     return false;
                 }

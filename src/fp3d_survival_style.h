@@ -3,20 +3,25 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include "imgui/imgui.h"
 
+// Modern Mode yellow/black palette, shared by every modern (ImGui) panel.
+// Reference values are the agreed tactical HUD colours: deep neutral grounds,
+// one amber accent, neutral body text, teal for valid state and a warm red for
+// danger. Keep this table the single source of truth for modern UI colours.
 namespace fp3d_survival_style
 {
-inline constexpr ImU32 background = IM_COL32( 0x10, 0x11, 0x13, 255 );
-inline constexpr ImU32 panel = IM_COL32( 0x1C, 0x1E, 0x21, 255 );
-inline constexpr ImU32 item = IM_COL32( 0x2A, 0x2C, 0x30, 255 );
-inline constexpr ImU32 container = IM_COL32( 0x39, 0x33, 0x29, 255 );
-inline constexpr ImU32 hover = IM_COL32( 0x51, 0x45, 0x26, 255 );
-inline constexpr ImU32 selected = IM_COL32( 0x76, 0x60, 0x2D, 255 );
-inline constexpr ImU32 accent = IM_COL32( 0xE5, 0xB9, 0x4E, 255 );
-inline constexpr ImU32 heading = IM_COL32( 0xF2, 0xD5, 0x80, 255 );
-inline constexpr ImU32 text = IM_COL32( 0xD8, 0xD8, 0xD4, 255 );
-inline constexpr ImU32 normal = IM_COL32( 0x81, 0xB4, 0x77, 255 );
-inline constexpr ImU32 warning = IM_COL32( 0xD9, 0x8B, 0x42, 255 );
-inline constexpr ImU32 danger = IM_COL32( 0xC9, 0x55, 0x50, 255 );
+inline constexpr ImU32 background = IM_COL32( 0x11, 0x14, 0x19, 255 ); // 主背景 #111419
+inline constexpr ImU32 panel = IM_COL32( 0x24, 0x2A, 0x32, 255 ); // 次级背景 #242A32
+inline constexpr ImU32 item = IM_COL32( 0x2B, 0x32, 0x3B, 255 );
+inline constexpr ImU32 container = IM_COL32( 0x33, 0x3A, 0x45, 255 );
+inline constexpr ImU32 hover = IM_COL32( 0x4A, 0x41, 0x24, 255 );
+inline constexpr ImU32 selected = IM_COL32( 0x5C, 0x4B, 0x20, 255 );
+inline constexpr ImU32 accent = IM_COL32( 0xE5, 0xB9, 0x40, 255 ); // 主要强调色 #E5B940
+inline constexpr ImU32 heading = IM_COL32( 0xF0, 0xD4, 0x7A, 255 );
+inline constexpr ImU32 text = IM_COL32( 0xDC, 0xE0, 0xE4, 255 ); // 普通文字 #DCE0E4
+inline constexpr ImU32 muted = IM_COL32( 0x9F, 0xA6, 0xAD, 255 ); // 次要文字 #9FA6AD
+inline constexpr ImU32 normal = IM_COL32( 0x69, 0xB9, 0xAB, 255 ); // 有效状态 #69B9AB
+inline constexpr ImU32 warning = IM_COL32( 0xE0, 0xA2, 0x4A, 255 );
+inline constexpr ImU32 danger = IM_COL32( 0xE9, 0x6A, 0x62, 255 ); // 危险提示 #E96A62
 
 inline ImVec4 color( ImU32 value )
 {
@@ -49,7 +54,7 @@ class scoped_theme
         };
         static constexpr entry colors[] = {
             { ImGuiCol_ChildBg, panel }, { ImGuiCol_PopupBg, panel },
-            { ImGuiCol_Text, text }, { ImGuiCol_TextDisabled, text },
+            { ImGuiCol_Text, text }, { ImGuiCol_TextDisabled, muted },
             { ImGuiCol_Border, item }, { ImGuiCol_Separator, item },
             { ImGuiCol_Button, item }, { ImGuiCol_ButtonHovered, hover },
             { ImGuiCol_ButtonActive, selected }, { ImGuiCol_Header, item },
@@ -69,7 +74,7 @@ class scoped_theme
 inline void title( const char *label )
 {
     ImGui::PushStyleColor( ImGuiCol_Text, color( heading ) );
-    ImGui::TextUnformatted( label );
+    ImGui::TextWrapped( "%s", label );
     ImGui::PopStyleColor();
     ImGui::Separator();
 }

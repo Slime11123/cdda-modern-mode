@@ -30,12 +30,15 @@
 #include "cata_utility.h"
 #include "cursesport.h"
 #include "sdltiles.h"
+#include "sdl_utils.h"
 #include "fp3d_snapshot.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "imgui/imgui_stdlib.h"
 #include "input_context.h"
 #include "item.h"
+#include "item_tname.h"
+#include "profession.h"
 #include "itype.h"
 #include "output.h"
 #include "overmap_ui.h"
@@ -55,6 +58,37 @@ namespace
 {
 namespace palette = fp3d_survival_style;
 bool resume_after_activity = false;
+
+ImU32 health_tint( float remaining )
+{
+    return remaining <= .25f ? palette::danger : remaining <= .60f ? palette::warning : palette::normal;
+}
+
+void ratio_bar( float ratio, ImU32 tint )
+{
+    ImGui::PushStyleColor( ImGuiCol_PlotHistogram, palette::color( tint ) );
+    ImGui::ProgressBar( std::clamp( ratio, 0.f, 1.f ), ImVec2( -1, 6 ), "" );
+    ImGui::PopStyleColor();
+}
+
+bool detail_row( const char *label, bool chosen, float height = 0.f )
+{
+    ImGui::PushStyleColor( ImGuiCol_Header, palette::color( palette::selected ) );
+    const bool pressed = ImGui::Selectable( label, chosen, 0, ImVec2( 0, height ) );
+    ImGui::PopStyleColor();
+    if( ImGui::CalcTextSize( label ).x > ImGui::GetItemRectSize().x ) {
+        ImGui::SetItemTooltip( "%s", label );
+    }
+    return pressed;
+}
+
+std::string equipment_name( const item &object )
+{
+    auto segments = tname::default_tname;
+    segments.reset( tname::segments::DURABILITY );
+    return remove_color_tags( object.tname( 1, segments ) );
+}
+
 int remembered_page = 0;
 int scale_choice = 0;
 constexpr int mutations_page = 9;
@@ -88,10 +122,29 @@ class panel : public cataimgui::window
         map &here;
         fp3d_inventory::model view;
         std::optional<tripoint_abs_ms> pickup_target;
+        bool pickup_mode;
         std::optional<tripoint_abs_ms> crafting_position;
         std::map<std::string, SDL_Texture_Ptr> icons;
+        unsigned icon_revision = fp3d_materials::revision();
         SDL_Texture_Ptr background;
         std::set<size_t> selected;
+        struct pickup_source {
+            std::string name;
+            std::string sprite;
+            std::optional<size_t> group;
+            std::optional<tripoint_abs_ms> tile;
+        };
+        std::vector<pickup_source> pickup_sources;
+        size_t pickup_source_index = 0;
+        bool pickup_source_changed = false;
+        std::map<std::string, SDL_Texture_Ptr> pickup_icons;
+        std::optional<ImVec2> marquee_origin;
+        ImGuiID marquee_window = 0;
+        std::optional<ImRect> marquee;
+        std::optional<size_t> double_click_row;
+        bool drawing_inventory_rows = false;
+        std::set<size_t> marquee_selection;
+        std::set<size_t> marquee_base;
         std::string mine_search;
         std::string near_search;
         std::string skill_search;
@@ -137,12 +190,18 @@ class panel : public cataimgui::window
         size_t selected_project = 0;
         int mine_category = 0;
         int near_category = 0;
-        bool show_empty = false;
-        int near_source = -1;
         int sort_order = 0;
         int small_tab = 1;
         int side_page = 0;
         std::string gear_part;
+        int character_page = 0;
+        int inspected_stat = 0;
+        bodypart_id inspected_part;
+        trait_id inspected_trait;
+        item_location inspected_gear;
+        SDL_Texture_Ptr character_portrait;
+        unsigned portrait_revision = 0;
+        bool portrait_checked = false;
         bool map_loaded = false;
         fp3d_map::model map_view;
         SDL_Texture_Ptr overmap_image;
@@ -215,7 +274,23 @@ class panel : public cataimgui::window
                                                quantity > 0 ? quantity : ImGui::GetIO().KeyShift ? loc->count() : 1 );
                 }
             }
-            if( kind == fp3d_inventory::operation_kind::insert ) {
+            if( kind != fp3d_inventory::operation_kind::insert && action.items.size() > 1 ) {
+                const drop_locations dragged = action.items;
+                action.items.remove_if( [&]( const drop_location &part ) {
+                    auto ancestor = part.first;
+                    while( ancestor.has_parent() ) {
+                        ancestor = ancestor.parent_item();
+                        if( std::any_of( dragged.begin(), dragged.end(), [&]( const drop_location &other ) {
+                            return ancestor == other.first;
+                        } ) ) {
+                            return true;
+                        }
+                    }
+                    return false;
+                } );
+            }
+            action.best_effort = action.items.size() > 1;
+            if( kind == fp3d_inventory::operation_kind::insert && !action.best_effort ) {
                 std::string error;
                 if( !fp3d_inventory::can_insert( action, you, here, error ) ) {
                     action_message = std::move( error );
@@ -255,104 +330,138 @@ class panel : public cataimgui::window
                 ImGui::EndDragDropTarget();
             }
         }
-        // Use the survival menu's existing dark-brown and amber style colors.
-        // Parent containers remain distinguishable without introducing a second UI palette.
-        void parent_row_highlight( const ImVec2 &min, const ImVec2 &max, int depth,
-                                   bool pocket, bool hovered, bool selected ) const {
+        void item_background( const ImVec2 &min, const ImVec2 &max, bool parent,
+                              bool hovered, bool chosen ) const {
             ImDrawList *draw = ImGui::GetWindowDrawList();
-            const float rounding = 3.0f * scale;
-            const ImVec4 frame = ImGui::GetStyleColorVec4( ImGuiCol_FrameBg );
-            const ImVec4 header = ImGui::GetStyleColorVec4( ImGuiCol_Header );
-            ImVec4 fill;
-            if( selected ) {
-                fill = ImGui::GetStyleColorVec4( ImGuiCol_HeaderActive );
-            } else if( hovered ) {
-                fill = ImGui::GetStyleColorVec4( ImGuiCol_HeaderHovered );
-            } else {
-                // The parent row is darkest at deeper levels; pocket headings are
-                // softer than their owning container, all within the same palette.
-                const float strength = pocket ? 0.45f : depth == 0 ? 0.88f : 0.67f;
-                fill = ImLerp( frame, header, strength );
-                fill.w = pocket ? 0.68f : depth == 0 ? 0.78f : 0.71f;
+            const float rounding = 3 * scale;
+            const ImU32 fill = chosen ? palette::selected : hovered ? palette::hover :
+                               parent ? palette::container : palette::item;
+            draw->AddRectFilled( min, max, fill, rounding );
+            if( chosen ) {
+                draw->AddRect( min, max, palette::accent, rounding );
             }
-            ImVec4 border = ImGui::GetStyleColorVec4( ImGuiCol_Border );
-            border.w = pocket ? 0.45f : 0.60f;
-            ImVec4 accent = ImGui::GetStyleColorVec4( ImGuiCol_CheckMark );
-            accent.w = selected ? 0.95f : pocket ? 0.55f : 0.74f;
-            draw->AddRectFilled( min, max, ImGui::ColorConvertFloat4ToU32( fill ), rounding );
-            draw->AddRect( min, max, ImGui::ColorConvertFloat4ToU32( border ), rounding );
-            draw->AddRectFilled( ImVec2( min.x + 2 * scale, min.y + 3 * scale ),
-                                 ImVec2( min.x + 5 * scale, max.y - 3 * scale ),
-                                 ImGui::ColorConvertFloat4ToU32( accent ), 1.0f * scale );
+            if( parent ) {
+                draw->AddRectFilled( ImVec2( min.x + 2 * scale, min.y + 3 * scale ),
+                                     ImVec2( min.x + 4 * scale, max.y - 3 * scale ),
+                                     palette::accent, scale );
+            }
         }
-        // Draw one uninterrupted tree trunk per visible ancestor, with T and L junctions.
-        // Tracks encode which ancestor still has a following sibling.
-        void tree_guides( const ImVec2 &min, const ImVec2 &max, int depth,
-                          bool has_next, bool has_previous, const std::vector<bool> &tracks,
-                          bool has_open_children ) const {
-            // The outermost item list is not a tree branch; only nested pockets
-            // and their contents should carry the continuous guide lines.
-            if( depth == 0 ) {
-                return;
+
+
+        SDL_Texture *inventory_icon( const item &object ) {
+            const auto revision = fp3d_materials::revision();
+            if( icon_revision != revision ) {
+                icons.clear();
+                icon_revision = revision;
             }
+            const std::string variant = object.has_itype_variant() ? object.itype_variant().id : "";
+            const std::string key = object.typeId().str() + variant;
+            const auto [entry, added] = icons.try_emplace( key );
+            if( added ) {
+                fp3d_snapshot::sprite image;
+                image.kind = fp3d_snapshot::sprite_kind::held_item;
+                image.id = object.typeId().str();
+                image.variant = variant;
+                entry->second = fp3d_materials::item_icon( image );
+            }
+            return entry->second.get();
+        }
+
+        float indent_tree_row( int depth ) const {
+            const float step = std::min( 20.f * scale, ImGui::GetContentRegionAvail().x / 21.f );
+            ImGui::SetCursorPosX( ImGui::GetCursorPosX() + depth * step );
+            return step;
+        }
+
+        void tree_guides( const ImVec2 &min, const ImVec2 &max, float step, bool has_next,
+                          const std::vector<bool> &tracks, bool has_open_children ) const {
             ImDrawList *draw = ImGui::GetWindowDrawList();
-            const float center = ( min.y + max.y ) * .5f;
-            const float join = ImGui::GetStyle().ItemSpacing.y * .5f + 1.0f;
-            const float base = min.x + 12 * scale;
-            const float step = 22 * scale;
-            const ImU32 line_color = IM_COL32( 165, 156, 130, 205 );
-            const float thickness = std::max( 1.0f, 1.4f * scale );
-            // Level zero belongs to the root list: never draw its vertical trunk.
+            const float mid = ( min.y + max.y ) / 2;
+            const float gap = ImGui::GetStyle().ItemSpacing.y / 2;
+            const float root = min.x - tracks.size() * step;
+            const auto branch = [&]( size_t level ) {
+                return root + ( level - .55f ) * step;
+            };
+            const auto line = [&]( float x1, float y1, float x2, float y2 ) {
+                draw->AddLine( ImVec2( x1, y1 ), ImVec2( x2, y2 ), palette::selected, 1.1f * scale );
+            };
             for( size_t level = 1; level < tracks.size(); ++level ) {
                 if( tracks[level] ) {
-                    const float x = base + static_cast<float>( level ) * step;
-                    draw->AddLine( ImVec2( x, min.y - join ), ImVec2( x, max.y + join ),
-                                   line_color, thickness );
+                    line( branch( level ), min.y - gap, branch( level ), max.y + gap );
                 }
             }
-            const float x = base + depth * step;
-            if( depth > 0 || has_previous ) {
-                draw->AddLine( ImVec2( x, min.y - join ), ImVec2( x, center ),
-                               line_color, thickness );
+            if( !tracks.empty() ) {
+                const float x = branch( tracks.size() );
+                line( x, min.y - gap, x, has_next ? max.y + gap : mid );
+                line( x, mid, min.x, mid );
             }
-            if( has_next ) {
-                draw->AddLine( ImVec2( x, center ), ImVec2( x, max.y + join ),
-                               line_color, thickness );
-            }
-            draw->AddLine( ImVec2( x, center ), ImVec2( x + 11 * scale, center ),
-                           line_color, thickness );
             if( has_open_children ) {
-                const float child_x = x + step;
-                draw->AddLine( ImVec2( x + 11 * scale, center ), ImVec2( child_x, center ),
-                               line_color, thickness );
-                draw->AddLine( ImVec2( child_x, center ), ImVec2( child_x, max.y + join ),
-                               line_color, thickness );
+                const float x = branch( tracks.size() + 1 );
+                line( x, max.y, x, max.y + gap );
             }
         }
-        void tree_arrow( const ImVec2 &min, const ImVec2 &max, int depth,
-                         bool expanded ) const {
+
+        void row_arrow( const ImVec2 &min, float center_y, bool expanded ) const {
+            const float x = min.x + 12 * scale;
+            const float r = 3.4f * scale;
             ImDrawList *draw = ImGui::GetWindowDrawList();
-            const float x = min.x + ( 12 + depth * 22 + 17 ) * scale;
-            const float y = ( min.y + max.y ) * .5f;
-            const float r = 4 * scale;
-            const ImU32 color = IM_COL32( 221, 189, 122, 255 );
             if( expanded ) {
-                draw->AddTriangleFilled( ImVec2( x - r, y - r * .6f ),
-                                         ImVec2( x + r, y - r * .6f ),
-                                         ImVec2( x, y + r ), color );
+                draw->PathLineTo( ImVec2( x - r, center_y - r * .55f ) );
+                draw->PathLineTo( ImVec2( x, center_y + r * .55f ) );
+                draw->PathLineTo( ImVec2( x + r, center_y - r * .55f ) );
             } else {
-                draw->AddTriangleFilled( ImVec2( x - r * .5f, y - r ),
-                                         ImVec2( x + r, y ),
-                                         ImVec2( x - r * .5f, y + r ), color );
+                draw->PathLineTo( ImVec2( x - r * .55f, center_y - r ) );
+                draw->PathLineTo( ImVec2( x + r * .55f, center_y ) );
+                draw->PathLineTo( ImVec2( x - r * .55f, center_y + r ) );
+            }
+            draw->PathStroke( palette::accent, ImDrawFlags_None, 1.25f * scale );
+        }
+
+        void tree_row_label( const ImVec2 &min, const ImVec2 &max, float x, float center_y,
+                             const std::string &name, const std::string &suffix,
+                             const std::string &right, ImU32 tint,
+                             const std::string &durability = {} ) const {
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const float text_y = center_y - ImGui::GetFontSize() / 2;
+            const float right_x = max.x - 8 * scale - ImGui::CalcTextSize( right.c_str() ).x;
+            const bool show_right = !right.empty() && right_x >= x + 32 * scale;
+            const float limit = show_right ? right_x - 8 * scale : max.x - 8 * scale;
+            const auto damage = split_by_color( durability );
+            float damage_width = 0.f;
+            for( const auto &segment : damage ) {
+                damage_width += ImGui::CalcTextSize( remove_color_tags( segment ).c_str() ).x;
+            }
+            const float width = limit - x - ImGui::CalcTextSize( suffix.c_str() ).x - damage_width;
+            if( width > 1.f ) {
+                const char *end = name.c_str();
+                ImGui::GetFont()->CalcTextSizeA( ImGui::GetFontSize(), width, 0, name.c_str(), nullptr, &end );
+                const std::string label = std::string( name.c_str(), end ) + suffix;
+                const ImVec4 clip( min.x, min.y, max.x, max.y );
+                draw->AddText( ImGui::GetFont(), ImGui::GetFontSize(), ImVec2( x, text_y ), tint,
+                               label.c_str(), nullptr, 0, &clip );
+                float damage_x = x + ImGui::CalcTextSize( label.c_str() ).x;
+                for( const auto &segment : damage ) {
+                    const auto tag = get_color_from_tag( segment, report_color_error::no );
+                    const SDL_Color color = curses_color_to_SDL(
+                                                tag.type == color_tag_parse_result::open_color_tag ? tag.color : c_light_gray );
+                    const std::string glyphs = remove_color_tags( segment );
+                    draw->AddText( ImGui::GetFont(), ImGui::GetFontSize(), ImVec2( damage_x, text_y ),
+                                   IM_COL32( color.r, color.g, color.b, color.a ), glyphs.c_str(), nullptr, 0, &clip );
+                    damage_x += ImGui::CalcTextSize( glyphs.c_str() ).x;
+                }
+            }
+            if( show_right ) {
+                draw->AddText( ImVec2( right_x, text_y ), palette::text, right.c_str() );
             }
         }
+
         size_t container_pocket_count( const item_location &owner ) const {
             return std::count_if( view.groups.begin(), view.groups.end(), [&]( const auto &group ) {
                 return group.container == owner && group.pocket_index >= 0;
             } );
         }
-        void item_card( size_t index, int depth = 0, bool show_contents = false, bool grid = false,
-                        bool has_next = false, bool has_previous = false,
+        void item_card( size_t index, int depth = 0, bool show_contents = false,
+                        bool has_next = false,
                         const std::vector<bool> &tracks = {} ) {
             const auto &entry = view.entries[index];
             auto loc = entry.location;
@@ -360,104 +469,126 @@ class panel : public cataimgui::window
                 return;
             }
             ImGui::PushID( static_cast<const void *>( &*loc ) );
-            const bool expandable_gear = !grid && show_contents && container_pocket_count( loc ) > 0;
-            // Item variables survive panel recreation and normal save/load.
-            // Inventory containers start closed; nearby loot keeps its previous
-            // default-open behavior until the player explicitly changes it.
-            const std::string tree_key = "fp3d_inventory_tree_open";
-            const bool default_open = entry.nearby;
-            bool gear_expanded = !expandable_gear ||
-                                 loc->get_var( tree_key, std::string( default_open ? "1" : "0" ) ) == "1";
-            bool clicked = false;
-            if( grid ) {
-                clicked = ImGui::InvisibleButton( "##item", ImVec2( 80 * scale, 76 * scale ) );
-            } else {
-                clicked = ImGui::Selectable( "##item", selected.count( index ),
-                                             ImGuiSelectableFlags_AllowDoubleClick, ImVec2( 0, 52 * scale ) );
+            std::vector<const fp3d_inventory::group *> pockets;
+            float capacity = 0.f;
+            float used = 0.f;
+            if( show_contents && loc->is_container() ) {
+                for( const auto &group : view.groups ) {
+                    if( group.container == loc && group.pocket_index >= 0 ) {
+                        pockets.push_back( &group );
+                        if( group.capacity_l > 0.f ) {
+                            capacity += group.capacity_l;
+                            used += group.used_l;
+                        }
+                    }
+                }
             }
+            const bool parent = !pockets.empty();
+            const std::string tree_key = "fp3d_inventory_tree_open";
+            bool expanded = parent && loc->get_var( tree_key,
+                                             std::string( entry.nearby ? "1" : "0" ) ) == "1";
+            const bool inline_pocket = pockets.size() == 1 && !pockets.front()->sealed &&
+                                       loc->get_var( "fp3d_inventory_pocket_open_" +
+                                                     std::to_string( pockets.front()->pocket_index ),
+                                                     std::string( "1" ) ) != "0";
+            const float line_height = std::max( ImGui::GetTextLineHeight() + 10 * scale, 30 * scale );
+            const float height = show_contents ? line_height :
+                                 48 * scale;
+            const float step = show_contents ? indent_tree_row( depth ) : 0.f;
+            bool clicked = ImGui::Selectable( "##item", selected.count( index ),
+                                              ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                                              ImVec2( 0, height ) );
             const ImVec2 min = ImGui::GetItemRectMin();
             const ImVec2 max = ImGui::GetItemRectMax();
-            auto *draw = ImGui::GetWindowDrawList();
-            if( expandable_gear && !grid ) {
-                parent_row_highlight( min, max, depth, false, ImGui::IsItemHovered(),
-                                      selected.count( index ) != 0 );
+            const bool hovered = ImGui::IsItemHovered();
+            if( parent && ImGui::IsItemClicked() && ImGui::GetMousePos().x <= min.x + 23 * scale ) {
+                expanded = !expanded;
+                loc->set_var( tree_key, std::string( expanded ? "1" : "0" ) );
+                clicked = false;
             }
-            if( show_contents && !grid ) {
-                if( expandable_gear && ImGui::IsItemClicked( ImGuiMouseButton_Left ) &&
-                    ImGui::GetMousePos().x <= min.x + ( 12 + depth * 22 + 25 ) * scale ) {
-                    gear_expanded = !gear_expanded;
-                    loc->set_var( tree_key, std::string( gear_expanded ? "1" : "0" ) );
-                    clicked = false;
-                }
-                tree_guides( min, max, depth, has_next, has_previous, tracks,
-                             expandable_gear && gear_expanded );
-                if( expandable_gear ) {
-                    tree_arrow( min, max, depth, gear_expanded );
-                }
-            }
-            if( grid ) {
-                draw->AddRectFilled( min, max, selected.count( index ) ? IM_COL32( 110, 79, 36, 190 ) :
-                                     ImGui::IsItemHovered() ? IM_COL32( 70, 60, 43, 180 ) : IM_COL32( 20, 19, 17, 120 ) );
-                draw->AddRect( min, max, IM_COL32( 105, 95, 75, 100 ) );
-            }
-            const auto key = loc->typeId().str() + ( loc->has_itype_variant() ? loc->itype_variant().id : "" );
-            const auto icon = icons.find( key );
-            const ImVec2 image_min( min.x + ( grid ? 18 : show_contents ? 42 + depth * 22 : 4 ) * scale,
-                                    min.y + 4 * scale );
-            if( icon != icons.end() && icon->second ) {
-                draw->AddImage( ( ImTextureID )( intptr_t )icon->second.get(), image_min,
-                                ImVec2( image_min.x + 44 * scale, image_min.y + 44 * scale ) );
-            } else {
-                draw->AddText( image_min, ImGui::GetColorU32( ImGuiCol_Text ), "?" );
-            }
-            const ImVec2 text_min( grid ? min.x + 3 * scale : image_min.x + 52 * scale,
-                                   grid ? min.y + 52 * scale : min.y + ( 52 * scale - ImGui::GetFontSize() ) / 2 );
-            const int text_width = std::max( 1, static_cast<int>( ( max.x - text_min.x - 4 * scale ) /
-                                          ( ImGui::GetFontSize() * .5f ) ) );
-            const auto label = utf8_truncate( entry.name, text_width );
-            const ImVec4 clip( min.x, min.y, max.x, max.y );
-            draw->AddText( ImGui::GetFont(), ImGui::GetFontSize(), text_min,
-                           ImGui::GetColorU32( ImGuiCol_Text ), label.c_str(), nullptr, 0, &clip );
             if( ImGui::IsItemClicked( ImGuiMouseButton_Right ) ) {
                 ImGui::OpenPopup( "操作" );
             }
-            if( clicked ) {
+            const bool was_selected = selected.count( index ) != 0;
+            const bool arrow = parent && ImGui::GetMousePos().x <= min.x + 23 * scale;
+            if( ImGui::IsItemClicked() ) {
+                double_click_row = ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) && !arrow ?
+                                   std::optional<size_t>( index ) : std::nullopt;
+            }
+            if( drawing_inventory_rows && !was_selected && !arrow && ImGui::IsItemClicked() &&
+                !ImGui::GetIO().KeyShift && !ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) ) {
+                marquee_origin = ImGui::GetMousePos();
+                marquee_window = ImGui::GetCurrentWindow()->ID;
+                marquee_base.clear();
+            }
+            const bool boxed = drawing_inventory_rows && marquee && marquee->Overlaps( ImRect( min, max ) ) &&
+                               ImGui::IsItemVisible();
+            if( boxed ) {
+                marquee_selection.insert( index );
+            }
+            if( clicked && !marquee && !arrow ) {
                 if( !ImGui::GetIO().KeyShift ) {
                     selected.clear();
                 }
                 if( !selected.erase( index ) ) {
                     selected.insert( index );
                 }
-                if( ImGui::IsMouseDoubleClicked( ImGuiMouseButton_Left ) ) {
+                if( double_click_row == index && !ImGui::IsMouseDragPastThreshold( ImGuiMouseButton_Left ) ) {
+                    const scoped_rng_restore preserve;
                     details_text = remove_color_tags( loc->info( true ) );
                     open_details = true;
                 }
             }
-            if( selected.count( index ) ) {
-                ImGui::GetWindowDrawList()->AddRect( min, max, IM_COL32( 220, 170, 85, 255 ), 2, 0, 2 );
+            const bool has_children = expanded &&
+                                      ( !inline_pocket || !pockets.front()->entries.empty() );
+            if( ImGui::IsItemVisible() ) {
+                item_background( min, max, parent, hovered,
+                                 drawing_inventory_rows && marquee ?
+                                 boxed || marquee_base.count( index ) != 0 : selected.count( index ) != 0 );
+                if( show_contents ) {
+                    tree_guides( min, max, step, has_next, tracks, has_children );
+                }
+                const float middle = min.y + ( show_contents ? line_height : height ) / 2;
+                if( parent ) {
+                    row_arrow( min, middle, expanded );
+                }
+                const float icon_size = ( show_contents ? 22 : 36 ) * scale;
+                const float icon_x = min.x + ( parent ? 23 : 7 ) * scale;
+                if( SDL_Texture *icon = inventory_icon( *loc ) ) {
+                    const float icon_y = middle - icon_size / 2;
+                    ImGui::GetWindowDrawList()->AddImage( reinterpret_cast<ImTextureID>( icon ),
+                            ImVec2( icon_x, icon_y ), ImVec2( icon_x + icon_size, icon_y + icon_size ) );
+                }
+                std::string suffix;
+                if( loc->count() > 1 ) {
+                    suffix = " × " + std::to_string( loc->count() );
+                }
+                tree_row_label( min, max, icon_x + icon_size + 5 * scale, middle, equipment_name( *loc ),
+                                suffix, capacity > 0 ? string_format( "%.1f / %.1f L", used, capacity ) : "",
+                                parent ? palette::heading : palette::text,
+                                " " + loc->damage_indicator() + loc->degradation_symbol() );
+
             }
-            if( loc->count() > 1 ) {
-                const auto count = std::to_string( loc->count() );
-                ImGui::GetWindowDrawList()->AddText( ImVec2( min.x + 3, min.y + 3 ), IM_COL32_WHITE,
-                                                     count.c_str() );
-            }
-            const float durability = std::clamp( 1 - loc->damage_level() / 4.0f, 0.0f, 1.0f );
-            ImGui::GetWindowDrawList()->AddRectFilled( ImVec2( min.x + 2, max.y - 4 ),
-                    ImVec2( min.x + 2 + ( max.x - min.x - 4 ) * durability, max.y - 2 ), IM_COL32( 105, 190, 125,
-                            230 ) );
-            if( ImGui::IsItemHovered() ) {
+            if( hovered && !marquee ) {
                 ImGui::BeginTooltip();
                 ImGui::TextWrapped( "%s", entry.name.c_str() );
                 ImGui::Text( "%.2f kg / %.2f L", entry.weight_kg, entry.volume_l );
                 ImGui::TextWrapped( "位置：%s", entry.group.c_str() );
                 ImGui::Text( "数量 %d / 损坏等级 %d", loc->count(), loc->damage_level() );
-                ImGui::TextUnformatted( "右键操作；拖到容器或装备区域；Shift 多选；箭头展开/收起" );
                 ImGui::EndTooltip();
             }
-            if( ImGui::BeginDragDropSource() ) {
+            if( !( drawing_inventory_rows && marquee_origin ) && ImGui::BeginDragDropSource() ) {
                 ImGui::SetDragDropPayload( "FP3D_ITEM", &index, sizeof( index ) );
-                ImGui::TextWrapped( "%s", entry.name.c_str() );
+                if( selected.count( index ) && selected.size() > 1 ) {
+                    ImGui::Text( "已选 %zu 件物品", selected.size() );
+                } else {
+                    ImGui::TextWrapped( "%s", entry.name.c_str() );
+                }
                 ImGui::EndDragDropSource();
+            }
+            if( inline_pocket ) {
+                target( fp3d_inventory::operation_kind::insert, loc, std::nullopt, false,
+                        pockets.front()->pocket_index );
             }
             if( ImGui::BeginPopup( "操作" ) ) {
                 using kind = fp3d_inventory::operation_kind;
@@ -520,129 +651,272 @@ class panel : public cataimgui::window
                 }
                 ImGui::EndPopup();
             }
-            if( show_contents && depth < 16 && gear_expanded ) {
-                std::vector<bool> child_tracks = tracks;
+            if( expanded && depth < 15 ) {
+                auto child_tracks = tracks;
                 child_tracks.push_back( has_next );
-                gear_pockets( loc, depth, child_tracks );
+                if( inline_pocket ) {
+                    pocket_items( *pockets.front(), depth + 1, child_tracks );
+                } else {
+                    for( size_t i = 0; i < pockets.size(); ++i ) {
+                        pocket_row( *pockets[i], depth + 1, i + 1 < pockets.size(), child_tracks );
+                    }
+                }
             }
             ImGui::PopID();
         }
-        void gear_pockets( item_location owner, int depth,
+
+        void pocket_items( const fp3d_inventory::group &pocket, int depth,
                            const std::vector<bool> &tracks ) {
-            if( !owner || depth >= 15 ) {
+            for( size_t i = 0; i < pocket.entries.size(); ++i ) {
+                item_card( pocket.entries[i], depth, true, i + 1 < pocket.entries.size(), tracks );
+            }
+        }
+
+        void pocket_row( const fp3d_inventory::group &group, int depth, bool has_next,
+                         const std::vector<bool> &tracks ) {
+            ImGui::PushID( group.pocket_index );
+            const std::string key = "fp3d_inventory_pocket_open_" + std::to_string( group.pocket_index );
+            item_location owner = group.container;
+            bool expanded = owner->get_var( key, std::string( group.nearby ? "1" : "0" ) ) == "1";
+            const ImVec2 group_min = ImGui::GetCursorScreenPos();
+            const float group_width = ImGui::GetContentRegionAvail().x;
+            ImGui::BeginGroup();
+            const float step = indent_tree_row( depth );
+            const float height = std::max( ImGui::GetTextLineHeight() + 10 * scale, 30 * scale );
+            if( ImGui::Selectable( "##pocket", false, ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                                   ImVec2( 0, height ) ) && !marquee ) {
+                expanded = !expanded;
+                owner->set_var( key, std::string( expanded ? "1" : "0" ) );
+            }
+            const ImVec2 min = ImGui::GetItemRectMin();
+            const ImVec2 max = ImGui::GetItemRectMax();
+            const float middle = ( min.y + max.y ) / 2;
+            item_background( min, max, true, ImGui::IsItemHovered(), false );
+            tree_guides( min, max, step, has_next, tracks, expanded && !group.entries.empty() );
+            row_arrow( min, middle, expanded );
+            const size_t prefix = group.name.find( " / 口袋 " );
+            const std::string label = prefix == std::string::npos ? group.name : group.name.substr( prefix + 3 );
+            tree_row_label( min, max, min.x + 23 * scale, middle, label,
+                            group.entries.empty() ? " · 空" : "",
+                            group.capacity_l > 0 ? string_format( "%.1f / %.1f L", group.used_l,
+                                    group.capacity_l ) : "", palette::heading );
+            if( ImGui::IsItemHovered() ) {
+                ImGui::SetTooltip( "%s\n可拖入此口袋", label.c_str() );
+            }
+            target( fp3d_inventory::operation_kind::insert, group.container, std::nullopt, false,
+                    group.pocket_index );
+            if( expanded ) {
+                auto child_tracks = tracks;
+                child_tracks.push_back( has_next );
+                pocket_items( group, depth + 1, child_tracks );
+            }
+            ImGui::EndGroup();
+            const ImVec2 group_max( group_min.x + group_width, ImGui::GetItemRectMax().y );
+            if( ImGui::BeginDragDropTargetCustom( ImRect( group_min, group_max ),
+                                                 ImGui::GetID( "pocket_drop" ) ) ) {
+                if( const auto *payload = ImGui::AcceptDragDropPayload( "FP3D_ITEM" ) ) {
+                    const size_t index = *static_cast<const size_t *>( payload->Data );
+                    if( index < view.entries.size() ) {
+                        submit( fp3d_inventory::operation_kind::insert, index, group.container, 0,
+                                std::nullopt, false, group.pocket_index );
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::PopID();
+        }
+
+        void refresh_pickup_sources() {
+            const pickup_source old = pickup_sources.empty() ? pickup_source{} :
+                                      pickup_sources[pickup_source_index];
+            const auto tile = pickup_target ? here.get_bub( *pickup_target ) : you.pos_bub( here );
+            pickup_sources = { { "地面", here.ter( tile ).id().str(), std::nullopt, std::nullopt } };
+            for( size_t i = 0; i < view.groups.size(); ++i ) {
+                const auto &group = view.groups[i];
+                if( !group.tile || ( pickup_target && group.tile != pickup_target ) ) {
+                    continue;
+                }
+                if( group.source_sprite.empty() ) {
+                    if( pickup_target ) {
+                        pickup_sources.front().group = i;
+                    }
+                } else {
+                    pickup_sources.push_back( { group.name, group.source_sprite, i, group.tile } );
+                }
+            }
+            const auto found = std::find_if( std::next( pickup_sources.begin() ), pickup_sources.end(),
+            [&]( const auto &source ) {
+                return !old.sprite.empty() && source.sprite == old.sprite && source.tile == old.tile;
+            } );
+            pickup_source_index = found == pickup_sources.end() ? 0 :
+                                  static_cast<size_t>( found - pickup_sources.begin() );
+            update_pickup_highlight();
+        }
+
+        void update_pickup_highlight() const {
+            using highlight = fp3d_compositor::pickup_highlight;
+            if( pickup_source_index == 0 || !fp3d_compositor::view_3d() ) {
+                fp3d_compositor::set_pickup_highlight( std::nullopt );
                 return;
             }
-            std::vector<size_t> pockets;
-            for( size_t i = 0; i < view.groups.size(); ++i ) {
-                if( view.groups[i].container == owner && view.groups[i].pocket_index >= 0 ) {
-                    pockets.push_back( i );
+            const auto &source = pickup_sources[pickup_source_index];
+            fp3d_compositor::set_pickup_highlight( highlight{
+                view.groups[*source.group].vehicle ? highlight::kind::vehicle : highlight::kind::furniture,
+                *source.tile, source.sprite, {} } );
+        }
+
+        void set_inventory_font_scale() const {
+            const auto *parent = ImGui::GetCurrentWindow()->ParentWindow;
+            ImGui::SetWindowFontScale( scale / ( parent ? parent->FontWindowScale : 1.f ) );
+        }
+
+        void pickup_source_buttons() {
+            const float edge = 44.f * scale;
+            const float stride = edge + ImGui::GetStyle().ItemSpacing.x;
+            const bool overflows = pickup_sources.size() * stride - ImGui::GetStyle().ItemSpacing.x >
+                                   ImGui::GetContentRegionAvail().x;
+            ImGui::BeginChild( "##拾取来源", ImVec2( 0, edge + 4 +
+                               ( overflows ? ImGui::GetStyle().ScrollbarSize : 0.f ) ),
+                               false, ImGuiWindowFlags_HorizontalScrollbar );
+            set_inventory_font_scale();
+            for( size_t i = 0; i < pickup_sources.size(); ++i ) {
+                if( i > 0 ) {
+                    ImGui::SameLine();
                 }
-            }
-            for( size_t pos = 0; pos < pockets.size(); ++pos ) {
-                const auto &group = view.groups[pockets[pos]];
-                const bool has_next = pos + 1 < pockets.size();
-                ImGui::PushID( group.pocket_index );
-                // Pocket index is stable within its owner item, unlike an ImGui
-                // ID or a pointer that changes when this panel is reopened.
-                const std::string pocket_key = "fp3d_inventory_pocket_open_" +
-                                               std::to_string( group.pocket_index );
-                bool expanded = owner->get_var( pocket_key,
-                                                std::string( group.nearby ? "1" : "0" ) ) == "1";
-                const ImVec2 pocket_min = ImGui::GetCursorScreenPos();
-                const float pocket_width = ImGui::GetContentRegionAvail().x;
-                ImGui::BeginGroup();
-                if( ImGui::Selectable( "##pocket", false, ImGuiSelectableFlags_AllowDoubleClick,
-                                       ImVec2( 0, 36 * scale ) ) ) {
-                    expanded = !expanded;
-                    owner->set_var( pocket_key, std::string( expanded ? "1" : "0" ) );
+                ImGui::PushID( static_cast<int>( i ) );
+                const auto &source = pickup_sources[i];
+                const bool pressed = ImGui::InvisibleButton( "##来源", ImVec2( edge, edge ) );
+                if( pressed && i != pickup_source_index ) {
+                    pickup_source_index = i;
+                    pickup_source_changed = true;
+                    selected.clear();
+                    marquee_origin.reset();
+                    update_pickup_highlight();
                 }
-                const ImVec2 row_min = ImGui::GetItemRectMin();
-                const ImVec2 row_max = ImGui::GetItemRectMax();
-                parent_row_highlight( row_min, row_max, depth + 1, true,
-                                      ImGui::IsItemHovered(), false );
-                tree_guides( row_min, row_max, depth + 1, has_next, pos > 0, tracks,
-                             expanded && !group.entries.empty() );
-                if( !group.entries.empty() ) {
-                    tree_arrow( row_min, row_max, depth + 1, expanded );
+                const ImVec2 min = ImGui::GetItemRectMin();
+                const ImVec2 max = ImGui::GetItemRectMax();
+                item_background( min, max, false, ImGui::IsItemHovered(), i == pickup_source_index );
+                auto [it, inserted] = pickup_icons.try_emplace( source.sprite );
+                if( inserted ) {
+                    it->second = fp3d_materials::tileset_icon( source.sprite );
                 }
-                std::string label = group.name;
-                const size_t pocket_name = label.find( " / 口袋 " );
-                if( pocket_name != std::string::npos ) {
-                    label = label.substr( pocket_name + 3 );
+                SDL_Texture *icon = it->second.get();
+                if( icon ) {
+                    ImGui::GetWindowDrawList()->AddImage( reinterpret_cast<ImTextureID>( icon ),
+                            ImVec2( min.x + 4, min.y + 4 ), ImVec2( max.x - 4, max.y - 4 ) );
+                } else {
+                    const std::string label = utf8_wrapper( source.name ).substr( 0, 2 ).str();
+                    const ImVec2 text_size = ImGui::CalcTextSize( label.c_str() );
+                    ImGui::GetWindowDrawList()->AddText( ImVec2( min.x + ( edge - text_size.x ) / 2,
+                            min.y + ( edge - text_size.y ) / 2 ), palette::text, label.c_str() );
                 }
-                if( group.capacity_l > 0 ) {
-                    label += "  (" + string_format( "%.2f / %.2f L", group.used_l, group.capacity_l ) + ")";
-                }
-                if( group.entries.empty() ) {
-                    label += "  [空]";
-                }
-                const ImVec2 text_pos( row_min.x + ( 42 + ( depth + 1 ) * 22 ) * scale,
-                                       row_min.y + ( 36 * scale - ImGui::GetFontSize() ) * .5f );
-                const int chars = std::max( 1, static_cast<int>( ( row_max.x - text_pos.x - 5 * scale ) /
-                                            ( ImGui::GetFontSize() * .5f ) ) );
-                const std::string shown = utf8_truncate( label, chars );
-                ImGui::GetWindowDrawList()->AddText( text_pos,
-                        ImGui::GetColorU32( ImGuiCol_Text ), shown.c_str() );
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip( "%s\n将物品拖放到这里可放入对应口袋。", label.c_str() );
-                }
-                if( expanded ) {
-                    std::vector<bool> child_tracks = tracks;
-                    child_tracks.push_back( has_next );
-                    for( size_t i = 0; i < group.entries.size(); ++i ) {
-                        item_card( group.entries[i], depth + 2, true, false,
-                                   i + 1 < group.entries.size(), i > 0, child_tracks );
-                    }
-                }
-                ImGui::EndGroup();
-                const ImVec2 pocket_max( pocket_min.x + pocket_width, ImGui::GetItemRectMax().y );
-                if( ImGui::BeginDragDropTargetCustom( ImRect( pocket_min, pocket_max ),
-                        ImGui::GetID( "pocket_drop" ) ) ) {
-                    if( const auto *payload = ImGui::AcceptDragDropPayload( "FP3D_ITEM" ) ) {
-                        const size_t index = *static_cast<const size_t *>( payload->Data );
-                        if( index < view.entries.size() ) {
-                            submit( fp3d_inventory::operation_kind::insert, index, group.container, 0,
-                                    std::nullopt, false, group.pocket_index );
-                        }
-                    }
-                    ImGui::EndDragDropTarget();
+                ImGui::SetItemTooltip( "%s", source.name.c_str() );
+                if( source.group ) {
+                    const auto &group = view.groups[*source.group];
+                    target( fp3d_inventory::operation_kind::place, {}, group.tile, group.vehicle );
                 }
                 ImGui::PopID();
             }
+            ImGui::EndChild();
         }
+
+        void begin_inventory_selection() {
+            drawing_inventory_rows = true;
+            marquee.reset();
+            marquee_selection.clear();
+            if( marquee_origin && marquee_window == ImGui::GetCurrentWindow()->ID &&
+                ( ImGui::IsMouseDragging( ImGuiMouseButton_Left ) ||
+                                    ImGui::IsMouseReleased( ImGuiMouseButton_Left ) ) ) {
+                const ImVec2 cursor = ImGui::GetMousePos();
+                if( std::hypot( cursor.x - marquee_origin->x, cursor.y - marquee_origin->y ) >=
+                    ImGui::GetIO().MouseDragThreshold ) {
+                    const ImVec2 low = ImMin( *marquee_origin, cursor );
+                    ImVec2 high = ImMax( *marquee_origin, cursor );
+                    high.x = std::max( high.x, low.x + 1 );
+                    high.y = std::max( high.y, low.y + 1 );
+                    marquee.emplace( low, high );
+                    marquee->ClipWith( ImGui::GetCurrentWindow()->ClipRect );
+                }
+            }
+        }
+
+        void end_inventory_selection( const ImVec2 &list_top ) {
+            ImGuiWindow *window = ImGui::GetCurrentWindow();
+            if( !marquee_origin && ImGui::IsMouseClicked( ImGuiMouseButton_Left ) &&
+                ImGui::IsWindowHovered() && GImGui->HoveredId == 0 &&
+                window->ClipRect.Contains( ImGui::GetMousePos() ) && ImGui::GetMousePos().y >= list_top.y ) {
+                marquee_origin = ImGui::GetMousePos();
+                marquee_window = window->ID;
+                marquee_base = ImGui::GetIO().KeyShift ? selected : std::set<size_t>{};
+            }
+            if( marquee ) {
+                window->DrawList->AddRectFilled( marquee->Min, marquee->Max,
+                                                ( palette::accent & 0x00ffffff ) | 0x28000000 );
+                window->DrawList->AddRect( marquee->Min, marquee->Max, palette::accent );
+                selected = marquee_base;
+                selected.insert( marquee_selection.begin(), marquee_selection.end() );
+            }
+            marquee.reset();
+            drawing_inventory_rows = false;
+        }
+
         void groups( bool nearby ) {
             auto &search = nearby ? near_search : mine_search;
             auto &category = nearby ? near_category : mine_category;
             ImGui::PushID( nearby ? "near" : "mine" );
-            ImGui::InputText( "搜索", &search );
-            ImGui::Combo( "分类", &category,
+            if( !nearby ) {
+                const std::string weight = string_format( "%.1f / %.1f kg",
+                                           units::to_gram( you.weight_carried() ) / 1000.0,
+                                           units::to_gram( you.weight_capacity() ) / 1000.0 );
+                const ImVec2 min = ImGui::GetCursorScreenPos();
+                const ImVec2 max( min.x + ImGui::GetContentRegionAvail().x, min.y + ImGui::GetFrameHeight() + 6 * scale );
+                ImGui::GetWindowDrawList()->AddRectFilled( min, max, palette::item, 4 * scale );
+                tree_row_label( min, max, min.x + 9 * scale, ( min.y + max.y ) / 2, "携带物品 / 背包",
+                                "", weight, palette::heading );
+                ImGui::Dummy( ImVec2( max.x - min.x, max.y - min.y ) );
+            }
+            const bool pickup = nearby;
+            if( pickup ) {
+                update_pickup_highlight();
+                pickup_source_buttons();
+            }
+            const float filter_width = ImGui::GetContentRegionAvail().x;
+            const bool inline_filters = pickup && filter_width >= 245 * scale;
+            if( inline_filters ) {
+                ImGui::SetNextItemWidth( filter_width * .54f );
+                ImGui::InputTextWithHint( "##搜索", "搜索", &search );
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth( -1 );
+            } else {
+                ImGui::InputText( "搜索", &search );
+            }
+            ImGui::Combo( inline_filters ? "##分类" : "分类", &category,
                           "全部\0武器\0弹药\0食品\0医疗\0衣物\0背包/容器\0工具\0其它\0" );
-            if( nearby && !pickup_target ) {
-                ImGui::Checkbox( "显示空来源（可拖入）", &show_empty );
-                const char *source_name = near_source < 0 ? "全部来源" : view.groups[near_source].name.c_str();
-                if( ImGui::BeginCombo( "来源", source_name ) ) {
-                    if( ImGui::Selectable( "全部来源", near_source < 0 ) ) {
-                        near_source = -1;
-                    }
-                    for( size_t i = 0; i < view.groups.size(); ++i ) {
-                        if( !view.groups[i].nearby ) {
-                            continue;
-                        }
-                        ImGui::PushID( static_cast<int>( i ) );
-                        if( ImGui::Selectable( view.groups[i].name.c_str(), near_source == static_cast<int>( i ) ) ) {
-                            near_source = i;
-                        }
-                        ImGui::PopID();
-                    }
-                    ImGui::EndCombo();
+            if( pickup ) {
+                if( pickup_source_changed ) {
+                    ImGui::SetNextWindowScroll( ImVec2( 0, 0 ) );
+                    pickup_source_changed = false;
+                }
+                ImGui::BeginChild( "##拾取列表", ImVec2( 0, 0 ) );
+                set_inventory_font_scale();
+            }
+            const ImVec2 list_top = ImGui::GetCursorScreenPos();
+            begin_inventory_selection();
+            if( pickup ) {
+                const auto &source = pickup_sources[pickup_source_index];
+                if( pickup_target && !source.group ) {
+                    ImGui::TextDisabled( "地面没有独立的物品堆。" );
                 }
             }
             for( size_t group_index = 0; group_index < view.groups.size(); ++group_index ) {
                 const auto &group = view.groups[group_index];
+                const bool show_source = !pickup ||
+                                         ( ( pickup_source_index == 0 && !pickup_target ) ?
+                                             group.source_sprite.empty() && ( !group.entries.empty() ||
+                                                     ImGui::IsDragDropActive() ) :
+                                             pickup_sources[pickup_source_index].group == group_index );
                 if( group.nearby != nearby || group.pocket_index >= 0 ||
-                    ( nearby && pickup_target && group.tile != pickup_target ) ||
-                    ( nearby && near_source >= 0 && near_source != static_cast<int>( group_index ) ) ||
-                    ( nearby && !pickup_target && !show_empty && group.entries.empty() ) ) {
+                    !show_source ) {
                     continue;
                 }
                 ImGui::PushID( static_cast<int>( group_index ) );
@@ -675,15 +949,8 @@ class panel : public cataimgui::window
                     ImGui::PopID();
                     continue;
                 }
-                if( group.capacity_l > 0 && !group.container ) {
+                if( group.capacity_l > 0 ) {
                     ImGui::Text( "%.2f / %.2f L", group.used_l, group.capacity_l );
-                }
-                if( group.container ) {
-                    if( group.capacity_l > 0 ) {
-                        ImGui::ProgressBar( std::clamp( group.used_l / group.capacity_l, 0.0f, 1.0f ), ImVec2( -1,
-                                            5 * scale ), "" );
-                        ImGui::Text( "%.2f / %.2f L", group.used_l, group.capacity_l );
-                    }
                 }
                 if( group.container ) {
                     ImGui::Text( "重量 %.2f / %.2f kg", group.used_kg, group.capacity_kg );
@@ -716,7 +983,7 @@ class panel : public cataimgui::window
                 } );
                 // A single vertical list keeps container, pocket and leaf branches aligned.
                 for( size_t i = 0; i < indices.size(); ++i ) {
-                    item_card( indices[i], 0, true, false, i + 1 < indices.size(), i > 0 );
+                item_card( indices[i], 0, true, i + 1 < indices.size() );
                 }
                 if( nearby && !indices.empty() && yellow_small_button( "拿取本组全部物品" ) ) {
                     fp3d_inventory::operation action;
@@ -747,8 +1014,83 @@ class panel : public cataimgui::window
                 }
                 ImGui::PopID();
             }
+            end_inventory_selection( list_top );
+            if( pickup ) {
+                const auto chosen = std::find_if( selected.begin(), selected.end(), [&]( size_t index ) {
+                    return view.entries[index].nearby;
+                } );
+                if( chosen != selected.end() && yellow_small_button( "拿取选中的物品" ) ) {
+                    submit( fp3d_inventory::operation_kind::pickup, *chosen );
+                }
+                ImGui::EndChild();
+            }
             ImGui::PopID();
         }
+        void inventory_page() {
+            const float height = std::max( 80.f, ImGui::GetContentRegionAvail().y -
+                                            ( pickup_mode ? 0.f : ImGui::GetFrameHeightWithSpacing() ) -
+                                            2 * ImGui::GetTextLineHeightWithSpacing() );
+            const float width = ImGui::GetContentRegionAvail().x;
+            const bool narrow = width < 850 * scale;
+            ImGui::BeginChild( "装备", ImVec2( width * ( narrow ? .36f : .27f ), height ), true );
+            set_inventory_font_scale();
+            palette::title( "人物装备" );
+            ImGui::SetNextItemWidth( -1 );
+            ImGui::Combo( "##装备分类", &side_page, "装备\0衣物\0身体\0更多\0" );
+            if( side_page == 2 ) {
+                for( const auto &part : you.get_all_body_parts() ) {
+                    ImGui::TextWrapped( "%s %s", body_part_name( part ).c_str(),
+                                        fp3d_hud::health_text( you, part ).c_str() );
+                }
+            } else if( side_page == 3 ) {
+                compatible( ACTION_ADVANCEDINV, "高级物品管理" );
+                compatible( ACTION_INVENTORY, "原版背包" );
+                compatible( ACTION_KEYBINDINGS, "操作设置" );
+            } else {
+                gear();
+            }
+            ImGui::EndChild();
+            ImGui::SameLine();
+            const float rest = ImGui::GetContentRegionAvail().x;
+            const float gap = ImGui::GetStyle().ItemSpacing.x;
+            ImGui::BeginChild( "我的物品", ImVec2( narrow ? rest : ( rest - gap ) / 2, height ), true );
+            set_inventory_font_scale();
+            if( narrow ) {
+                if( ImGui::BeginTabBar( "##物品来源" ) ) {
+                    if( ImGui::BeginTabItem( "我的物品", nullptr,
+                                             small_tab == 1 ? ImGuiTabItemFlags_SetSelected : 0 ) ) {
+                        groups( false );
+                        ImGui::EndTabItem();
+                    }
+                    if( ImGui::BeginTabItem( pickup_mode ? "拾取目标" : "附近物品", nullptr,
+                                             small_tab == 2 ? ImGuiTabItemFlags_SetSelected : 0 ) ) {
+                        groups( true );
+                        ImGui::EndTabItem();
+                    }
+                    small_tab = 0;
+                    ImGui::EndTabBar();
+                }
+            } else {
+                groups( false );
+            }
+            ImGui::EndChild();
+            if( !narrow ) {
+                ImGui::SameLine();
+                ImGui::BeginChild( "附近物品", ImVec2( 0, height ), true );
+                set_inventory_font_scale();
+                palette::title( pickup_mode ? "拾取目标" : "附近物品" );
+                groups( true );
+                ImGui::EndChild();
+            }
+            if( !ImGui::IsMouseDown( ImGuiMouseButton_Left ) ) {
+                marquee_origin.reset();
+            }
+            if( !pickup_target ) {
+                yellow_button( "拖到这里放到脚下" );
+                target( fp3d_inventory::operation_kind::drop );
+            }
+        }
+
         void body_equipment() {
             using namespace fp3d_body_figure;
             const float available = ImGui::GetContentRegionAvail().x;
@@ -780,14 +1122,9 @@ class panel : public cataimgui::window
                                                you.get_part_hp_cur( part.id() ), you.get_part_hp_max( part.id() ) );
                         }
                     }
-                    SDL_Color rgb{ 105, 110, 115, 160 };
-                    if( present ) {
-                        const nc_color health = display::get_bodygraph_bp_color( you, part.id(), bodygraph_var::hp );
-                        const auto &pair = cata_cursesport::colorpairs[health.to_color_pair_index()];
-                        const int palette = ( pair.FG != 0 ? pair.FG : pair.BG ) + ( health.is_bold() ? 8 : 0 );
-                        rgb = windowsPalette[palette];
-                        rgb.a = 255;
-                    }
+                    const ImU32 tint = present && you.get_part_hp_max( part.id() ) > 0 ?
+                                       health_tint( static_cast<float>( you.get_part_hp_cur( part.id() ) ) /
+                                                    you.get_part_hp_max( part.id() ) ) : palette::item;
                     const bool selected = present && gear_part == region.id;
                     std::vector<ImVec2> polygon;
                     polygon.reserve( region.outline.size() );
@@ -796,15 +1133,19 @@ class panel : public cataimgui::window
                     }
                     const int vertices = static_cast<int>( polygon.size() );
                     draw->AddConcavePolyFilled( polygon.data(), vertices,
-                                                IM_COL32( rgb.r, rgb.g, rgb.b, hovered || selected ? 150 : 85 ) );
+                                                hovered || selected ? palette::hover : palette::container );
                     draw->AddPolyline( polygon.data(), vertices,
-                                       selected ? IM_COL32( 255, 218, 85, 255 ) : IM_COL32( rgb.r, rgb.g, rgb.b, rgb.a ),
+                                       selected ? palette::accent : tint,
                                        ImDrawFlags_Closed, selected ? 2.0f : 1.0f );
                 }
                 ImGui::SetCursorScreenPos( start );
                 ImGui::Dummy( ImVec2( available, height * icon_scale ) );
                 ImGui::EndGroup();
             }
+            coverage_filter();
+        }
+
+        void coverage_filter() {
             const auto selected = gear_part.empty() ? "全身" : body_part_name( bodypart_str_id(
                                       gear_part ).id() );
             ImGui::TextUnformatted( "覆盖部位" );
@@ -954,6 +1295,7 @@ class panel : public cataimgui::window
             compatible( ACTION_MAP, "旅行 / 完整地图（原版）" );
         }
         void map_page() {
+            palette::title( "地图" );
             if( overmap_icons_revision != fp3d_materials::revision() ) {
                 overmap_image.reset();
                 map_loaded = false;
@@ -1182,7 +1524,7 @@ class panel : public cataimgui::window
                 if( !overmap_image ) {
                     draw->AddRectFilled( start, end, row.known ? ImGui::ColorConvertFloat4ToU32(
                                          ImVec4( foreground.x * .3f, foreground.y * .3f, foreground.z * .3f, 1 ) ) :
-                                     IM_COL32( 15, 20, 26, 255 ) );
+                                     palette::panel );
                     if( !row.symbol.empty() && tile >= ImGui::GetFontSize() * .8f &&
                         ImGui::GetFont()->FindGlyphNoFallback( static_cast<ImWchar>( UTF8_getch( row.symbol ) ) ) ) {
                         const auto size = ImGui::CalcTextSize( row.symbol.c_str() );
@@ -1192,7 +1534,7 @@ class panel : public cataimgui::window
                 }
                 if( show_map_route && row.route ) {
                     draw->AddRectFilled( ImVec2( middle.x - 2, middle.y - 2 ),
-                                         ImVec2( middle.x + 2, middle.y + 2 ), IM_COL32( 70, 150, 255, 255 ) );
+                                         ImVec2( middle.x + 2, middle.y + 2 ), palette::accent );
                 }
                 if( !row.note_text.empty() ) {
                     const auto tint = fp3d_map::marker_color( row.note_text );
@@ -1203,16 +1545,16 @@ class panel : public cataimgui::window
                     const ImVec2 b( middle.x + arm, middle.y + arm );
                     const ImVec2 c( middle.x - arm, middle.y + arm );
                     const ImVec2 d( middle.x + arm, middle.y - arm );
-                    draw->AddLine( a, b, IM_COL32( 10, 9, 8, 240 ), 4.0f * scale );
-                    draw->AddLine( c, d, IM_COL32( 10, 9, 8, 240 ), 4.0f * scale );
+                    draw->AddLine( a, b, palette::background, 4.0f * scale );
+                    draw->AddLine( c, d, palette::background, 4.0f * scale );
                     draw->AddLine( a, b, color, 2.4f * scale );
                     draw->AddLine( c, d, color, 2.4f * scale );
                 }
                 if( row.objective || row.position == map_view.player ||
                     ( map_selection && row.position == *map_selection ) ) {
-                    draw->AddRect( start, end, row.objective ? IM_COL32( 255, 160, 50, 255 ) :
-                                   row.position == map_view.player ? IM_COL32( 70, 210, 255, 255 ) :
-                                   IM_COL32( 255, 255, 255, 255 ), 0, 0, 2 );
+                    draw->AddRect( start, end, row.objective ? palette::warning :
+                                   row.position == map_view.player ? palette::accent :
+                                   palette::text, 0, 0, 2 );
                 }
             }
             draw->PushClipRect( origin, ImVec2( origin.x + extent, origin.y + extent ), true );
@@ -1222,8 +1564,8 @@ class panel : public cataimgui::window
                                               map_view.radius + .5f ) * tile - size.x * .5f,
                                   origin.y + ( city.position.y() - map_view.center.y() +
                                               map_view.radius + .5f ) * tile - size.y * .5f );
-                draw->AddRectFilled( pos, ImVec2( pos.x + size.x, pos.y + size.y ), IM_COL32( 0, 0, 0, 255 ) );
-                draw->AddText( pos, IM_COL32( 255, 255, 0, 255 ), city.name.c_str() );
+                draw->AddRectFilled( pos, ImVec2( pos.x + size.x, pos.y + size.y ), palette::background );
+                draw->AddText( pos, palette::heading, city.name.c_str() );
             }
             draw->PopClipRect();
             ImGui::EndChild();
@@ -1235,6 +1577,7 @@ class panel : public cataimgui::window
             }
         }
         void construction() {
+            palette::title( "建造" );
             if( !projects_loaded ) {
                 const auto previous = selected_project < projects.size() ? projects[selected_project].id :
                                       construction_group_str_id();
@@ -1344,6 +1687,7 @@ class panel : public cataimgui::window
             compatible( ACTION_CONSTRUCT, "完整建造菜单（原版兼容）" );
         }
         void journal_page( bool people ) {
+            palette::title( people ? "队友" : "任务" );
             if( !journal_loaded ) {
                 journal = fp3d_journal::capture( you, get_map() );
                 journal_loaded = true;
@@ -1496,7 +1840,7 @@ class panel : public cataimgui::window
             }
             ImGui::EndChild();
             const auto actions = [&]() {
-                ImGui::TextUnformatted( "任务操作" );
+                palette::title( "任务操作" );
                 if( !mission ) {
                     ImGui::TextWrapped( "先从左侧选择任务。" );
                     return;
@@ -1541,6 +1885,7 @@ class panel : public cataimgui::window
             compatible( ACTION_MISSIONS, "完整任务管理（原版兼容）" );
         }
         void crafting() {
+            palette::title( "制作" );
             if( crafting_position ) {
                 ImGui::TextWrapped( "简易制作 · %s", here.name( here.get_bub( *crafting_position ) ).c_str() );
             }
@@ -1682,7 +2027,7 @@ class panel : public cataimgui::window
                         }
                         const std::string name = ( fp3d_crafting::is_favorite( entry.id ) ? "★ " : "" ) + entry.name;
                         draw->AddText( nullptr, ImGui::GetFontSize(), ImVec2( start.x + 58 * scale, start.y + 4 * scale ),
-                                       IM_COL32( 235, 235, 235, 255 ), name.c_str(), nullptr, cell - 64 * scale );
+                                       palette::text, name.c_str(), nullptr, cell - 64 * scale );
                         draw->PopClipRect();
                         if( ImGui::IsItemHovered() ) {
                             ImGui::SetTooltip( "%s", entry.name.c_str() );
@@ -1737,71 +2082,322 @@ class panel : public cataimgui::window
                 compatible( ACTION_CRAFT, "完整制作菜单（原版兼容）" );
             }
         }
-        void health() {
-            const float height = ImGui::GetContentRegionAvail().y - 85 * scale;
-            const float width = ImGui::GetContentRegionAvail().x;
-            ImGui::BeginChild( "身体与需求", ImVec2( width * .49f, height ), true );
-            ImGui::TextWrapped( "%s", you.get_name().c_str() );
-            ImGui::Text( "力量 %d  敏捷 %d", you.get_str(), you.get_dex() );
-            ImGui::Text( "智力 %d  感知 %d", you.get_int(), you.get_per() );
-            ImGui::Text( "耐力 %s", fp3d_hud::stamina_text( you ).c_str() );
+        void portrait() {
+            const unsigned revision = fp3d_materials::revision();
+            if( !portrait_checked || revision != portrait_revision ) {
+                const scoped_rng_restore preserve;
+                character_portrait = fp3d_materials::character_icon( you );
+                portrait_revision = revision;
+                portrait_checked = true;
+            }
+            const float side = std::max( 1.f, std::min( 172.f * scale, ImGui::GetContentRegionAvail().x ) );
+            const float inset = ( ImGui::GetContentRegionAvail().x - side ) / 2;
+            ImGui::SetCursorPosX( ImGui::GetCursorPosX() + inset );
+            if( character_portrait ) {
+                ImGui::Image( reinterpret_cast<ImTextureID>( character_portrait.get() ), ImVec2( side, side ) );
+                return;
+            }
+            using namespace fp3d_body_figure;
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            const float factor = side / height;
+            for( const auto &region : regions ) {
+                std::vector<ImVec2> shape;
+                for( const point &p : region.outline ) {
+                    shape.emplace_back( origin.x + ( side - width * factor ) / 2 + p.x * factor,
+                                        origin.y + p.y * factor );
+                }
+                ImGui::GetWindowDrawList()->AddConcavePolyFilled( shape.data(), shape.size(), palette::container );
+                ImGui::GetWindowDrawList()->AddPolyline( shape.data(), shape.size(), palette::accent,
+                                                        ImDrawFlags_Closed, 1.f );
+            }
+            ImGui::Dummy( ImVec2( side, side ) );
+        }
+
+        void character_profile() {
+            palette::title( "人物档案" );
+            portrait();
+            palette::title( you.get_name().c_str() );
+            if( const profession *job = you.get_profession() ) {
+                ImGui::TextWrapped( "%s", job->gender_appropriate_name( you.male ).c_str() );
+            }
+            const double carried = units::to_gram( you.weight_carried() ) / 1000.0;
+            const double capacity = units::to_gram( you.weight_capacity() ) / 1000.0;
+            ImGui::TextWrapped( "负重 %.1f / %.1f kg", carried, capacity );
+            if( capacity > 0 ) {
+                ratio_bar( carried / capacity, carried > capacity ? palette::danger :
+                           carried >= capacity * .8 ? palette::warning : palette::normal );
+            }
+            ImGui::TextWrapped( "耐力 %d / %d", you.get_stamina(), you.get_stamina_max() );
+            if( you.get_stamina_max() > 0 ) {
+                const float ratio = static_cast<float>( you.get_stamina() ) / you.get_stamina_max();
+                ratio_bar( ratio, health_tint( ratio ) );
+            }
             for( const auto &need : needs ) {
                 ImGui::TextWrapped( "%s：%s", need.first.c_str(), need.second.c_str() );
             }
-            ImGui::Separator();
-            ImGui::TextUnformatted( "身体 / 原版生命与累赘" );
-            for( const auto &part : you.get_all_body_parts() ) {
-                const int maximum = you.get_part_hp_max( part );
-                if( maximum <= 0 ) {
-                    continue;
-                }
-                ImGui::TextWrapped( "%s %s  累赘 %d", body_part_name( part ).c_str(),
-                                    fp3d_hud::health_text( you, part ).c_str(), you.encumb( part ) );
-            }
-            ImGui::EndChild();
-            ImGui::SameLine();
-            ImGui::BeginChild( "状态与技能", ImVec2( 0, height ), true );
-            ImGui::TextUnformatted( "当前状态" );
+
+            palette::title( "状态效果" );
             if( effects.empty() ) {
-                ImGui::TextDisabled( "没有可显示的状态" );
+                ImGui::TextDisabled( "暂无状态效果" );
             }
             for( size_t i = 0; i < effects.size(); ++i ) {
                 ImGui::PushID( static_cast<int>( i ) );
-                const bool expanded = ImGui::CollapsingHeader( effects[i].first.c_str() );
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::BeginTooltip();
-                    ImGui::PushTextWrapPos( 320 * scale );
-                    ImGui::TextUnformatted( effects[i].first.c_str() );
-                    ImGui::PopTextWrapPos();
-                    ImGui::EndTooltip();
-                }
-                if( expanded ) {
+                if( ImGui::TreeNode( "##effect", "%s", effects[i].first.c_str() ) ) {
                     ImGui::TextWrapped( "%s", effects[i].second.c_str() );
+                    ImGui::TreePop();
                 }
                 ImGui::PopID();
             }
-            ImGui::Separator();
-            ImGui::TextUnformatted( "技能 / 实践与理论" );
-            ImGui::SetNextItemWidth( -1 );
-            ImGui::InputTextWithHint( "##技能搜索", "搜索技能", &skill_search );
-            for( const auto &row : skills ) {
-                if( !lcmatch( row.name, skill_search ) ) {
-                    continue;
+            if( ImGui::CollapsingHeader( "技能" ) ) {
+                ImGui::SetNextItemWidth( -1 );
+                ImGui::InputTextWithHint( "##技能搜索", "搜索技能", &skill_search );
+                for( const auto &row : skills ) {
+                    if( lcmatch( row.name, skill_search ) ) {
+                        ImGui::TextWrapped( "%s  %d / %d", row.name.c_str(), row.practical, row.theory );
+                        ImGui::SetItemTooltip( "%s", row.description.c_str() );
+                        ratio_bar( row.exercise / 100.f, palette::accent );
+                    }
                 }
-                ImGui::TextWrapped( "%s  %d / %d", row.name.c_str(), row.practical, row.theory );
-                if( ImGui::IsItemHovered() ) {
-                    ImGui::BeginTooltip();
-                    ImGui::PushTextWrapPos( 320 * scale );
-                    ImGui::TextUnformatted( row.description.c_str() );
-                    ImGui::PopTextWrapPos();
-                    ImGui::EndTooltip();
+            }
+        }
+
+        void body_summary( const bodypart_id &part ) const {
+            const int hp = you.get_part_hp_cur( part );
+            const int maximum = you.get_part_hp_max( part );
+            if( maximum > 0 ) {
+                ImGui::TextWrapped( "HP %d / %d · 累赘 %d", hp, maximum, you.encumb( part ) );
+                const float ratio = static_cast<float>( hp ) / maximum;
+                ratio_bar( ratio, health_tint( ratio ) );
+            } else {
+                ImGui::TextWrapped( "累赘 %d", you.encumb( part ) );
+            }
+        }
+
+        void body_page( bool details ) {
+            const auto parts = you.get_all_body_parts();
+            if( parts.empty() ) {
+                ImGui::TextDisabled( "暂无身体部位" );
+                return;
+            }
+            if( std::find( parts.begin(), parts.end(), inspected_part ) == parts.end() ) {
+                inspected_part = parts.front();
+            }
+            if( details ) {
+                palette::title( body_part_name( inspected_part ).c_str() );
+                body_summary( inspected_part );
+                bool has_effect = false;
+                for( const auto &reference : you.get_effects() ) {
+                    const effect &status = reference.get();
+                    if( status.get_bp() == inspected_part && !status.disp_name().empty() ) {
+                        has_effect = true;
+                        ImGui::TextWrapped( "%s", remove_color_tags( status.disp_name() ).c_str() );
+                        ImGui::TextWrapped( "%s", remove_color_tags( status.disp_desc() ).c_str() );
+                    }
                 }
-                ImGui::ProgressBar( row.exercise / 100.0f, ImVec2( -1, 6 * scale ), "" );
+                if( !has_effect ) {
+                    ImGui::TextWrapped( "此部位暂无专属状态效果" );
+                }
+                compatible( ACTION_USE, "使用药品…" );
+                return;
+            }
+            const auto status_effects = you.get_effects();
+            for( const bodypart_id &part : parts ) {
+                ImGui::PushID( part.id().str().c_str() );
+                if( detail_row( body_part_name( part ).c_str(), part == inspected_part ) ) {
+                    inspected_part = part;
+                }
+                body_summary( part );
+                for( const auto &status : status_effects ) {
+                    if( status.get().get_bp() == part && !status.get().disp_name().empty() ) {
+                        ImGui::TextWrapped( "%s", remove_color_tags( status.get().disp_name() ).c_str() );
+                    }
+                }
+                ImGui::Spacing();
+                ImGui::PopID();
+            }
+        }
+
+        void character_gear( bool details ) {
+            if( !details ) {
+                coverage_filter();
+                compatible( ACTION_WEAR, "穿戴物品…" );
+            }
+            const auto matches = [&]( const fp3d_inventory::entry &entry ) {
+                return entry.equipped && entry.location && ( gear_part.empty() ||
+                       entry.location->covers( bodypart_str_id( gear_part ).id() ) );
+            };
+            const auto found = std::find_if( view.entries.begin(), view.entries.end(), [&]( const auto &entry ) {
+                return matches( entry ) && entry.location == inspected_gear;
+            } );
+            if( details ) {
+                if( found == view.entries.end() ) {
+                    ImGui::TextWrapped( "选择一件装备查看详情" );
+                    return;
+                }
+                const item &object = *found->location;
+                if( SDL_Texture *icon = inventory_icon( object ) ) {
+                    ImGui::Image( reinterpret_cast<ImTextureID>( icon ), ImVec2( 72 * scale, 72 * scale ) );
+                }
+                cataimgui::draw_colored_text( equipment_name( object ) + " " + object.damage_indicator() +
+                                             object.degradation_symbol(), c_light_gray,
+                                             ImGui::GetContentRegionAvail().x );
+                ImGui::TextWrapped( "重量 %.2f kg · 体积 %.2f L", found->weight_kg, found->volume_l );
+                if( you.is_worn( object ) ) {
+                    palette::title( "覆盖部位与累赘" );
+                    for( const auto &part : you.get_all_body_parts() ) {
+                        if( object.covers( part ) ) {
+                            ImGui::TextWrapped( "%s · %d", body_part_name( part ).c_str(),
+                                                object.get_encumber( you, part ) );
+                        }
+                    }
+                    if( yellow_button( "卸下" ) ) {
+                        selected.clear();
+                        submit( fp3d_inventory::operation_kind::takeoff,
+                                std::distance( view.entries.begin(), found ), {}, 1 );
+                    }
+                }
+                return;
+            }
+            bool any = false;
+            for( const auto &entry : view.entries ) {
+                if( matches( entry ) ) {
+                    any = true;
+                    ImGui::PushID( static_cast<const void *>( &*entry.location ) );
+                    if( detail_row( "##gear", inspected_gear == entry.location ) ) {
+                        inspected_gear = entry.location;
+                    }
+                    const ImVec2 min = ImGui::GetItemRectMin();
+                    const ImVec2 max = ImGui::GetItemRectMax();
+                    tree_row_label( min, max, min.x + 4 * scale, ( min.y + max.y ) / 2,
+                                    equipment_name( *entry.location ), "", "", palette::text,
+                                    " " + entry.location->damage_indicator() + entry.location->degradation_symbol() );
+                    if( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip( "%s", entry.name.c_str() );
+                    }
+                    ImGui::PopID();
+                }
+            }
+            if( !any ) {
+                ImGui::TextWrapped( "此范围没有装备" );
+            }
+        }
+
+        void attributes_page( bool details ) {
+            const char *names[] = { "力量", "敏捷", "智力", "感知" };
+            const int current[] = { you.get_str(), you.get_dex(), you.get_int(), you.get_per() };
+            const int base[] = { you.get_str_base(), you.get_dex_base(), you.get_int_base(), you.get_per_base() };
+            if( details ) {
+                const char *descriptions[] = {
+                    "影响近战伤害、负重、基础生命值和需要蛮力的行动。",
+                    "影响近战命中、远程瞄准和需要精细操作的行动。",
+                    "影响复杂制作以及从阅读中学习的效率。",
+                    "影响远程射击与发现陷阱等事物的能力。"
+                };
+                palette::title( names[inspected_stat] );
+                ImGui::Text( "当前 %d · 基础 %d", current[inspected_stat], base[inspected_stat] );
+                ImGui::TextWrapped( "%s", descriptions[inspected_stat] );
+                return;
+            }
+            for( int i = 0; i < 4; ++i ) {
+                if( detail_row( string_format( "%s  %d", names[i], current[i] ).c_str(),
+                                inspected_stat == i, 32 * scale ) ) {
+                    inspected_stat = i;
+                }
+            }
+        }
+
+        void character_traits( bool details ) {
+            const auto traits = you.get_mutations( false );
+            const auto base = you.get_base_traits();
+            if( std::find( traits.begin(), traits.end(), inspected_trait ) == traits.end() ) {
+                inspected_trait = traits.empty() ? trait_id() : traits.front();
+            }
+            if( details ) {
+                if( inspected_trait.is_null() ) {
+                    ImGui::TextWrapped( "暂无可查看的特质" );
+                    return;
+                }
+                palette::title( you.mutation_name( inspected_trait ).c_str() );
+                ImGui::TextUnformatted( !inspected_trait->activated ? "被动" :
+                                        you.has_active_mutation( inspected_trait ) ? "已启用" : "未启用" );
+                cataimgui::draw_colored_text( you.mutation_desc( inspected_trait ), c_light_gray,
+                                             ImGui::GetContentRegionAvail().x );
+                if( inspected_trait->activated &&
+                    yellow_button( "打开变异操作" ) ) {
+                    remembered_page = mutations_page;
+                }
+                return;
+            }
+            for( const auto &id : traits ) {
+                const bool starting = std::find( base.begin(), base.end(), id ) != base.end();
+                ImGui::PushID( id.str().c_str() );
+                const std::string label = ( starting ? "特质 · " : "变异 · " ) + you.mutation_name( id );
+                if( detail_row( label.c_str(), inspected_trait == id ) ) {
+                    inspected_trait = id;
+                }
+                ImGui::PopID();
+            }
+            if( traits.empty() ) {
+                ImGui::TextDisabled( "暂无人物特质" );
+            }
+        }
+
+        void character_section( int page, bool details ) {
+            switch( page ) {
+                case 0:
+                    body_page( details );
+                    break;
+                case 1:
+                    character_gear( details );
+                    break;
+                case 2:
+                    attributes_page( details );
+                    break;
+                case 3:
+                    character_traits( details );
+                    break;
+            }
+        }
+
+        void health() {
+            const auto size = ImGui::GetContentRegionAvail();
+            const float gap = ImGui::GetStyle().ItemSpacing.x;
+            const float columns = size.x - gap * 2;
+            const float height = std::max( 80.f, size.y - ImGui::GetFrameHeightWithSpacing() );
+            if( ImGui::BeginChild( "人物档案", ImVec2( columns * .25f, height ), true ) ) {
+                character_profile();
             }
             ImGui::EndChild();
-            compatible( ACTION_PL_INFO, "完整人物信息（原版兼容）" );
+            ImGui::SameLine();
+            if( ImGui::BeginChild( "人物分类", ImVec2( columns * .42f, height ), true ) ) {
+                const char *tabs[] = { "身体状况", "穿戴装备", "基础属性", "人物特质" };
+                if( ImGui::GetContentRegionAvail().x < 330 * scale ) {
+                    ImGui::SetNextItemWidth( -1 );
+                    ImGui::Combo( "##人物分类", &character_page, tabs, 4 );
+                    character_section( character_page, false );
+                } else if( ImGui::BeginTabBar( "人物分类" ) ) {
+                    for( int i = 0; i < 4; ++i ) {
+                        if( ImGui::BeginTabItem( tabs[i] ) ) {
+                            character_page = i;
+                            character_section( i, false );
+                            ImGui::EndTabItem();
+                        }
+                    }
+                    ImGui::EndTabBar();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::SameLine();
+            if( ImGui::BeginChild( "人物详情", ImVec2( 0, height ), true ) ) {
+                palette::title( "详情" );
+                character_section( character_page, true );
+            }
+            ImGui::EndChild();
+            compatible( ACTION_PL_INFO, "完整人物信息（原版）" );
         }
         void ability_pages() {
+            palette::title( remembered_page == mutations_page ? "变异" :
+                            remembered_page == bionics_page ? "仿生插件" : "武术" );
             const float height = std::max( 80.f, ImGui::GetContentRegionAvail().y - 55 * scale );
             ImGui::PushID( remembered_page );
             ImGui::BeginChild( "能力操作", ImVec2( 0, height ), true );
@@ -1941,6 +2537,7 @@ class panel : public cataimgui::window
         }
 
         void more() {
+            palette::title( "更多功能" );
             const float width = ImGui::GetContentRegionAvail().x;
             const float height = std::max( 100.0f, ImGui::GetContentRegionAvail().y - 85 * scale );
             ImGui::BeginChild( "更多分类", ImVec2( width * .23f, height ), true );
@@ -2024,12 +2621,12 @@ class panel : public cataimgui::window
                 ImGui::Text( "温度：%s", hud.temperature.c_str() );
                 ImGui::Text( "任务：%s", hud.mission.c_str() );
                 ImGui::Separator();
-                ImGui::TextUnformatted( "快捷栏" );
+                palette::title( "快捷栏" );
                 for( size_t i = 0; i < hud.slots.size(); ++i ) {
                     ImGui::Text( "%d  %s", static_cast<int>( i + 1 ), hud.slots[i].c_str() );
                 }
                 ImGui::Separator();
-                ImGui::TextUnformatted( "最近消息" );
+                palette::title( "最近消息" );
                 for( const auto &message : hud.messages ) {
                     ImGui::TextWrapped( "%s", message.text.c_str() );
                 }
@@ -2078,7 +2675,7 @@ class panel : public cataimgui::window
                 bestiary = fp3d_bestiary::load_catalog();
                 bestiary_loaded = true;
             }
-            ImGui::TextUnformatted( "怪物图鉴 / 当前世界已加载的怪物" );
+            palette::title( "怪物图鉴 / 当前世界已加载的怪物" );
             ImGui::SameLine();
             ImGui::TextDisabled( "(%d 种，包含动物、机械与模组生物)", static_cast<int>( bestiary.size() ) );
             ImGui::SetNextItemWidth( std::min( 450 * scale, ImGui::GetContentRegionAvail().x ) );
@@ -2163,7 +2760,7 @@ class panel : public cataimgui::window
                                                    std::to_string( kill_stats.kill_count( entry.type->id ) );
                     draw->AddText( ImVec2( item_min.x + 6 * scale,
                                             item_min.y + 2 * scale + line_height ),
-                                   IM_COL32( 245, 70, 70, 255 ), count_text.c_str() );
+                                   palette::danger, count_text.c_str() );
                     if( ImGui::IsItemHovered() ) {
                         ImGui::SetTooltip( "%s", entry.id.c_str() );
                     }
@@ -2196,7 +2793,7 @@ class panel : public cataimgui::window
                 }
                 ImGui::BeginGroup();
                 ImGui::TextWrapped( "%s", selected->name.c_str() );
-                ImGui::TextColored( ImVec4( 245.f / 255.f, 70.f / 255.f, 70.f / 255.f, 1.f ),
+                ImGui::TextColored( palette::color( palette::danger ),
                                     "击杀数：%d", kill_stats.kill_count( mon.id ) );
                 ImGui::TextDisabled( "%s", selected->id.c_str() );
                 ImGui::Text( "分类：%s", fp3d_bestiary::category_name( selected->category ) );
@@ -2235,12 +2832,12 @@ class panel : public cataimgui::window
             ImGui::Text( "%s  %s", hud.day_time.c_str(), hud.temperature.c_str() );
             ImGui::Text( "任务目标：%s", hud.mission.c_str() );
             ImGui::Separator();
-            ImGui::TextUnformatted( "快捷栏" );
+            palette::title( "快捷栏" );
             for( size_t i = 0; i < hud.slots.size(); ++i ) {
                 ImGui::Text( "%d  %s", static_cast<int>( i + 1 ), hud.slots[i].c_str() );
             }
             ImGui::Separator();
-            ImGui::TextUnformatted( "最近消息" );
+            palette::title( "最近消息" );
             for( const auto &message : hud.messages ) {
                 ImGui::TextWrapped( "%s", message.text.c_str() );
             }
@@ -2271,105 +2868,78 @@ class panel : public cataimgui::window
             if( !action_message.empty() ) {
                 ImGui::TextColored( palette::color( palette::accent ), "%s", action_message.c_str() );
             }
-            const char *pages[] = { "背包", "人物/健康", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏", "变异", "仿生插件", "武术", "图鉴" };
-            if( pickup_target ) {
-                ImGui::TextUnformatted( "拾取物品" );
+            const char *pages[] = { "背包", "人物", "制作", "建造", "地图", "任务", "队友", "更多", "侧栏", "变异", "仿生插件", "武术", "图鉴" };
+            ImGui::SetNextItemWidth( 105 * scale );
+            ImGui::Combo( "界面缩放", &scale_choice, "100%\0" "125%\0" "150%\0" );
+            if( pickup_mode || ( !crafting_position && remembered_page == 0 ) ) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth( 95 * scale );
+                ImGui::Combo( "排序", &sort_order, "名称\0重量\0体积\0" );
             }
-            if( crafting_position ) {
-                ImGui::TextUnformatted( "简易制作" );
+            const bool inline_pickup_title = pickup_mode && size.x >= 560 * scale;
+            if( inline_pickup_title ) {
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextColored( palette::color( palette::heading ), "拾取物品" );
             }
-            for( int i = 0; !pickup_target && !crafting_position && i <= bestiary_page_index; ++i ) {
-                const float tab_width = ( i == 1 ? 110 : i == bionics_page ? 95 : 65 ) * scale;
-                if( i && ImGui::GetItemRectMax().x + tab_width + 50 * scale <
-                    ImGui::GetWindowPos().x + ImGui::GetWindowWidth() ) {
-                    ImGui::SameLine();
-                }
-                if( ImGui::Selectable( pages[i], remembered_page == i, 0, ImVec2( tab_width, 0 ) ) ) {
-                    remembered_page = i;
-                }
-            }
-            ImGui::SameLine( ImGui::GetWindowWidth() - 42 * scale );
-            if( yellow_button( "X", ImVec2( 26 * scale, 0 ) ) ) {
+            ImGui::SameLine( ImGui::GetWindowWidth() - 43 * scale );
+            if( yellow_button( "X", ImVec2( 28 * scale, 0 ) ) ) {
                 is_open = false;
             }
             ImGui::Separator();
-            ImGui::SetNextItemWidth( 125 * scale );
-            ImGui::Combo( "界面缩放", &scale_choice, "100%\0" "125%\0" "150%\0" );
-            if( pickup_target || ( !crafting_position && remembered_page == 0 ) ) {
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth( 125 * scale );
-                ImGui::Combo( "左右排序", &sort_order, "名称\0重量\0体积\0" );
+            if( pickup_mode && !inline_pickup_title ) {
+                palette::title( "拾取物品" );
             }
-            const bool narrow = size.x < 1250 * scale;
-            if( pickup_target ) {
-                const float available_height = ImGui::GetContentRegionAvail().y - 70 * scale;
-                const float gap = ImGui::GetStyle().ItemSpacing.x;
-                ImGui::BeginChild( "拾取背包", ImVec2( ( ImGui::GetContentRegionAvail().x - gap ) * .5f,
-                                                       available_height ), true );
-                ImGui::TextUnformatted( "我的物品 / 背包" );
-                groups( false );
-                ImGui::EndChild();
-                ImGui::SameLine();
-                ImGui::BeginChild( "拾取目标", ImVec2( 0, available_height ), true );
-                ImGui::TextUnformatted( "目标容器 / 地面物品" );
-                groups( true );
-                ImGui::EndChild();
+            if( crafting_position ) {
+                palette::title( "简易制作" );
+            }
+            const bool show_pages = !pickup_mode && !crafting_position;
+            const bool compact_navigation = size.x < 800 * scale;
+            if( show_pages && compact_navigation ) {
+                ImGui::SetNextItemWidth( -1 );
+                if( ImGui::BeginCombo( "##生存栏目", pages[remembered_page] ) ) {
+                    for( int i = 0; i <= bestiary_page_index; ++i ) {
+                        if( ImGui::Selectable( pages[i], remembered_page == i ) ) {
+                            remembered_page = i;
+                        }
+                        if( remembered_page == i ) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            for( int i = 0; show_pages && !compact_navigation && i <= bestiary_page_index; ++i ) {
+                const float icon_size = ImGui::GetFontSize() * .65f;
+                const std::string label = "   " + std::string( pages[i] );
+                const float tab_width = ImGui::CalcTextSize( label.c_str() ).x + 13 * scale;
+                if( i && ImGui::GetItemRectMax().x + tab_width + ImGui::GetStyle().ItemSpacing.x <
+                    ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x ) {
+                    ImGui::SameLine();
+                }
+                if( ImGui::Selectable( label.c_str(), remembered_page == i, 0,
+                                       ImVec2( tab_width, ImGui::GetFrameHeight() ) ) ) {
+                    remembered_page = i;
+                }
+                const ImVec2 min = ImGui::GetItemRectMin();
+                const ImVec2 max = ImGui::GetItemRectMax();
+                const ImVec2 center( min.x + icon_size * .74f, ( min.y + max.y ) / 2 );
+                const bool active = remembered_page == i;
+                ImDrawList *draw = ImGui::GetWindowDrawList();
+                draw->AddNgon( center, icon_size * .48f, active ? palette::accent : palette::text,
+                               4 + i % 4 );
+                if( active ) {
+                    draw->AddLine( ImVec2( min.x, max.y - 1 ), ImVec2( max.x, max.y - 1 ),
+                                   palette::accent, 2 * scale );
+                }
+            }
+            if( !inline_pickup_title ) {
+                ImGui::Separator();
+            }
+            if( pickup_mode || ( !crafting_position && remembered_page == 0 ) ) {
+                inventory_page();
             } else if( crafting_position ) {
                 crafting();
-            } else if( remembered_page == 0 ) {
-                const float available_height = ImGui::GetContentRegionAvail().y - 70 * scale;
-                ImGui::BeginChild( "分类", ImVec2( 58 * scale, available_height ), true );
-                for( int i = 0; i < 4; ++i ) {
-                    if( ImGui::Selectable( ( i == 0 ? "装备" : i == 1 ? "衣物" : i == 2 ? "身体" : "更多" ),
-                                           side_page == i ) ) {
-                        side_page = i;
-                    }
-                }
-                ImGui::EndChild();
-                ImGui::SameLine();
-                const float body_width = ImGui::GetContentRegionAvail().x;
-                ImGui::BeginChild( "装备", ImVec2( body_width * ( narrow ? .34f : .28f ), available_height ),
-                                   true );
-                if( side_page == 2 ) {
-                    for( const auto &part : you.get_all_body_parts() ) {
-                        const int maximum = you.get_part_hp_max( part );
-                        if( maximum <= 0 ) {
-                            continue;
-                        }
-                        ImGui::Text( "%s %s", body_part_name( part ).c_str(),
-                                     fp3d_hud::health_text( you, part ).c_str() );
-                    }
-                } else if( side_page == 3 ) {
-                    compatible( ACTION_ADVANCEDINV, "原版高级物品管理" );
-                    compatible( ACTION_INVENTORY, "原版背包" );
-                    compatible( ACTION_KEYBINDINGS, "操作设置" );
-                } else {
-                    gear();
-                }
-                ImGui::EndChild();
-                ImGui::SameLine();
-                const float column_width = narrow ? ImGui::GetContentRegionAvail().x :
-                                           ImGui::GetContentRegionAvail().x * .5f - 4;
-                ImGui::BeginChild( "我的物品", ImVec2( column_width, available_height ), true );
-                if( narrow ) {
-                    ImGui::RadioButton( "我的物品", &small_tab, 1 );
-                    ImGui::SameLine();
-                    ImGui::RadioButton( "附近物品", &small_tab, 2 );
-                    groups( small_tab == 2 );
-                } else {
-                    ImGui::TextUnformatted( "我的物品 / 真实口袋" );
-                    groups( false );
-                }
-                ImGui::EndChild();
-                if( !narrow ) {
-                    ImGui::SameLine();
-                    ImGui::BeginChild( "附近物品", ImVec2( 0, available_height ), true );
-                    ImGui::TextUnformatted( "附近 / 同层可见且可触及" );
-                    groups( true );
-                    ImGui::EndChild();
-                }
-                yellow_button( "拖到这里放到脚下", ImVec2( 0, 0 ) );
-                target( fp3d_inventory::operation_kind::drop );
             } else if( remembered_page == 1 ) {
                 health();
             } else if( remembered_page == 3 ) {
@@ -2432,6 +3002,7 @@ class panel : public cataimgui::window
                                       ImGuiCond_Appearing );
             if( ImGui::BeginPopupModal( "物品详情", &details_open ) ) {
                 ImGui::BeginChild( "属性", ImVec2( 0, -40 * scale ) );
+                set_inventory_font_scale();
                 ImGui::TextWrapped( "%s", details_text.c_str() );
                 ImGui::EndChild();
                 if( yellow_button( "返回" ) || !details_open ) {
@@ -2440,13 +3011,11 @@ class panel : public cataimgui::window
                 }
                 ImGui::EndPopup();
             }
-            ImGui::PushTextWrapPos( 0 );
-            ImGui::TextDisabled( "%s", crafting_position ?
-                                 "选择配方，查看材料与工具，设置批量后点击制作；Esc 或 Tab 返回。" :
-                                 pickup_target || remembered_page == 0 ?
-                                 "左键选择 / 双击详情 / Shift 多选 / 右键操作 / 拖拽 / Esc 或 Tab 返回；转移按原版耗时处理，完成后刷新。" :
-                                 "滚动查看 / Esc 或 Tab 返回；查看不消耗回合，实际操作按原版规则结算。" );
-            ImGui::PopTextWrapPos();
+            if( pickup_mode || ( !crafting_position && remembered_page == 0 ) ) {
+                ImGui::TextWrapped( "%s", pickup_mode ?
+                                    "左键按住框选 · 从已选物品拖放 · Shift 多选 · 右键操作 · Esc 或 Tab 返回" :
+                                    "左键按住框选 · 从已选物品拖放 · 双击详情 · Shift 多选 · 右键操作 · Esc 或 Tab 返回" );
+            }
         }
     public:
         void draw() override {
@@ -2454,27 +3023,49 @@ class panel : public cataimgui::window
                 return;
             }
             ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-            if( background && fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
+            const bool live_pickup_background = pickup_mode ||
+                                                ( !crafting_position && remembered_page == 0 && pickup_source_index != 0 );
+            if( background && !live_pickup_background &&
+                fp3d_compositor::controls() == fp3d_input::mode::first_person_3d ) {
                 ImGui::GetBackgroundDrawList()->AddImage( ( ImTextureID )( intptr_t )background.get(),
                         ImVec2( 0, 0 ), ImGui::GetIO().DisplaySize, ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
             }
             // The native 2D buffer is retained between UI frames. An opaque panel
             // prevents old page contents accumulating under translucent children.
-            const palette::scoped_theme theme( fp3d_compositor::view_3d() ? .95f : 1.f );
+            const bool translucent = fp3d_compositor::view_3d();
+            const palette::scoped_theme theme( translucent ? .78f : 1.f );
+            auto child_background = palette::color( palette::panel );
+            child_background.w = translucent ? .60f : 1.f;
+            ImGui::PushStyleColor( ImGuiCol_ChildBg, child_background );
+            const float ui_scale = 1 + scale_choice * .25f;
             ImGui::PushStyleVar( ImGuiStyleVar_DisabledAlpha, .75f );
+            ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 14 * ui_scale, 12 * ui_scale ) );
+            ImGui::PushStyleVar( ImGuiStyleVar_FramePadding, ImVec2( 7 * ui_scale, 5 * ui_scale ) );
+            ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 8 * ui_scale, 6 * ui_scale ) );
+            ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, 3.f );
+            ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 4.f );
+            ImGui::PushStyleVar( ImGuiStyleVar_ScrollbarRounding, 3.f );
             ImGui::BeginDisabled( activity_pending || native_prompt_open );
             cataimgui::window::draw();
             ImGui::EndDisabled();
-            ImGui::PopStyleVar();
+            ImGui::PopStyleVar( 7 );
+            ImGui::PopStyleColor();
         }
         void refresh_character() {
+            const scoped_rng_restore preserve;
+            portrait_checked = false;
             needs.clear();
             effects.clear();
             skills.clear();
             const auto add_need = [&]( const char *label, const std::pair<std::string, nc_color> &value ) {
                 needs.emplace_back( label, value.first.empty() ? "—" : remove_color_tags( value.first ) );
             };
-            add_need( "饥饿", display::hunger_text_color( you ) );
+            const auto hunger = display::hunger_text_color( you );
+            if( hunger.first == _( "ERROR!" ) ) {
+                needs.emplace_back( "饥饿", std::to_string( you.get_hunger() ) );
+            } else {
+                add_need( "饥饿", hunger );
+            }
             add_need( "口渴", display::thirst_text_color( you ) );
             add_need( "困倦", display::sleepiness_text_color( you ) );
             add_need( "疼痛", display::pain_text_color( you ) );
@@ -2505,33 +3096,21 @@ class panel : public cataimgui::window
             you.invalidate_crafting_inventory();
             recipes_loaded = false;
             projects_loaded = false;
-            view = fp3d_inventory::capture( you, here, pickup_target );
-            for( const auto &entry : view.entries ) {
-                if( !entry.location ) {
-                    continue;
-                }
-                fp3d_snapshot::sprite image;
-                image.kind = fp3d_snapshot::sprite_kind::held_item;
-                image.id = entry.location->typeId().str();
-                if( entry.location->has_itype_variant() ) {
-                    image.variant = entry.location->itype_variant().id;
-                }
-                const auto key = image.id + image.variant;
-                if( !icons.count( key ) ) {
-                    icons.emplace( key, fp3d_materials::item_icon( image ) );
-                }
-            }
+            view = fp3d_inventory::capture( you, here, pickup_target, true );
+            refresh_pickup_sources();
         }
         panel( avatar &player, map &current_map, bool nearby,
                int initial_page, item_location initial_use = {},
                std::optional<tripoint_abs_ms> pickup_position = std::nullopt ) : cataimgui::window( "生存面板",
                            ImGuiWindowFlags_NoTitleBar ),
-            you( player ), here( current_map ), view( fp3d_inventory::capture( player, current_map, pickup_position ) ),
-            pickup_target( pickup_position ),
+            you( player ), here( current_map ),
+            view( fp3d_inventory::capture( player, current_map, pickup_position, true ) ),
+            pickup_target( pickup_position ), pickup_mode( nearby || pickup_position.has_value() ),
             background( fp3d_compositor::copy_view() ) {
             // Keep ImGui popup windows above their parent panel.
             force_to_back = true;
             use_default_theme = false;
+            window_flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
             if( initial_use ) {
                 use_item = initial_use;
                 item_uses = fp3d_inventory::use_options( use_item, you, here );
@@ -2541,27 +3120,18 @@ class panel : public cataimgui::window
                 remembered_page = std::clamp( initial_page, 0, bestiary_page_index );
             }
             refresh_character();
+            refresh_pickup_sources();
             if( nearby ) {
                 remembered_page = 0;
-                small_tab = 2;
             }
-            for( const auto &entry : view.entries ) {
-                if( !entry.location ) {
-                    continue;
-                }
-                fp3d_snapshot::sprite image;
-                image.kind = fp3d_snapshot::sprite_kind::held_item;
-                image.id = entry.location->typeId().str();
-                if( entry.location->has_itype_variant() ) {
-                    image.variant = entry.location->itype_variant().id;
-                }
-                const auto key = image.id + image.variant;
-                if( !icons.count( key ) ) {
-                    icons.emplace( key, fp3d_materials::item_icon( image ) );
-                }
+            if( nearby || pickup_target ) {
+                small_tab = 2;
             }
         }
         bool waiting() const { return activity_pending; }
+        ~panel() override {
+            fp3d_compositor::set_pickup_highlight( std::nullopt );
+        }
         void set_crafting_position( std::optional<tripoint_abs_ms> position ) {
             crafting_position = position;
         }
@@ -2645,7 +3215,7 @@ class panel : public cataimgui::window
                         if( result->kind == fp3d_inventory::operation_kind::follower_order ) {
                             journal_loaded = false;
                         }
-                        action_message.clear();
+                        action_message = std::move( error );
                         selected.clear();
                         activity_pending = static_cast<bool>( you.activity ) || you.get_moves() <= 0;
                         if( activity_pending ) {

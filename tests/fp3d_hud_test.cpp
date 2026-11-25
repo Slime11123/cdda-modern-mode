@@ -142,6 +142,102 @@ TEST_CASE( "fp3d_hud_inspects_only_the_currently_visible_target", "[fp3d][hud]" 
     CHECK( fp3d_hud::inspect( you, here, road ).empty() );
 }
 
+TEST_CASE( "fp3d_hud_describes_the_visible_creature_under_the_pointer", "[fp3d][hud]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto near = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( near, ter_str_id( "t_floor" ) );
+    monster &zed = spawn_test_monster( "mon_zombie", near );
+    here.build_map_cache( 0 );
+    here.update_visibility_cache( 0 );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE( you.sees( here, zed ) );
+
+    const fp3d_targeting::target creature{ you.pos_abs(), here.get_abs( near ),
+                                          fp3d_targeting::kind::creature, "mon_zombie" };
+    const auto lines = fp3d_hud::inspect( you, here, creature );
+    REQUIRE( !lines.empty() );
+    const auto index_of = [&]( const std::string &text ) {
+        const auto found = std::find_if( lines.begin(), lines.end(), [&]( const auto & line ) {
+            return line.text == text;
+        } );
+        return found == lines.end() ? -1 : static_cast<int>( found - lines.begin() );
+    };
+    // The creature is the primary subject: its native name, wound bar and
+    // attitude come before any terrain or furniture description.
+    const int name = index_of( zed.disp_name() );
+    REQUIRE( name >= 0 );
+    CHECK( name <= 2 );
+    nc_color bar_color = c_white;
+    std::string bar_text;
+    zed.get_HP_Bar( bar_color, bar_text );
+    CHECK( index_of( bar_text ) > name );
+    CHECK( index_of( zed.get_attitude().first ) > name );
+    CHECK( index_of( uppercase_first_letter( here.tername( near ) ) ) > name );
+}
+
+TEST_CASE( "fp3d_reticle_on_a_monster_describes_that_monster", "[fp3d][hud][integration]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( p, ter_str_id( "t_pavement" ) );
+    monster &zed = spawn_test_monster( "mon_zombie", p );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    REQUIRE( std::any_of( scene.sprites.begin(), scene.sprites.end(),
+    []( const auto & image ) {
+        return image.kind == fp3d_snapshot::sprite_kind::monster;
+    } ) );
+    // Same chain the 3D HUD uses: snapshot ray -> inspect -> panel lines.
+    for( const int pitch : { 0, 10, 20, 30, 45 } ) {
+        CAPTURE( pitch );
+        const auto target = fp3d_targeting::ray( scene, 0, pitch );
+        REQUIRE( target );
+        INFO( "type=" << static_cast<int>( target->type ) << " id=" << target->id );
+        const auto lines = fp3d_hud::inspect( you, here, *target );
+        REQUIRE( !lines.empty() );
+        const bool named = std::any_of( lines.begin(), lines.end(), [&]( const auto & line ) {
+            return line.text == zed.disp_name();
+        } );
+        CHECK( named );
+    }
+}
+
+TEST_CASE( "fp3d_hud_names_the_monster_even_when_the_pick_landed_on_its_tile",
+           "[fp3d][hud][integration]" )
+{
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( p, ter_str_id( "t_pavement" ) );
+    monster &zed = spawn_test_monster( "mon_zombie", p );
+    fp3d_snapshot::prepare_view( you, here );
+    // The pointer may resolve the tile instead of the actor (steep angle, low
+    // furniture behind, stale ray). The visible actor standing there must still
+    // be described first - this is the reported regression.
+    const fp3d_targeting::target tile{ you.pos_abs(), here.get_abs( p ),
+                                       fp3d_targeting::kind::terrain,
+                                       here.ter( p ).id().str() };
+    const auto lines = fp3d_hud::inspect( you, here, tile );
+    REQUIRE( !lines.empty() );
+    REQUIRE( lines.size() >= 2 );
+    CHECK( lines[1].text == zed.disp_name() );
+}
+
 TEST_CASE( "fp3d_hud_body_health_keeps_limbs_independent_and_native_colors", "[fp3d][hud]" )
 {
     clear_avatar();

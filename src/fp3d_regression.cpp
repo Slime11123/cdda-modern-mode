@@ -562,7 +562,8 @@ void presented( SDL_Renderer *renderer )
                     "resident_instance_upload_bytes,command_upload_bytes,upload_copies,resident_buffer_capacity,"
                     "resident_instance_capacity,frame_slot_buffer_capacity,"
                     "instances,indirect_commands,pbr_upload_bytes,compute_batches,compute_upload_bytes,"
-                    "compute_input_reused,compute_dispatch_reused,occlusion_candidates\n";
+                    "compute_input_reused,compute_dispatch_reused,occlusion_candidates,"
+                    "resident_page_upload_bytes,resident_instance_merged_gap_bytes,resident_packed_instances\n";
             for( const auto &entry : state.gpu_buffers ) {
                 const auto &data = entry.data;
                 buffers << entry.action << ',' << entry.frame << ',' << data.resident_upload_bytes << ','
@@ -574,7 +575,9 @@ void presented( SDL_Renderer *renderer )
                         << data.instances << ',' << data.indirect_commands << ','
                         << data.pbr_upload_bytes << ',' << data.compute_batches << ','
                         << data.compute_upload_bytes << ',' << data.compute_input_reused << ','
-                        << data.compute_dispatch_reused << ',' << data.occlusion_candidates << '\n';
+                        << data.compute_dispatch_reused << ',' << data.occlusion_candidates << ','
+                        << data.resident_page_upload_bytes << ',' << data.resident_instance_merged_gap_bytes << ','
+                        << data.resident_packed_instances << '\n';
             }
         }
         DebugLog( D_INFO, D_MAIN ) << "fp3d: FRAME_SELFTEST raw_report=" << path

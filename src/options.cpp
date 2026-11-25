@@ -2126,6 +2126,14 @@ void options_manager::add_options_interface()
                  to_translation( "相对默认大小缩放，25%～200%，每档 25%。也可在 F5 模式设置的现代 UI 大小中拖动调整或恢复默认。" ),
                  hud_sizes, 100, 100 );
         }
+        // 3D 精灵大小只改变镜头前的显示尺寸，以脚底为锚点：地图坐标、碰撞体积、
+        // 移动速度、交互范围与 2D 视角比例全部保持原版数值。
+        add( "FP3D_MONSTER_SCALE", page_id, to_translation( "3D 怪物大小 (%)" ),
+             to_translation( "3D 视角中怪物贴图的显示比例，50%～130%，默认 80%。以脚底为缩放锚点，不影响怪物在地图上的实际位置与碰撞。也可在 F5 模式设置中拖动调整。" ),
+             50, 130, 80 );
+        add( "FP3D_NPC_SCALE", page_id, to_translation( "3D NPC 大小 (%)" ),
+             to_translation( "3D 视角中 NPC 及其他人形角色贴图的显示比例，50%～130%，默认 80%。与怪物大小分开调整，以脚底为缩放锚点，不影响实际游戏规则。" ),
+             50, 130, 80 );
 #endif
         add( "SIDEBAR_POSITION", page_id, to_translation( "Sidebar position" ),
              to_translation( "Switch between sidebar on the left or on the right side.  Requires restart." ),
@@ -4151,7 +4159,9 @@ void options_manager::deserialize( const JsonArray &ja )
         // yay hardcoded list! remove after 0.J
         std::vector<std::string> removed_options = { "DISTANCE_INITIAL_VISIBILITY", "FOV_3D_Z_RANGE",
                                                      "INITIAL_STAT_POINTS", "INITIAL_TRAIT_POINTS", "INITIAL_SKILL_POINTS", "MAX_TRAIT_POINTS",
-                                                     "SKILL_TRAINING_SPEED", "PROFICIENCY_TRAINING_SPEED"
+                                                     "SKILL_TRAINING_SPEED", "PROFICIENCY_TRAINING_SPEED",
+                                                     // 已撤回的现代 UI 全局缩放设置，避免旧 options.json 留下幽灵条目。
+                                                     "FP3D_UI_SCALE_AUTO", "FP3D_UI_SCALE_PERCENT"
                                                    };
 
         const std::string name = migrateOptionName( joOptions.get_string( "name" ) );

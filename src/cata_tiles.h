@@ -26,6 +26,7 @@
 #include "pimpl.h"
 #include "point.h"
 #include "sdl_geometry.h"
+#include "sprite_alpha_mask.h"
 #include "sdl_wrappers.h"
 #include "type_id.h"
 #include "units.h"
@@ -130,11 +131,20 @@ class texture
     private:
         std::shared_ptr<SDL_Texture> sdl_texture_ptr;
         SDL_Rect srcrect = { 0, 0, 0, 0 };
+        std::shared_ptr<const sprite_alpha_mask> alpha;
 
     public:
         texture( std::shared_ptr<SDL_Texture> ptr,
                  const SDL_Rect &rect ) : sdl_texture_ptr( std::move( ptr ) ),
             srcrect( rect ) { }
+        void set_alpha( std::shared_ptr<const sprite_alpha_mask> mask ) { alpha = std::move( mask ); }
+        bool opaque( float u, float v ) const {
+            return u >= 0 && v >= 0 && u < 1 && v < 1 &&
+                   ( !alpha || alpha->opaque( srcrect.x + u * srcrect.w, srcrect.y + v * srcrect.h ) );
+        }
+        template<typename F> void alpha_edges( const F &emit ) const {
+            if( alpha ) { alpha->edges( srcrect.x, srcrect.y, srcrect.w, srcrect.h, emit ); }
+        }
         texture() = default;
 
         /// Returns the width (first) and height (second) of the stored texture.
@@ -434,6 +444,10 @@ class cata_tiles
         friend class cata_tiles_test_helper;
 
     public:
+#if defined(ENABLE_FP3D)
+        std::optional<tripoint_abs_ms> monster_at_pixel( const point &pixel ) const;
+        bool update_monster_hover( const point &pixel );
+#endif
         cata_tiles( const SDL_Renderer_Ptr &render, const GeometryRenderer_Ptr &geometry,
                     tileset_cache &cache );
         ~cata_tiles();
@@ -465,7 +479,7 @@ class cata_tiles
 
 
         /** Draw a live paper-doll using the currently loaded player sprite and appearance overlays. */
-        void draw_character_preview( const Character &ch, const SDL_Rect &bounds,
+        bool draw_character_preview( const Character &ch, const SDL_Rect &bounds,
                                      const std::vector<std::pair<std::string, std::string>> &gear );
 
     protected:
@@ -841,6 +855,22 @@ class cata_tiles
         bool do_draw_line = false;
         bool do_draw_cursor = false;
         bool collecting_3d_overlays = false;
+#if defined(ENABLE_FP3D)
+        struct monster_sprite_hit {
+            tripoint_abs_ms position;
+            const monster *identity;
+            texture art;
+            SDL_Rect rect;
+            double angle;
+            SDL_FlipMode flip;
+            std::pair<float, float> source_point( const point &pixel ) const;
+        };
+        const monster *drawing_monster = nullptr;
+        std::vector<monster_sprite_hit> monster_sprites;
+        SDL_Rect monster_viewport{};
+        std::optional<tripoint_abs_ms> last_monster_hover;
+        void draw_monster_hover();
+#endif
         bool do_draw_highlight = false;
         bool do_draw_weather = false;
         bool do_draw_sct = false;

@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include "fp3d_camera.h"
+#include "fp3d_materials.h"
 #include "fp3d_snapshot.h"
 #include "fp3d_ramp.h"
 #include "fp3d_scene.h"
@@ -71,7 +72,7 @@ std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
 
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                            fp3d_camera::offset offset, float max_reach,
-                           float screen_x, float screen_y, float aspect )
+                           float screen_x, float screen_y, float aspect, bool camera_facing_sprites )
 {
     if( !std::isfinite( yaw ) || !std::isfinite( pitch ) ||
         !std::isfinite( offset.x ) || !std::isfinite( offset.y ) ||
@@ -113,6 +114,9 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     direction[2] /= length;
     float nearest = reach + .001f;
     float nearest_opaque = nearest;
+    // Tile of the nearest opaque surface. A visible actor is not hidden by the
+    // floor, the ceiling or the low furniture of the tile it stands on.
+    tripoint_abs_ms nearest_opaque_position = tripoint_abs_ms::zero;
     std::vector<std::pair<tripoint_abs_ms, float>> storage_hits;
     std::optional<target> result;
     std::vector<const fp3d_snapshot::cell *> local;
@@ -128,6 +132,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     const float low_z = std::min( eye[2], far[2] ) - fp3d_camera::floor_height;
     const float high_z = std::max( eye[2], far[2] ) + fp3d_camera::floor_height;
     for( const auto &tile : scene.cells ) {
+        if( fp3d_snapshot::hidden_by_cutaway( scene, tile ) ) { continue; }
         const auto p = tile.position - scene.origin;
         const float height = p.z() * fp3d_camera::floor_height;
         if( p.x() >= low_x && p.x() <= high_x && p.y() >= low_y && p.y() <= high_y &&
@@ -138,6 +143,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     std::unordered_map<tripoint_abs_ms, const fp3d_snapshot::cell *> indexed;
     indexed.reserve( scene.cells.size() );
     for( const auto &tile : scene.cells ) {
+        if( fp3d_snapshot::hidden_by_cutaway( scene, tile ) ) { continue; }
         indexed.emplace( tile.position, &tile );
     }
     const auto cell_at = [&]( const tripoint_abs_ms & p ) -> const fp3d_snapshot::cell * {
@@ -181,8 +187,9 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             if( visible && ( type == kind::furniture || type == kind::appliance ) &&
                 fp3d_furniture::shows_contents( tile->furniture->shape ) ) {
                 storage_hits.emplace_back( tile->position, *hit );
-            } else {
-                nearest_opaque = std::min( nearest_opaque, *hit );
+            } else if( *hit < nearest_opaque ) {
+                nearest_opaque = *hit;
+                nearest_opaque_position = tile->position;
             }
             if( *hit < nearest ) {
                 nearest = *hit;
@@ -491,7 +498,10 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             nearest = *hit;
             // The same selected car panel also occludes item/sprite picking;
             // otherwise items behind a solid door could replace this hit.
-            nearest_opaque = std::min( nearest_opaque, *hit );
+            if( nearest < nearest_opaque ) {
+                nearest_opaque = nearest;
+                nearest_opaque_position = part.native_position;
+            }
             result = target{ scene.origin, part.native_position, kind::vehicle, part.id,
                              outline, part.index, car.origin, part.mount_x, part.mount_y };
         }
@@ -545,31 +555,49 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         // The sprite quad is upright and camera-facing. Intersect the (possibly
         // off-centre) ray with its own vertical plane, then compare in the
         // camera's own screen axes so the overhead pointer stays exact.
-        const vector3 normal{ -forward[0], -forward[1], 0 };
-        const float denominator = direction[0] * normal[0] + direction[1] * normal[1];
-        if( std::abs( denominator ) < .000001f ) {
-            continue;
-        }
-        const float distance = ( ( p.x() - eye[0] ) * normal[0] +
-                                 ( p.y() - eye[1] ) * normal[1] ) / denominator;
-        const float hit_x = eye[0] + distance * direction[0];
-        const float hit_y = eye[1] + distance * direction[1];
-        const float side = cy * ( hit_x - p.x() ) + sy * ( hit_y - p.y() );
-        const float height = eye[2] + distance * direction[2] -
-                             p.z() * fp3d_camera::floor_height - image.elevation;
+        const vector3 right{ cy, sy, 0 };
+        const vector3 up = camera_facing_sprites ? vector3{ sp * sy, -sp * cy, cp } : vector3{ 0, 0, 1 };
+        const vector3 normal{ right[1] * up[2], -right[0] * up[2], right[0] * up[1] - right[1] * up[0] };
+        const float denominator = direction[0] * normal[0] + direction[1] * normal[1] + direction[2] * normal[2];
+        if( std::abs( denominator ) < .000001f ) { continue; }
+        const vector3 base{ static_cast<float>( p.x() ), static_cast<float>( p.y() ),
+                            p.z() * fp3d_camera::floor_height + image.elevation + .04f };
+        const float distance = ( ( base[0] - eye[0] ) * normal[0] +
+                                 ( base[1] - eye[1] ) * normal[1] + ( base[2] - eye[2] ) * normal[2] ) / denominator;
+        const vector3 hit{ eye[0] + distance * direction[0] - base[0],
+                           eye[1] + distance * direction[1] - base[1],
+                           eye[2] + distance * direction[2] - base[2] };
+        const float side = hit[0] * right[0] + hit[1] * right[1];
+        const float rise = hit[0] * up[0] + hit[1] * up[1] + hit[2] * up[2];
+        const float height = image.height * image.display_scale;
+        const float top = height - .04f;
         if( distance < fp3d_camera::near_clip || distance > reach || distance >= nearest_sprite ||
-            std::abs( side ) > image.height / 2 || height < .04f || height > image.height ) {
-            continue;
+            height <= .04f || std::abs( side ) > height / 2 || rise < 0 || rise > top ) { continue; }
+        if( const auto *alpha = fp3d_materials::sprite_alpha( image, SDL_GetTicks() ) ) {
+            float u = side / height + .5f;
+            if( image.mirrored ) { u = 1.f - u; }
+            const float v = 1.f - rise / top;
+            if( !alpha->opaque( std::min( alpha->width - 1, static_cast<int>( u * alpha->width ) ),
+                                std::min( alpha->height - 1, static_cast<int>( v * alpha->height ) ) ) ) { continue; }
         }
         const bool item = image.kind == fp3d_snapshot::sprite_kind::item;
-        if( distance >= nearest ) {
-            const bool blocked = !item || distance >= nearest_opaque ||
-            std::any_of( storage_hits.begin(), storage_hits.end(), [&]( const auto &hit ) {
-                return hit.first != image.position && hit.second <= distance;
-            } );
-            if( blocked ) {
-                continue;
-            }
+        // Hover priority: a visible creature or NPC outranks the surfaces of
+        // the tile it stands on, because the pointer rests exactly there when
+        // you look at it - its own floor, its own ceiling and the low furniture
+        // it shares the tile with can never hide it. Anything genuinely in
+        // front still blocks: walls, doors, windows, closed vehicles, terrain
+        // on another tile, and storage cabinets, which keep hiding whoever is
+        // inside them. Items keep their original surface rule unchanged.
+        const bool storage_blocks = std::any_of( storage_hits.begin(), storage_hits.end(),
+        [&]( const auto &hit ) {
+            return hit.second <= distance && ( !item || hit.first != image.position );
+        } );
+        const bool opaque_blocks = item ?
+                                   distance >= nearest_opaque :
+                                   ( distance >= nearest_opaque &&
+                                     nearest_opaque_position != image.position );
+        if( opaque_blocks || storage_blocks ) {
+            continue;
         }
         nearest_sprite = distance;
         result = target{ scene.origin, image.position, item ? kind::item : kind::creature, image.id };

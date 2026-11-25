@@ -231,6 +231,14 @@ TEST_CASE( "fp3d_hotbar_and_modifier_commands_are_independent", "[fp3d][input]" 
     CHECK_FALSE( input.expanded_hud() );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
                                 input_event( '1', input_event_t::keyboard_code ), 0 ) == "FP3D_SLOT_1" );
+    // A lone Shift press resolves to the native run toggle in the 3D profile.
+    // The compositor feeds such modifier presses to the gesture queue itself,
+    // because the SDL bridge drops them before they reach the dispatcher.
+    CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
+                                input_event( SDLK_LSHIFT, input_event_t::keyboard_code ), 0 ) ==
+           action_ident( ACTION_TOGGLE_RUN ) );
+    CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
+                                input_event( SDLK_LALT, input_event_t::keyboard_code ), 0 ).empty() );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,
                                 input_event( MouseInput::ScrollWheelUp, input_event_t::mouse ), 0 ) == "FP3D_SLOT_PREV" );
     CHECK( fp3d_input::resolve( fp3d_input::mode::first_person_3d,

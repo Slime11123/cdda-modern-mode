@@ -5,6 +5,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <vector>
 #include "coordinates.h"
 #include "fp3d_camera.h"
 namespace fp3d_snapshot
@@ -18,6 +19,9 @@ struct edge_outline {
     // Vertices in renderer order (east, height, south), relative to the scene origin.
     std::array<std::array<float, 3>, 4> corners;
     float height = 0;
+    std::array<float, 4> color{ 1.f, 1.f, 1.f, 1.f };
+    // Optional alpha silhouette instead of the four bounding edges.
+    std::vector<std::array<std::array<float, 3>, 2>> segments;
 };
 struct target {
     tripoint_abs_ms origin;
@@ -41,7 +45,8 @@ struct target {
 // is the world viewport's width/height, the same one the projection uses.
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                            fp3d_camera::offset offset = {}, float max_reach = 6.0f,
-                           float screen_x = 0.0f, float screen_y = 0.0f, float aspect = 1.0f );
+                           float screen_x = 0.0f, float screen_y = 0.0f, float aspect = 1.0f,
+                           bool camera_facing_sprites = false );
 
 // First stage: one neighbouring tile in the camera direction, same storey.
 // Looking down selects the player's feet. Memory and facades are excluded.

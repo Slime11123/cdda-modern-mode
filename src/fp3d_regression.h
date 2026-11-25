@@ -68,6 +68,9 @@ struct gpu_buffer_frame {
     bool compute_input_reused = false;
     bool compute_dispatch_reused = false;
     unsigned occlusion_candidates = 0;
+    unsigned resident_page_upload_bytes = 0;
+    unsigned resident_instance_merged_gap_bytes = 0;
+    unsigned resident_packed_instances = 0;
 };
 bool sampling_gpu_buffers();
 void sample_gpu_buffers( const gpu_buffer_frame &frame );

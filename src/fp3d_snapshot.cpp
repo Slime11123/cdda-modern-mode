@@ -41,6 +41,7 @@
 #include "monster.h"
 #include "mtype.h"
 #include "mutation.h"
+#include "options.h"
 #include "submap.h"
 #include "type_id.h"
 #include "veh_type.h"
@@ -531,6 +532,25 @@ terrain_kind classify( const std::string &id )
     return definition.movecost == 0 ? terrain_kind::obstacle : terrain_kind::floor;
 }
 
+// Presentation-only actor scale from the F5 3D settings (50..130 %, default
+// 80 %). Only the world-space billboard height changes, and the quad grows
+// upwards from the actor's own feet, so ground contact, the tile centre, the
+// equipment/status overlay alignment and the native 2D tile size all stay as
+// they are. Map position, collision volume, speed, reach and game rules are
+// never read or written here.
+float actor_scale( bool character )
+{
+    const char *option = character ? "FP3D_NPC_SCALE" : "FP3D_MONSTER_SCALE";
+    if( !has_option( option ) ) {
+        return .8f;
+    }
+    const int percent = get_option<int>( option );
+    if( percent < 50 || percent > 130 ) {
+        return .8f;
+    }
+    return static_cast<float>( percent ) / 100.f;
+}
+
 sprite describe_creature( const Creature &critter, const avatar &you, const map &here )
 {
     sprite image;
@@ -660,6 +680,10 @@ sprite describe_creature( const Creature &critter, const avatar &you, const map 
     }
     // Use the same native-size baseline as the avatar (medium = 1.8m).
     // The former extra 20% scale made zombies and NPCs dwarf the player.
+    // The 3D settings then shrink the drawn billboard only (default 80%):
+    // height stays native so picking and reach never change with a display
+    // preference.
+    image.display_scale = actor_scale( image.kind == sprite_kind::character );
     return image;
 }
 
@@ -698,9 +722,32 @@ bool exposed_surface( const avatar &you, const map &here, const tripoint_bub_ms 
            ( beside_visible_air && here.sees( player, p, sight_range ) );
 }
 
-void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
-                      const tripoint_bub_ms &p, const Creature *critter )
+static bool native_tile_visible( const avatar &you, const map &here, const tripoint_bub_ms &p )
 {
+    if( !you.sees( here, p ) ) {
+        return false;
+    }
+    const auto &visibility = here.get_visibility_variables_cache();
+    return here.get_visibility( here.apparent_light_at( p, visibility ), visibility ) ==
+           visibility_type::CLEAR;
+}
+
+void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
+                      const tripoint_bub_ms &p, const Creature *critter, bool strict_visibility )
+{
+    const auto tile = here.maptile_at( p );
+    // Native light visibility computes the avatar's vision threshold (including
+    // equipment and limb scores). Empty geometry must not pay that cost on
+    // every step. Keep the exact check for every candidate entity/field/item.
+    if( !critter && tile.get_item_count() == 0 && tile.get_field().field_count() == 0 ) {
+        return;
+    }
+    if( strict_visibility ) {
+        ++scene.entity_visibility_checks;
+        if( !native_tile_visible( you, here, p ) ) {
+            return;
+        }
+    }
     // Clear terrain visibility is necessary, but not sufficient for a creature.
     // Keep native concealment checks, but ignore lighting for 3D presentation.
     if( critter && !critter->is_avatar() && you.Creature::sees( here, *critter, true ) ) {
@@ -709,7 +756,6 @@ void capture_sprites( scene_snapshot &scene, const avatar &you, const map &here,
             scene.sprites.push_back( std::move( image ) );
         }
     }
-    const auto tile = here.maptile_at( p );
     for( const auto &entry : tile.get_field() ) {
         const std::string &id = entry.first.id().str();
         const bool smoke = id == "fd_smoke";
@@ -1114,14 +1160,110 @@ class memorized_reader
         bool resolved_ = false;
 };
 
+bool update_pointer_room( scene_snapshot &scene, const avatar &you, const map &here,
+                          std::optional<tripoint_abs_ms> target )
+{
+    std::optional<cutaway_room> selected;
+    const auto seed = target ? here.get_bub( *target ) : tripoint_bub_ms::zero;
+    // Static building structure is already in the live camera snapshot. Native
+    // visibility gates contents, not whether its roof can be lifted from above.
+    if( scene.camera_cutaway && target && !you.is_blind() && scene.origin == you.pos_abs() &&
+        seed.z() == scene.origin.z() && here.inbounds( seed ) && !here.is_outside( seed ) ) {
+        constexpr int reach = 8;
+        constexpr int width = reach * 2 + 1;
+        const auto topology_at = [&]( const tripoint_bub_ms &p ) -> unsigned char {
+            if( !here.inbounds( p ) ) { return 0; }
+            const auto &ter = here.ter( p ).obj();
+            const auto kind = classify( here.ter( p ).id().str() );
+            if( ter.has_flag( ter_furn_flag::TFLAG_WALL ) ||
+                ter.has_flag( ter_furn_flag::TFLAG_DOOR ) ||
+                kind == terrain_kind::window || kind == terrain_kind::closed_door ||
+                kind == terrain_kind::open_door || kind == terrain_kind::damaged_door ) {
+                return 2; // Boundary included, but doors/windows never connect rooms.
+            }
+            // Furniture must not divide a room or hide the floor under it.
+            return !here.is_outside( p ) && ter.movecost > 0 && here.has_floor( p ) ? 1 : 0;
+        };
+        const auto sample = [&]( const tripoint_abs_ms &anchor ) {
+            std::vector<unsigned char> topology;
+            topology.reserve( width * width );
+            const auto center = here.get_bub( anchor );
+            for( int dy = -reach; dy <= reach; ++dy ) {
+                for( int dx = -reach; dx <= reach; ++dx ) {
+                    topology.push_back( topology_at( center + tripoint_rel_ms( dx, dy, 0 ) ) );
+                }
+            }
+            return topology;
+        };
+        const auto *cached = scene.pointer_room ? &*scene.pointer_room : nullptr;
+        if( cached && cached->anchor.z() == seed.z() &&
+            ( cached->anchor == *target || ( !cached->clipped &&
+              cached->interior.count( *target ) != 0 ) ) && sample( cached->anchor ) == cached->topology ) {
+            selected = *cached;
+        } else if( topology_at( seed ) == 1 ) {
+            cutaway_room room;
+            room.anchor = *target;
+            room.topology = sample( room.anchor );
+            std::vector<unsigned char> visited( width * width, 0 );
+            const auto local_index = [&]( const tripoint_bub_ms &p ) {
+                return ( p.y() - seed.y() + reach ) * width + p.x() - seed.x() + reach;
+            };
+            std::vector<tripoint_bub_ms> pending{ seed };
+            visited[local_index( seed )] = 1;
+            for( size_t head = 0; head < pending.size(); ++head ) {
+                const auto from = pending[head];
+                room.interior.insert( here.get_abs( from ) );
+                room.columns.insert( here.get_abs( from ) );
+                for( const auto &dir : { tripoint_rel_ms::north, tripoint_rel_ms::east,
+                         tripoint_rel_ms::south, tripoint_rel_ms::west } ) {
+                    const auto next = from + dir;
+                    if( std::abs( next.x() - seed.x() ) > reach ||
+                        std::abs( next.y() - seed.y() ) > reach ) {
+                        room.clipped = true;
+                        continue;
+                    }
+                    const auto i = local_index( next );
+                    if( visited[i] ) { continue; }
+                    visited[i] = 1;
+                    if( room.topology[i] == 1 ) { pending.push_back( next ); }
+                    if( room.topology[i] == 2 ) { room.columns.insert( here.get_abs( next ) ); }
+                }
+            }
+            // Include corner wall caps without flooding across the diagonal.
+            for( const auto &from : pending ) {
+                for( int dy = -1; dy <= 1; ++dy ) {
+                    for( int dx = -1; dx <= 1; ++dx ) {
+                        const auto next = from + tripoint_rel_ms( dx, dy, 0 );
+                        if( std::abs( next.x() - seed.x() ) > reach ||
+                            std::abs( next.y() - seed.y() ) > reach ) { continue; }
+                        const auto i = local_index( next );
+                        if( !visited[i] && room.topology[i] == 2 ) {
+                            visited[i] = 1;
+                            room.columns.insert( here.get_abs( next ) );
+                        }
+                    }
+                }
+            }
+            selected = std::move( room );
+        }
+    }
+    const bool changed = bool( selected ) != bool( scene.pointer_room ) ||
+                         ( selected && scene.pointer_room && selected->columns != scene.pointer_room->columns );
+    scene.pointer_room = std::move( selected );
+    return changed;
+}
+
 static scene_snapshot capture_impl( avatar &you, const map &here, int above, int below,
-                                    bool cut_overhead, bool camera_geometry, scene_snapshot *previous = nullptr )
-{    const auto started = std::chrono::steady_clock::now();
+                                    bool cut_overhead, bool camera_geometry, scene_snapshot *previous = nullptr,
+                                    bool reveal_visible_interiors = false )
+{
+    const auto started = std::chrono::steady_clock::now();
     // Equipment and body state cannot change during this synchronous capture.
     const bool blind = you.is_blind();
     camera_geometry = camera_geometry && !blind;
     scene_snapshot result;
     result.camera_geometry = camera_geometry;
+    result.camera_cutaway = cut_overhead && camera_geometry;
     result.origin = you.pos_abs();
     result.player_crouching = you.is_crouching();
     // The player's discrete map cell is for CDDA collision/interactions,
@@ -1304,17 +1446,22 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     const auto region_index = [&]( const int x, const int y ) {
         return ( y - first_y ) * side + ( x - first_x );
     };
-    if( ( fresh || camera_geometry ) && !blind && !here.is_outside( player ) ) {
+    const auto add_room = [&]( const tripoint_bub_ms &seed ) {
         // This mask describes columns above a region on the avatar's own storey.
-        avatar_region.assign( side * side, 0 );
+        if( avatar_region.empty() ) {
+            avatar_region.assign( side * side, 0 );
+        }
         std::vector<tripoint_bub_ms> queue;
         queue.reserve( 256 );
         const auto in_grid = [&]( const tripoint_bub_ms &q ) {
             return q.x() >= first_x && q.x() < first_x + side &&
                    q.y() >= first_y && q.y() < first_y + side;
         };
-        avatar_region[region_index( player.x(), player.y() )] = 1;
-        queue.push_back( player );
+        if( avatar_region[region_index( seed.x(), seed.y() )] ) {
+            return;
+        }
+        avatar_region[region_index( seed.x(), seed.y() )] = 1;
+        queue.push_back( seed );
         for( size_t head = 0; head < queue.size(); ++head ) {
             const tripoint_bub_ms from = queue[head];
             for( const tripoint_rel_ms &dir : { tripoint_rel_ms::north, tripoint_rel_ms::east,
@@ -1349,6 +1496,25 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     if( !here.is_outside( next ) ) {
                         avatar_region[region_index( next.x(), next.y() )] = 1;
                     }
+                }
+            }
+        }
+    };
+    if( ( fresh || camera_geometry ) && !blind && !here.is_outside( player ) ) {
+        add_room( player );
+    }
+    if( cut_overhead && camera_geometry && reveal_visible_interiors && fresh ) {
+        if( avatar_region.empty() ) {
+            avatar_region.assign( side * side, 0 );
+        }
+        // Native sight can reach across windows, open doors and gaps between
+        // pieces of furniture. A connectivity flood misses those columns.
+        for( int y = first_y; y < first_y + side; ++y ) {
+            for( int x = first_x; x < first_x + side; ++x ) {
+                const tripoint_bub_ms p( x, y, player.z() );
+                if( ( perception[index( p )] & visible_bit ) && !here.is_outside( p ) &&
+                    native_tile_visible( you, here, p ) ) {
+                    avatar_region[region_index( x, y )] = 1;
                 }
             }
         }
@@ -1603,7 +1769,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 // roof. Dropping that geometry IS the cut: this path never adds
                 // a cell, never reads an unseen storey and never reveals an
                 // interior that the avatar's own perception did not produce.
-                if( cut_overhead && region_column && p.z() > player.z() && !upper_tower ) {
+                if( cut_overhead && !camera_geometry && region_column && p.z() > player.z() && !upper_tower ) {
                     continue;
                 }
                 // Native perception still gates actors and nearby actions.
@@ -1626,8 +1792,9 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     if( native_visible ) {
                         const auto creature = creatures.find( p );
                         capture_sprites( result, you, here, p,
-                                         creature == creatures.end() ? nullptr : creature->second );
-                        if( p.z() == player.z() && square_dist( p, player ) <= 1 ) {
+                                         creature == creatures.end() ? nullptr : creature->second, cut_overhead );
+                        if( p.z() == player.z() && square_dist( p, player ) <= 1 &&
+                            ( !cut_overhead || native_tile_visible( you, here, p ) ) ) {
                             const fp3d_targeting::target target{ you.pos_abs(), here.get_abs( p ),
                                 fp3d_targeting::kind::terrain, terrain.id().str() };
                             const auto choices = fp3d_interaction::context_entries( target, you, here );
@@ -1927,8 +2094,9 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     if( native_visible ) {
                         const auto creature = creatures.find( p );
                         capture_sprites( result, you, here, p,
-                                         creature == creatures.end() ? nullptr : creature->second );
-                        if( !tile.exterior_only && p.z() == player.z() && square_dist( p, player ) <= 1 ) {
+                                         creature == creatures.end() ? nullptr : creature->second, cut_overhead );
+                        if( !tile.exterior_only && p.z() == player.z() && square_dist( p, player ) <= 1 &&
+                            ( !cut_overhead || native_tile_visible( you, here, p ) ) ) {
                             const fp3d_targeting::target target{ you.pos_abs(), tile.position, fp3d_targeting::kind::terrain, tile.terrain };
                             const auto choices = fp3d_interaction::context_entries( target, you, here );
                             if( std::any_of( choices.begin(), choices.end(), []( const auto &choice ) {
@@ -2365,7 +2533,8 @@ scene_snapshot capture( avatar &you, const map &here, int above, int below, bool
 
 namespace
 {
-void apply_overhead_occlusion( scene_snapshot &scene, const avatar &you, const map &here )
+void apply_overhead_occlusion( scene_snapshot &scene, const avatar &you, const map &here,
+                               bool native_peek = false )
 {
     const auto player = you.pos_bub( here );
     if( !here.inbounds( player ) ) { return; }
@@ -2385,7 +2554,8 @@ void apply_overhead_occlusion( scene_snapshot &scene, const avatar &you, const m
         if( clear < 0 ) {
             // Unlimited range: a far square on an open road is not obstructed
             // merely because it lies outside native 2D perception range.
-            clear = p == player || here.sees( player, p, -1 );
+            clear = p == player || ( native_peek ? native_tile_visible( you, here, p ) :
+                                     here.sees( player, p, -1 ) );
         }
         const auto known = clear ? knowledge::visible : knowledge::remembered;
         // Obstruction can change without a terrain edit or camera movement.
@@ -2408,10 +2578,14 @@ scene_snapshot capture_camera( avatar &you, const map &here, int above, int belo
     return scene;
 }
 scene_snapshot capture_camera_reusing( avatar &you, const map &here, scene_snapshot *previous,
-                                       int above, int below, bool cut_overhead )
+                                       int above, int below, bool cut_overhead,
+                                       bool reveal_visible_interiors, bool native_peek,
+                                       std::optional<tripoint_abs_ms> pointer_room )
 {
-    auto scene = capture_impl( you, here, above, below, cut_overhead, true, previous );
-    if( cut_overhead ) { apply_overhead_occlusion( scene, you, here ); }
+    auto scene = capture_impl( you, here, above, below, cut_overhead, true, previous, reveal_visible_interiors && native_peek );
+    if( previous ) { scene.pointer_room = previous->pointer_room; }
+    update_pointer_room( scene, you, here, pointer_room );
+    if( cut_overhead ) { apply_overhead_occlusion( scene, you, here, native_peek ); }
     return scene;
 }
 } // namespace fp3d_snapshot

@@ -12,6 +12,24 @@
 #include "player_helpers.h"
 #include "type_id.h"
 
+TEST_CASE( "right_camera_hold_and_drag_are_distinct_from_context_clicks",
+           "[fp3d][camera][edge_pan]" )
+{
+    right_camera_drag drag;
+    drag.begin( point( 30, 40 ), 1000 );
+    drag.move( point( 34, 43 ) );
+    CHECK_FALSE( drag.dragging( 1200 ) );
+    CHECK( drag.release() );
+    drag.begin( point( 30, 40 ), 2000 );
+    drag.move( point( 55, 43 ) );
+    CHECK_FALSE( drag.dragging( 2179 ) );
+    CHECK( drag.dragging( 2180 ) );
+    drag.move( point( 30, 40 ) );
+    CHECK( drag.dragging( 2300 ) );
+    CHECK_FALSE( drag.release() );
+    CHECK_FALSE( drag.dragging( 2400 ) );
+}
+
 TEST_CASE( "modern_2d_edge_camera_peeks_and_returns_without_grid_steps", "[fp3d][camera][edge_pan]" )
 {
     modern_2d_camera camera;
@@ -335,3 +353,27 @@ TEST_CASE( "fp3d_held_swing_uses_only_presentation_time", "[fp3d][combat][camera
     CHECK( swing.amount( 252 ) == 0 );
 }
 #endif
+
+TEST_CASE( "fp3d_pointer_floor_tracks_orbit_projection_and_storey_planes", "[fp3d][camera][cutaway]" )
+{
+    for( const float yaw : { 0.f, 90.f, 180.f, 270.f } ) {
+        for( const float distance : { 6.f, 18.f, 48.f } ) {
+            for( const float aspect : { .8f, 1.7777778f } ) {
+                const auto base = fp3d_camera::orbit_pose( { yaw, 60.f, distance }, 3.25f, -2.5f );
+                for( const float height : { 0.f, 2.2f, 8.8f } ) {
+                    auto pose = base;
+                    pose.eye.height += height;
+                    const auto screen = fp3d_camera::project( pose, aspect, 4.f, height, -1.f );
+                    REQUIRE( screen );
+                    const auto floor = fp3d_camera::pointer_floor( pose, aspect,
+                                       ( *screen )[0], ( *screen )[1], height );
+                    REQUIRE( floor );
+                    CHECK( ( *floor )[0] == Approx( 4.f ).margin( .0001f ) );
+                    CHECK( ( *floor )[1] == Approx( -1.f ).margin( .0001f ) );
+                }
+            }
+        }
+    }
+    CHECK_FALSE( fp3d_camera::pointer_floor( { 0, 0, { 0, 0, 2 } }, 1, 0, 0 ) );
+    CHECK_FALSE( fp3d_camera::pointer_floor( { 0, 60, { 0, 0, 2 } }, 0, 0, 0 ) );
+}

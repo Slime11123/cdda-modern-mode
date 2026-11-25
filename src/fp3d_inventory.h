@@ -40,6 +40,7 @@ struct group {
     float max_length_cm = 0;
     bool sealed = false;
     int pocket_index = -1;
+    std::string source_sprite;
 };
 struct model {
     std::vector<entry> entries;
@@ -50,7 +51,8 @@ struct slot_icon {
     std::string variant;
 };
 model capture( avatar &you, map &here,
-               std::optional<tripoint_abs_ms> nearby_target = std::nullopt );
+               std::optional<tripoint_abs_ms> nearby_target = std::nullopt,
+               bool pickup_view = false );
 bool accessible( const item_location &location, const avatar &you, const map &here );
 enum class operation_kind { pickup, drop, wield, wear, takeoff, use, insert, place, native, follower_order, craft, completed };
 struct operation {
@@ -71,6 +73,7 @@ struct operation {
     int destination_pocket = -1;
     std::string use_method;
     bool activate_relic = false;
+    bool best_effort = false;
 };
 struct use_option {
     std::string method;

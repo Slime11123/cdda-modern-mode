@@ -562,6 +562,29 @@ class mode_settings : public cataimgui::window
                     camera_overhead = camera != 0;
                 }
                 ImGui::TextWrapped( "游戏内按 F6 切换第一人称与上帝视角。" );
+                ImGui::Spacing();
+                fp3d_simple_ui::accent_text( "角色与怪物大小" );
+                ImGui::TextWrapped( "%s", "3D 视角中怪物与 NPC 贴图的显示比例，50%～130%，默认 80%。以脚底为缩放锚点；地图坐标、碰撞体积、攻击与交互范围、2D 视角比例均不变。两者可分别调整，修改自动保存。" );
+                struct actor_scale_setting {
+                    const char *option;
+                    const char *label;
+                };
+                static constexpr std::array<actor_scale_setting, 2> actor_scales = {{
+                        { "FP3D_MONSTER_SCALE", "怪物大小" },
+                        { "FP3D_NPC_SCALE", "NPC 大小" }
+                    }};
+                for( const auto &setting : actor_scales ) {
+                    ImGui::PushID( setting.option );
+                    int percent = get_option<int>( setting.option );
+                    ImGui::TextUnformatted( setting.label );
+                    ImGui::SetNextItemWidth( -1 );
+                    if( ImGui::SliderInt( "##actor_scale", &percent, 50, 130, "%d%%",
+                                          ImGuiSliderFlags_AlwaysClamp ) ) {
+                        get_options().get_option( setting.option ).setValue( std::to_string( percent ) );
+                        get_options().save();
+                    }
+                    ImGui::PopID();
+                }
             }
         }
 

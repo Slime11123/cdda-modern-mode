@@ -4,7 +4,39 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include "point.h"
+
+class right_camera_drag
+{
+    public:
+        void begin( point cursor, uint64_t now ) {
+            start = cursor;
+            started = now;
+            held = true;
+            moved = false;
+        }
+        void move( point cursor ) {
+            moved = moved || std::abs( cursor.x - start.x ) >= 6 ||
+                    std::abs( cursor.y - start.y ) >= 6;
+        }
+        bool dragging( uint64_t now ) const {
+            return held && moved && now - started >= 180;
+        }
+        bool release() {
+            const bool click = held && !moved;
+            cancel();
+            return click;
+        }
+        void cancel() {
+            held = false;
+        }
+    private:
+        point start;
+        uint64_t started = 0;
+        bool held = false;
+        bool moved = false;
+};
 
 // Screen-space look-ahead only. Never changes the avatar or its perception.
 class modern_2d_camera

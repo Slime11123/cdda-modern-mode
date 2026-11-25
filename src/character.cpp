@@ -10646,30 +10646,35 @@ std::vector<vehicle *> Character::get_visible_vehicles( const int range ) const
     } );
 }
 
-std::vector<Creature *> Character::get_targetable_creatures( const int range, bool melee ) const
+bool Character::is_targetable_creature( const Creature &critter, int range, bool melee ) const
 {
     map &here = get_map();
-    return g->get_creatures_if( [this, range, melee, &here]( const Creature & critter ) -> bool {
-        //the call to map.sees is to make sure that even if we can see it through walls
-        //via a mutation or cbm we only attack targets with a line of sight
-        bool can_see = ( ( sees( here, critter ) || sees_with_specials( critter ) ) && here.sees( pos_bub( here ), critter.pos_bub( here ), 100 ) );
-        if( can_see && melee )  //handles the case where we can see something with glass in the way for melee attacks
-        {
-            std::vector<tripoint_bub_ms> path = here.find_clear_path( pos_bub( here ),
-                    critter.pos_bub( here ) );
-            for( const tripoint_bub_ms &point : path ) {
-                if( here.impassable( point ) &&
-                    !( weapon.has_flag( flag_SPEAR ) && // Fences etc. Spears can stab through those
-                       here.has_flag( ter_furn_flag::TFLAG_THIN_OBSTACLE,
-                                      point ) ) ) { //this mirrors melee.cpp function reach_attack
-                    can_see = false;
-                    break;
-                }
+    //the call to map.sees is to make sure that even if we can see it through walls
+    //via a mutation or cbm we only attack targets with a line of sight
+    bool can_see = ( ( sees( here, critter ) || sees_with_specials( critter ) ) && here.sees( pos_bub( here ), critter.pos_bub( here ), 100 ) );
+    if( can_see && melee )  //handles the case where we can see something with glass in the way for melee attacks
+    {
+        std::vector<tripoint_bub_ms> path = here.find_clear_path( pos_bub( here ),
+                critter.pos_bub( here ) );
+        for( const tripoint_bub_ms &point : path ) {
+            if( here.impassable( point ) &&
+                !( weapon.has_flag( flag_SPEAR ) && // Fences etc. Spears can stab through those
+                   here.has_flag( ter_furn_flag::TFLAG_THIN_OBSTACLE,
+                                  point ) ) ) { //this mirrors melee.cpp function reach_attack
+                can_see = false;
+                break;
             }
         }
-        bool in_range = std::round( rl_dist_exact( pos_abs(), critter.pos_abs() ) ) <= range;
-        bool valid_target = this != &critter && pos_abs() != critter.pos_abs() && attitude_to( critter ) != Creature::Attitude::FRIENDLY;
-        return valid_target && in_range && can_see;
+    }
+    bool in_range = std::round( rl_dist_exact( pos_abs(), critter.pos_abs() ) ) <= range;
+    bool valid_target = this != &critter && pos_abs() != critter.pos_abs() && attitude_to( critter ) != Creature::Attitude::FRIENDLY;
+    return valid_target && in_range && can_see;
+}
+
+std::vector<Creature *> Character::get_targetable_creatures( const int range, bool melee ) const
+{
+    return g->get_creatures_if( [this, range, melee]( const Creature &critter ) {
+        return is_targetable_creature( critter, range, melee );
     } );
 }
 

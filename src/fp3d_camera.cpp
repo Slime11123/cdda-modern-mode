@@ -15,6 +15,26 @@ float horizontal_tangent()
     return std::tan( horizontal_fov_degrees * radians / 2 );
 }
 
+std::optional<std::array<float, 2>> pointer_floor( const pose &camera, float aspect,
+        float ndc_x, float ndc_y, float height )
+{
+    if( aspect <= 0 ) { return std::nullopt; }
+    const float sy = std::sin( camera.yaw * radians );
+    const float cy = std::cos( camera.yaw * radians );
+    const float sp = std::sin( camera.pitch * radians );
+    const float cp = std::cos( camera.pitch * radians );
+    const float horizontal = ndc_x * horizontal_tangent();
+    const float vertical = ndc_y * horizontal_tangent() / aspect;
+    const float dz = -sp + cp * vertical;
+    if( dz >= -.000001f ) { return std::nullopt; }
+    const float distance = ( height - camera.eye.height ) / dz;
+    if( distance < near_clip || distance > far_clip ) { return std::nullopt; }
+    return std::array<float, 2>{
+        camera.eye.x + distance * ( sy * cp + cy * horizontal + sp * sy * vertical ),
+        camera.eye.y + distance * ( -cy * cp + sy * horizontal - sp * cy * vertical )
+    };
+}
+
 frustum::frustum( float yaw, float pitch, float aspect ) :
     cos_yaw( std::cos( yaw * radians ) ), sin_yaw( std::sin( yaw * radians ) ),
     cos_pitch( std::cos( pitch * radians ) ), sin_pitch( std::sin( pitch * radians ) ),

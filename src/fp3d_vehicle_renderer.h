@@ -71,7 +71,8 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
                             const fp3d_camera::pose &pose,
                             const fp3d_gpu_camera_math::matrix4 &projection, int width, int height,
                             fp3d_geometry::mesh &mesh,
-                            std::vector<fp3d_geometry::draw_range> &ranges );
+                            std::vector<fp3d_geometry::draw_range> &ranges,
+                            const tripoint_abs_ms *highlighted_cargo = nullptr );
 unsigned append_gpu_vehicle_glass( const fp3d_snapshot::scene_snapshot &scene,
                                    const fp3d_camera::frustum &view, fp3d_camera::offset camera,
                                    fp3d_geometry::mesh &mesh,

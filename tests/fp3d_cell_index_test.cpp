@@ -2,6 +2,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <chrono>
+#include <cstring>
 #include <limits>
 
 #include "cata_catch.h"
@@ -9,6 +10,7 @@
 #include "fp3d_gpu_presentation.h"
 #include "fp3d_gpu_terrain_compute.h"
 #include "fp3d_gpu_world_qa.h"
+#include "fp3d_targeting.h"
 
 TEST_CASE( "fp3d_input_frame_advances_only_with_sdl_presentation",
            "[fp3d][gpu_presentation]" )
@@ -65,6 +67,67 @@ TEST_CASE( "fp3d_world_prepares_at_most_once_while_a_submission_is_busy",
     CHECK( preparation.choose( false, true ) == preparation_mode::defer );
     preparation.submitted();
     CHECK( preparation.choose( false, true ) == preparation_mode::reuse_materials );
+}
+
+TEST_CASE( "fp3d_pickup_highlight_is_scoped_to_the_selected_container",
+           "[fp3d][gpu_presentation]" )
+{
+    using highlight = fp3d_compositor::pickup_highlight;
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 64, 64, 0 );
+    const tripoint_rel_ms offset( 0, -3, 0 );
+    for( int x = 0; x < 2; ++x ) {
+        auto &cell = scene.cells.emplace_back();
+        cell.position = scene.origin + offset + tripoint_rel_ms( x, 0, 0 );
+        cell.furniture = fp3d_furniture::describe( "f_locker" );
+        REQUIRE( cell.furniture );
+    }
+    const highlight selected{ highlight::kind::furniture, scene.origin + offset, "f_locker", {} };
+    fp3d_camera::pose view;
+    view.eye.height = 1.5f;
+    const auto render = [&]( const highlight *source ) {
+        return prepare( scene, view, false, 512, 512, false, false, false, false,
+                        nullptr, nullptr, nullptr, false, source );
+    };
+    const auto normal = render( nullptr );
+    const auto picking = render( &selected );
+    REQUIRE( normal );
+    REQUIRE( picking );
+    const auto white_models = []( const prepared_world &world ) {
+        return std::count_if( world.instances.begin(), world.instances.end(), []( const auto &instance ) {
+            return instance.offset[3] == fp3d_gpu::white_model_material;
+        } );
+    };
+    CHECK( white_models( *normal ) == 0 );
+    CHECK( white_models( *picking ) == 1 );
+}
+
+TEST_CASE( "fp3d_curtain_peek_blends_only_the_window_being_used",
+           "[fp3d][gpu_presentation][windows]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 64, 64, 0 );
+    for( int x = 0; x < 2; ++x ) {
+        auto &cell = scene.cells.emplace_back();
+        cell.position = scene.origin + tripoint_rel_ms( x, -2, 0 );
+        cell.terrain = "t_curtains";
+        cell.kind = fp3d_snapshot::terrain_kind::window;
+        cell.pane = fp3d_snapshot::window_pane::covered;
+    }
+    fp3d_camera::pose view;
+    view.eye.height = 1.65f;
+    const auto render = [&]( const tripoint_abs_ms *peek ) {
+        return prepare( scene, view, false, 512, 512, false, false, false, false,
+                        nullptr, nullptr, nullptr, false, nullptr, peek );
+    };
+    const auto normal = render( nullptr );
+    const auto peeking = render( &scene.cells.front().position );
+    REQUIRE( normal );
+    REQUIRE( peeking );
+    CHECK( normal->pane_count == 0 );
+    CHECK( peeking->pane_count == 1 );
 }
 
 TEST_CASE( "fp3d_occlusion_keeps_bounds_touching_clip_planes",
@@ -427,6 +490,134 @@ TEST_CASE( "fp3d_ordinary_terrain_recipe_cpu_profile", "[.][static_terrain_profi
               << ", resident_ms=" << resident_ms / samples );
     }
 }
+TEST_CASE( "fp3d_packed_terrain_dirty_blocks", "[.][static_terrain_profile]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.geometry_generation = 1;
+    scene.sky.sun_y = .7f;
+    scene.sky.sun_z = .7f;
+    scene.sky.daylight = .8f;
+    for( int y = -112; y < 0; ++y ) {
+        for( int x = -96; x < 96; ++x ) {
+            auto &cell = scene.cells.emplace_back();
+            cell.position = tripoint_abs_ms( x, y, 0 );
+            cell.terrain = "t_pavement";
+        }
+    }
+
+    terrain_index resident( true, true );
+    fp3d_camera::pose view;
+    view.eye.height = 12.f;
+    view.pitch = 28.f;
+    const auto prepare_frame = [&] {
+        auto frame = prepare( scene, view, true, 2424, 1440, true, false, false, true,
+                              nullptr, nullptr, &resident );
+        REQUIRE( frame );
+        REQUIRE( frame->resident_instances.size() > 1000 );
+        return std::move( *frame );
+    };
+    const auto dirty_packed_bytes = []( const prepared_world &before, const prepared_world &after ) {
+        const auto *old_bytes = reinterpret_cast<const unsigned char *>(
+                                    before.resident_instances.data() );
+        const auto *new_bytes = reinterpret_cast<const unsigned char *>(
+                                    after.resident_instances.data() );
+        const size_t element_size = sizeof( fp3d_gpu::mesh_instance );
+        const size_t old_size = before.resident_instances.size() * element_size;
+        const size_t new_size = after.resident_instances.size() * element_size;
+        const size_t common = std::min( old_size, new_size );
+        size_t dirty = new_size - common;
+        for( size_t offset = 0; offset < common; offset += 4096 ) {
+            const size_t length = std::min<size_t>( 4096, common - offset );
+            if( std::memcmp( old_bytes + offset, new_bytes + offset, length ) != 0 ) {
+                dirty += length;
+            }
+        }
+        return dirty;
+    };
+
+    const auto baseline = prepare_frame();
+    CHECK( dirty_packed_bytes( baseline, prepare_frame() ) == 0 );
+    // Moving the scene origin alone must preserve encoded terrain at the same world camera.
+    scene.origin = tripoint_abs_ms( 1, 0, 0 );
+    view.eye.x = -1.f;
+    const auto recentered = prepare_frame();
+    CHECK( dirty_packed_bytes( baseline, recentered ) == 0 );
+    REQUIRE( baseline.resident_instances.size() == recentered.resident_instances.size() );
+
+    // One legitimately changed visible cell edits a single packed instance.
+    auto &cell = scene.cells[scene.cells.size() / 2 + 96];
+    cell.known = fp3d_snapshot::knowledge::remembered;
+    ++scene.geometry_generation;
+    const auto visibility = prepare_frame();
+    const size_t visibility_dirty = dirty_packed_bytes( recentered, visibility );
+    CHECK( visibility_dirty > 0 );
+    CHECK( visibility_dirty <= 8192 );
+
+    // Removing that cell shifts all later entries in its tightly packed group.
+    cell.floor_present = false;
+    ++scene.geometry_generation;
+    const auto removed = prepare_frame();
+    REQUIRE( removed.resident_instances.size() + 1 == visibility.resident_instances.size() );
+    const size_t removed_dirty = dirty_packed_bytes( visibility, removed );
+    CHECK( removed_dirty > visibility_dirty );
+
+    view.eye.x += 1.f;
+    const auto moved = prepare_frame();
+    WARN( "packed_terrain_dirty_blocks packed_bytes=" <<
+          baseline.resident_instances.size() * sizeof( fp3d_gpu::mesh_instance ) <<
+          ", visibility_dirty=" << visibility_dirty << ", removed_dirty=" << removed_dirty <<
+          ", moved_dirty=" << dirty_packed_bytes( removed, moved ) );
+
+    terrain_index split( true, true, true );
+    scene.weather.particles = fp3d_weather::precipitation::rain;
+    scene.weather.intensity = .75f;
+    cell.floor_present = true;
+    ++scene.geometry_generation;
+    const auto gather = [&]( terrain_index &index ) {
+        auto frame = prepare( scene, view, true, 2424, 1440, true, false, false, true,
+                              nullptr, nullptr, &index );
+        REQUIRE( frame );
+        return std::move( *frame );
+    };
+    const auto instances = []( const prepared_world &frame, const auto &batches ) {
+        std::vector<std::array<float, 12>> values;
+        for( const auto &draw : batches ) {
+            REQUIRE( draw.resident );
+            const auto &stream = draw.paged_instances ? *frame.resident_pages : frame.resident_instances;
+            const size_t prefix = !draw.paged_instances && frame.resident_pages ?
+                                  frame.resident_pages->size() : 0;
+            REQUIRE( draw.first_instance >= prefix );
+            const size_t first = draw.first_instance - prefix;
+            REQUIRE( first + draw.instance_count <= stream.size() );
+            for( size_t i = first; i < first + draw.instance_count; ++i ) {
+                const auto &item = stream[i];
+                auto &value = values.emplace_back();
+                std::copy( item.offset.begin(), item.offset.end(), value.begin() );
+                std::copy( item.uv_rect.begin(), item.uv_rect.end(), value.begin() + 4 );
+                std::copy( item.tint.begin(), item.tint.end(), value.begin() + 8 );
+            }
+        }
+        std::sort( values.begin(), values.end() );
+        return values;
+    };
+    const auto wet_packed = gather( resident );
+    const auto wet_split = gather( split );
+    REQUIRE( wet_split.resident_pages );
+    REQUIRE_FALSE( wet_split.resident_instances.empty() );
+    CHECK( wet_split.batches.size() == wet_packed.batches.size() + terrain_index::split_page_budget );
+    CHECK( instances( wet_split, wet_split.batches ) == instances( wet_packed, wet_packed.batches ) );
+    REQUIRE_FALSE( wet_packed.reflective_batches.empty() );
+    size_t reflected = 0;
+    for( const auto &reflection : wet_split.reflective_batches ) {
+        CHECK( reflection.material == wet_packed.reflective_batches.front().material );
+        reflected += reflection.draws.instance_count;
+    }
+    CHECK( reflected == wet_packed.reflective_batches.front().draws.instance_count );
+    const auto repeated = gather( split );
+    CHECK( repeated.resident_page_revision == wet_split.resident_page_revision );
+}
+
 TEST_CASE( "fp3d_static_instance_upload_positions_survive_movement_within_anchor",
            "[fp3d][resident_instance_anchor]" )
 {
@@ -601,5 +792,125 @@ TEST_CASE( "fp3d_block_instance_pages_retain_offsets_and_evict_inactive_blocks",
     pages.clear();
     CHECK( pages.data().empty() );
     CHECK( pages.write( 2, { 7 }, encode ) == first );
+}
+
+TEST_CASE( "fp3d_pointer_cutaway_lowers_only_near_walls_in_cached_and_direct_geometry",
+           "[fp3d][cutaway][static_floor_cache]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 0, 0, 4 );
+    scene.geometry_generation = 1;
+    scene.pointer_room.emplace();
+    scene.pointer_room->anchor = scene.origin;
+    scene.pointer_room->interior.insert( scene.origin );
+    for( const int x : { -1, 1 } ) {
+        auto &tile = scene.cells.emplace_back();
+        tile.position = tripoint_abs_ms( x, 0, 4 );
+        tile.terrain = "t_wall";
+        tile.kind = kind::wall;
+        tile.over_avatar_region = true;
+        scene.pointer_room->columns.insert( tile.position );
+    }
+    terrain_index cache;
+    const auto wall_height = [&]( const prepared_world &frame, int x ) {
+        float height = 0;
+        for( const auto &draw : frame.batches ) {
+            for( unsigned n = 0; n < draw.instance_count; ++n ) {
+                const auto &instance = frame.instances[draw.first_instance + n];
+                if( instance.offset[0] != x ) { continue; }
+                for( unsigned i = 0; i < draw.index_count; ++i ) {
+                    const auto vertex = frame.geometry.indices[draw.first_index + i];
+                    height = std::max( height, frame.geometry.vertices[vertex].position[1] +
+                                       instance.offset[1] );
+                }
+            }
+        }
+        return height;
+    };
+    for( const int camera_side : { -1, 1 } ) {
+        const auto view = fp3d_camera::orbit_pose(
+                          { camera_side < 0 ? 90.f : 270.f, 60.f, 18.f }, 0, 0 );
+        for( const bool cached : { false, true } ) {
+            const auto frame = prepare( scene, view, true, 800, 600, true,
+                                        false, false, false, nullptr, nullptr, cached ? &cache : nullptr );
+            REQUIRE( frame );
+            CHECK( wall_height( *frame, camera_side ) == Approx( .45f ) );
+            CHECK( wall_height( *frame, -camera_side ) == Approx( fp3d_camera::floor_height ) );
+        }
+    }
+    scene.pointer_room.reset();
+    const auto view = fp3d_camera::orbit_pose( {}, 0, 0 );
+    const auto restored = prepare( scene, view, true, 800, 600, true );
+    REQUIRE( restored );
+    CHECK( wall_height( *restored, -1 ) == Approx( fp3d_camera::floor_height ) );
+    CHECK( wall_height( *restored, 1 ) == Approx( fp3d_camera::floor_height ) );
+}
+
+TEST_CASE( "fp3d_live_cutaway_masks_restore_cached_roofs_and_keep_high_storeys",
+           "[fp3d][cutaway][static_floor_cache]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 0, 0, 4 );
+    scene.camera_geometry = scene.camera_cutaway = true;
+    scene.geometry_generation = 1;
+    for( const int x : { 0, 4 } ) {
+        for( const int z : { 0, 4, 5 } ) {
+            auto &tile = scene.cells.emplace_back();
+            tile.position = tripoint_abs_ms( x, 0, z );
+            tile.terrain = "t_floor";
+            tile.floor_present = true;
+            tile.over_avatar_region = x == 0 && z >= 4;
+        }
+    }
+    auto &facade = scene.cells.emplace_back();
+    facade.position = tripoint_abs_ms( 8, 0, 7 );
+    facade.terrain = "t_floor";
+    facade.floor_present = true;
+    const auto view = fp3d_camera::orbit_pose( { 0, 60, 25 }, 2, 0 );
+    terrain_index cache;
+    const auto take = [&]() {
+        return prepare( scene, view, true, 800, 600, true,
+                        false, false, false, nullptr, nullptr, &cache );
+    };
+    const auto contains = [&]( const prepared_world &frame, int x, int z ) {
+        return std::any_of( frame.instances.begin(), frame.instances.end(), [&]( const auto &instance ) {
+            return instance.offset[0] == x && instance.offset[2] == 0 &&
+                   instance.offset[1] == ( z - scene.origin.z() ) * fp3d_camera::floor_height;
+        } );
+    };
+    const auto normal = take();
+    REQUIRE( normal );
+    CHECK_FALSE( contains( *normal, 0, 5 ) );
+    CHECK( contains( *normal, 4, 5 ) );
+    const auto *chunks = cache.chunks.data();
+    scene.pointer_room.emplace();
+    scene.pointer_room->anchor = tripoint_abs_ms( 4, 0, 4 );
+    scene.pointer_room->columns.insert( scene.pointer_room->anchor );
+    const auto selected = take();
+    REQUIRE( selected );
+    CHECK( contains( *selected, 0, 5 ) );
+    CHECK_FALSE( contains( *selected, 4, 5 ) );
+    CHECK( contains( *selected, 0, 4 ) );
+    CHECK( contains( *selected, 4, 4 ) );
+    CHECK( contains( *selected, 0, 0 ) );
+    CHECK( contains( *selected, 4, 0 ) );
+    CHECK( contains( *selected, 8, 7 ) );
+    CHECK( cache.chunks.data() == chunks );
+    // The same mask must also remove the roof from the picking ray.
+    const auto floor_hit = fp3d_targeting::ray( scene, 0, 90, { 4, 0, 10 }, 30 );
+    REQUIRE( floor_hit );
+    CHECK( floor_hit->position == tripoint_abs_ms( 4, 0, 4 ) );
+    scene.pointer_room.reset();
+    const auto restored = take();
+    REQUIRE( restored );
+    CHECK_FALSE( contains( *restored, 0, 5 ) );
+    CHECK( contains( *restored, 4, 5 ) );
+    CHECK( cache.chunks.data() == chunks );
+    CHECK( scene.cells.size() == 7 );
+    const auto roof_hit = fp3d_targeting::ray( scene, 0, 90, { 4, 0, 10 }, 30 );
+    REQUIRE( roof_hit );
+    CHECK( roof_hit->position == tripoint_abs_ms( 4, 0, 5 ) );
 }
 #endif

@@ -68,7 +68,7 @@ const fp3d_snapshot::cell *find_cell( const fp3d_snapshot::scene_snapshot &scene
                                       const tripoint_abs_ms &p )
 {
     const auto it = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto & tile ) {
-        return tile.position == p;
+        return tile.position == p && !fp3d_snapshot::hidden_by_cutaway( scene, tile );
     } );
     return it == scene.cells.end() ? nullptr : &*it;
 }
@@ -1490,8 +1490,10 @@ TEST_CASE( "fp3d_multistorey_visibility_reaches_upper_floors_and_ground",
     const auto upper = ground + tripoint_rel_ms( 0, 0, 4 );
     REQUIRE( here.ter_set( upper, ter_str_id( "t_floor" ) ) );
     for( int z = 1; z <= 4; ++z ) {
-        REQUIRE( here.ter_set( ground + tripoint_rel_ms( 3, 0, z ),
-                               ter_str_id( "t_open_air" ) ) );
+        // ter_set returns false for an already-open cell; assert the fixture state.
+        const auto shaft = ground + tripoint_rel_ms( 3, 0, z );
+        here.ter_set( shaft, ter_str_id( "t_open_air" ) );
+        REQUIRE( here.is_open_air( shaft ) );
     }
     const auto pavement = ground + tripoint_rel_ms( 3, 0, 0 );
     REQUIRE( here.ter_set( pavement, ter_str_id( "t_pavement" ) ) );
@@ -2455,6 +2457,21 @@ TEST_CASE( "fp3d_visible_outdoors_supplies_window_sky", "[fp3d][windows]" )
     refresh_vision( here, you.posz() );
     REQUIRE_FALSE( you.sees( here, exterior ) );
     CHECK_FALSE( fp3d_snapshot::capture( you, here ).sky.visible );
+
+    // The native peek temporarily places the avatar in the window square.
+    you.setpos( here, window, false );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto peeking = fp3d_snapshot::capture_camera_reusing( you, here, nullptr, 1, 0,
+                         true, true, true );
+    CHECK( peeking.origin == here.get_abs( window ) );
+    CHECK( std::any_of( peeking.sprites.begin(), peeking.sprites.end(), [&]( const auto &sprite ) {
+        return sprite.is_avatar && sprite.position == here.get_abs( window );
+    } ) );
+    const auto *outside = find_cell( peeking, here.get_abs( exterior ) );
+    REQUIRE( outside );
+    CHECK( outside->known == fp3d_snapshot::knowledge::visible );
+    CHECK( here.ter( window ).id() == ter_str_id( "t_curtains" ) );
+    you.setpos( here, p, false );
 }
 TEST_CASE( "fp3d_dark_indoor_surfaces_and_contents_remain_visible", "[fp3d][multilevel]" )
 {
@@ -2491,6 +2508,71 @@ TEST_CASE( "fp3d_dark_indoor_surfaces_and_contents_remain_visible", "[fp3d][mult
         return sprite.position == here.get_abs( target ) && sprite.id == "rock";
     } ) );
     CHECK( rng_get_engine() == before );
+}
+
+TEST_CASE( "fp3d_overhead_drag_lifts_hidden_structure_without_revealing_entities",
+           "[fp3d][snapshot][overhead]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    const auto door_side = player + tripoint_rel_ms( 0, -2, 0 );
+    const auto room_tile = door_side + tripoint_rel_ms::north;
+    const auto partition = room_tile + tripoint_rel_ms::north;
+    const auto deeper_tile = partition + tripoint_rel_ms::north;
+    for( int y = -6; y <= -2; ++y ) {
+        for( int x = -2; x <= 2; ++x ) {
+            const auto p = player + tripoint_rel_ms( x, y, 0 );
+            const bool wall = std::abs( x ) == 2 || y == -6 || y == -2 || y == -4;
+            here.ter_set( p, ter_str_id( wall ? "t_wall" : "t_floor" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_floor" ) );
+        }
+    }
+    const auto room = here.get_abs( room_tile );
+    const auto roof = here.get_abs( room_tile + tripoint_rel_ms::above );
+    const auto deeper_roof = here.get_abs( deeper_tile + tripoint_rel_ms::above );
+    const auto capture = [&]( bool reveal ) {
+        fp3d_snapshot::prepare_view( you, here );
+        return fp3d_snapshot::capture_camera_reusing( you, here, nullptr, 2, 0, true, false, false,
+                reveal ? std::optional<tripoint_abs_ms>( room ) : std::nullopt );
+    };
+    here.ter_set( door_side, ter_str_id( "t_window" ) );
+    here.ter_set( partition, ter_str_id( "t_wall_glass" ) );
+    here.add_field( deeper_tile, fd_fire, 1 );
+    spawn_test_monster( "mon_zombie", deeper_tile, false );
+    here.add_item_or_charges( deeper_tile, item( itype_id( "rock" ) ) );
+    const auto remembered = you.get_memorized_tile( here.get_abs( deeper_tile ) ).get_ter_id();
+    const auto ordinary = capture( false );
+    REQUIRE( you.sees( here, room_tile ) );
+    REQUIRE( you.sees( here, deeper_tile ) );
+    REQUIRE( find_cell( ordinary, roof ) );
+    REQUIRE( find_cell( ordinary, deeper_roof ) );
+    const auto open = capture( true );
+    CHECK_FALSE( find_cell( open, roof ) );
+    CHECK( find_cell( open, deeper_roof ) );
+    REQUIRE( find_cell( open, room ) );
+    CHECK( fp3d_snapshot::cutaway_column( open, *find_cell( open, room ) ) );
+
+    here.ter_set( partition, ter_str_id( "t_wall" ) );
+    const auto inner_wall = capture( true );
+    CHECK_FALSE( find_cell( inner_wall, roof ) );
+    CHECK( find_cell( inner_wall, deeper_roof ) );
+    CHECK( std::none_of( inner_wall.sprites.begin(), inner_wall.sprites.end(), [&]( const auto &sprite ) {
+        return sprite.position == here.get_abs( deeper_tile );
+    } ) );
+    CHECK( you.get_memorized_tile( here.get_abs( deeper_tile ) ).get_ter_id() == remembered );
+
+    here.ter_set( door_side, ter_str_id( "t_curtains" ) );
+    const auto obstructed = capture( true );
+    CHECK_FALSE( you.sees( here, room_tile ) );
+    REQUIRE( obstructed.pointer_room );
+    CHECK_FALSE( find_cell( obstructed, roof ) );
+    CHECK( find_cell( obstructed, deeper_roof ) );
+    CHECK( std::none_of( obstructed.sprites.begin(), obstructed.sprites.end(), [&]( const auto &sprite ) {
+        return sprite.position == room || sprite.position == here.get_abs( deeper_tile );
+    } ) );
+    CHECK( you.get_memorized_tile( here.get_abs( deeper_tile ) ).get_ter_id() == remembered );
 }
 
 TEST_CASE( "fp3d_overhead_capture_lifts_only_the_avatar_room_ceiling",
@@ -2641,3 +2723,242 @@ TEST_CASE( "fp3d_natural_ground_connections_follow_captured_neighbours", "[fp3d]
 }
 
 #endif
+
+TEST_CASE( "fp3d_pointer_room_switch_restores_roofs_and_preserves_storeys",
+           "[fp3d][snapshot][overhead][cutaway]" )
+{
+    prepare_scene();
+    auto &you = get_avatar();
+    auto &here = get_map();
+    const int z = GENERATE( 0, 1, 4 );
+    here.ter_set( tripoint_bub_ms( 65, 65, z ), ter_str_id( "t_pavement" ) );
+    you.setpos( here, tripoint_bub_ms( 65, 65, z ) );
+    const auto player = you.pos_bub( here );
+    here.ter_set( player, ter_str_id( "t_pavement" ) );
+    for( int dy = -5; dy <= -1; ++dy ) {
+        for( int dx = -4; dx <= 4; ++dx ) {
+            const auto p = player + tripoint_rel_ms( dx, dy, 0 );
+            const bool wall = dx == -4 || dx == 4 || dx == 0 || dy == -5 || dy == -1;
+            here.ter_set( p, ter_str_id( wall ? "t_wall" : "t_floor" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    for( const int dx : { -3, -2, -1, 1, 2, 3 } ) {
+        here.ter_set( player + tripoint_rel_ms( dx, -1, 0 ), ter_str_id( "t_window" ) );
+    }
+    // An open door still defines the boundary between two ordinary rooms.
+    here.ter_set( player + tripoint_rel_ms( 0, -3, 0 ), ter_str_id( "t_door_o" ) );
+    const auto a = here.get_abs( player + tripoint_rel_ms( -2, -3, 0 ) );
+    const auto b = here.get_abs( player + tripoint_rel_ms( 2, -3, 0 ) );
+    const auto roof_a = a + tripoint_rel_ms::above;
+    const auto roof_b = b + tripoint_rel_ms::above;
+    const auto street = player + tripoint_rel_ms( 0, 3, -z );
+    here.ter_set( street, ter_str_id( "t_pavement" ) );
+    const auto high_facade = player + tripoint_rel_ms( 8, -3, 3 );
+    here.ter_set( high_facade, ter_str_id( "t_wall" ) );
+    // Impassable furniture belongs to the room and retains its floor.
+    here.furn_set( here.get_bub( a ), furn_str_id( "f_bookcase" ) );
+    const auto take = [&]( fp3d_snapshot::scene_snapshot *previous,
+                           std::optional<tripoint_abs_ms> target ) {
+        fp3d_snapshot::prepare_view( you, here );
+        return fp3d_snapshot::capture_camera_reusing( you, here, previous,
+                4, fp3d_snapshot::render_below, true, false, false, target );
+    };
+    auto normal = take( nullptr, std::nullopt );
+    REQUIRE( you.sees( here, here.get_bub( a ) ) );
+    REQUIRE( you.sees( here, here.get_bub( b ) ) );
+    REQUIRE( find_cell( normal, roof_a ) );
+    REQUIRE( find_cell( normal, roof_b ) );
+    auto first = take( &normal, a );
+    REQUIRE( first.pointer_room );
+    CHECK_FALSE( find_cell( first, roof_a ) );
+    CHECK( find_cell( first, roof_b ) );
+    REQUIRE( find_cell( first, a ) );
+    CHECK( find_cell( first, a )->floor_present );
+    CHECK( first.min_z <= 0 );
+    CHECK( find_cell( first, here.get_abs( street ) ) );
+    CHECK( find_cell( first, here.get_abs( high_facade ) ) );
+    CHECK( find_cell( first, a )->furniture.has_value() );
+    const auto anchor = first.pointer_room->anchor;
+    auto cached = take( &first, a + tripoint_rel_ms::south );
+    REQUIRE( cached.pointer_room );
+    CHECK( cached.pointer_room->anchor == anchor );
+    auto second = take( &cached, b );
+    CHECK( find_cell( second, roof_a ) );
+    CHECK_FALSE( find_cell( second, roof_b ) );
+    REQUIRE( find_cell( second, b ) );
+    CHECK( find_cell( second, b )->floor_present );
+    CHECK( find_cell( second, you.pos_abs() ) );
+    // A higher target plane cannot cut this storey, even on a tall building.
+    auto wrong_z = take( &second, b + tripoint_rel_ms::above );
+    CHECK_FALSE( wrong_z.pointer_room );
+    CHECK( find_cell( wrong_z, roof_a ) );
+    CHECK( find_cell( wrong_z, roof_b ) );
+    const auto outdoor = player + tripoint_rel_ms( 0, 3, 0 );
+    here.ter_set( outdoor, ter_str_id( "t_pavement" ) );
+    auto outside = take( &wrong_z, here.get_abs( outdoor ) );
+    CHECK_FALSE( outside.pointer_room );
+    CHECK( find_cell( outside, roof_a ) );
+    CHECK( find_cell( outside, roof_b ) );
+    auto released = take( &outside, std::nullopt );
+    CHECK_FALSE( released.pointer_room );
+    CHECK( find_cell( released, roof_a ) );
+    CHECK( find_cell( released, roof_b ) );
+    // A terrain edit invalidates a cached room while the pointer stays still.
+    auto before_edit = take( &released, a );
+    REQUIRE( before_edit.pointer_room );
+    const auto north = here.get_bub( a + tripoint_rel_ms::north );
+    here.ter_set( north, ter_str_id( "t_wall" ) );
+    auto edited = take( &before_edit, a );
+    REQUIRE( edited.pointer_room );
+    CHECK( edited.pointer_room->interior.size() < before_edit.pointer_room->interior.size() );
+}
+
+TEST_CASE( "fp3d_pointer_room_bounds_large_connected_interiors",
+           "[fp3d][snapshot][overhead][cutaway]" )
+{
+    prepare_scene();
+    auto &you = get_avatar();
+    auto &here = get_map();
+    const auto player = you.pos_bub( here );
+    for( int dy = -1; dy <= 1; ++dy ) {
+        for( int dx = -20; dx <= 20; ++dx ) {
+            const auto p = player + tripoint_rel_ms( dx, dy, 0 );
+            here.ter_set( p, ter_str_id( dy == 0 ? "t_floor" : "t_wall" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    const auto scene = fp3d_snapshot::capture_camera_reusing( you, here, nullptr,
+                       2, 0, true, false, false, you.pos_abs() );
+    REQUIRE( scene.pointer_room );
+    CHECK( scene.pointer_room->clipped );
+    CHECK( scene.pointer_room->interior.size() <= 17 );
+    CHECK( find_cell( scene, here.get_abs( player + tripoint_rel_ms( 12, 0, 1 ) ) ) );
+    REQUIRE( find_cell( scene, you.pos_abs() ) );
+    CHECK( find_cell( scene, you.pos_abs() )->floor_present );
+}
+
+TEST_CASE( "fp3d_overhead_moving_capture_cost_and_entity_visibility",
+           "[fp3d][snapshot][overhead][movement]" )
+{
+    prepare_scene();
+    auto &you = get_avatar();
+    auto &here = get_map();
+    const auto start = you.pos_bub( here );
+    // Broad daylight view with sparse contents, matching ordinary road movement.
+    here.add_item_or_charges( start + tripoint_rel_ms( 3, 0, 0 ), item( itype_id( "rock" ) ) );
+    fp3d_snapshot::scene_snapshot previous;
+    double prepare_ms = 0;
+    double capture_ms = 0;
+    double full_ms = 0;
+    constexpr int steps = 24;
+    for( int step = 0; step < steps; ++step ) {
+        you.setpos( here, start + tripoint_rel_ms( step % 8, 0, 0 ) );
+        const auto begin = std::chrono::steady_clock::now();
+        fp3d_snapshot::prepare_view( you, here );
+        const auto prepared = std::chrono::steady_clock::now();
+        auto scene = fp3d_snapshot::capture_camera_reusing( you, here,
+                     step ? &previous : nullptr, 10, 2, true );
+        const auto end = std::chrono::steady_clock::now();
+        prepare_ms += std::chrono::duration<double, std::milli>( prepared - begin ).count();
+        capture_ms += scene.capture_full_ms;
+        full_ms += std::chrono::duration<double, std::milli>( end - prepared ).count();
+        scene.render_generation = step + 1;
+        if( !scene.geometry_generation ) { fp3d_snapshot::reuse_geometry( scene, nullptr ); }
+        REQUIRE( scene.origin == you.pos_abs() );
+        REQUIRE( find_cell( scene, you.pos_abs() ) );
+        // One occupied square, regardless of how many empty cells the camera sees.
+        CHECK( scene.entity_visibility_checks == 1 );
+        for( const auto &sprite : scene.sprites ) {
+            if( sprite.is_avatar ) { continue; }
+            const auto p = here.get_bub( sprite.position );
+            CHECK( you.sees( here, p ) );
+            const auto &visibility = here.get_visibility_variables_cache();
+            CHECK( here.get_visibility( here.apparent_light_at( p, visibility ), visibility ) ==
+                   visibility_type::CLEAR );
+        }
+        previous = std::move( scene );
+    }
+    if( const char *path = std::getenv( "CDDA_FP3D_MOVEMENT_TIMING" ) ) {
+        std::ofstream out( path );
+        out << "steps=" << steps << ", cells=" << previous.cells.size()
+            << ", mean_prepare_ms=" << prepare_ms / steps
+            << ", mean_capture_ms=" << capture_ms / steps
+            << ", mean_capture_with_occlusion_ms=" << full_ms / steps << '\n';
+    }
+}
+
+TEST_CASE( "fp3d_pointer_room_updates_reuse_geometry_without_recapturing_or_revealing_entities",
+           "[fp3d][snapshot][overhead][cutaway]" )
+{
+    prepare_scene();
+    auto &you = get_avatar();
+    auto &here = get_map();
+    const auto player = you.pos_bub( here );
+    // Closed, opaque rooms: the failing user case must not depend on windows.
+    for( int dy = -5; dy <= -1; ++dy ) {
+        for( int dx = -4; dx <= 4; ++dx ) {
+            const auto p = player + tripoint_rel_ms( dx, dy, 0 );
+            const bool wall = dx == -4 || dx == 4 || dx == 0 || dy == -5 || dy == -1;
+            here.ter_set( p, ter_str_id( wall ? "t_wall" : "t_floor" ) );
+            here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_flat_roof" ) );
+        }
+    }
+    const auto a = here.get_abs( player + tripoint_rel_ms( -2, -3, 0 ) );
+    const auto b = here.get_abs( player + tripoint_rel_ms( 2, -3, 0 ) );
+    here.furn_set( here.get_bub( a ), furn_str_id( "f_bookcase" ) );
+    here.add_item_or_charges( here.get_bub( a ), item( itype_id( "rock" ) ) );
+    spawn_test_monster( "mon_zombie", here.get_bub( b ), false );
+    fp3d_snapshot::prepare_view( you, here );
+    REQUIRE_FALSE( you.sees( here, here.get_bub( a ) ) );
+    REQUIRE_FALSE( you.sees( here, here.get_bub( b ) ) );
+    const auto memory_a = you.get_memorized_tile( a ).get_ter_id();
+    const auto memory_b = you.get_memorized_tile( b ).get_ter_id();
+    auto scene = fp3d_snapshot::capture_camera_reusing( you, here, nullptr, 4, 0, true );
+    scene.geometry_generation = scene.render_generation = 54321;
+    const auto *allocation = scene.cells.data();
+    const auto count = scene.cells.size();
+    const auto full_ms = scene.capture_full_ms;
+    double updates_ms = 0;
+    const auto update = [&]( std::optional<tripoint_abs_ms> target ) {
+        const auto started = std::chrono::steady_clock::now();
+        const bool changed = fp3d_snapshot::update_pointer_room( scene, you, here, target );
+        updates_ms += std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - started ).count();
+        return changed;
+    };
+    for( int n = 0; n < 100; ++n ) {
+        REQUIRE( update( a ) );
+        CHECK_FALSE( find_cell( scene, a + tripoint_rel_ms::above ) );
+        CHECK( find_cell( scene, b + tripoint_rel_ms::above ) );
+        REQUIRE( find_cell( scene, a ) );
+        CHECK( find_cell( scene, a )->furniture );
+        // Moving one tile in the same room must not invalidate GPU preparation.
+        CHECK_FALSE( update( a + tripoint_rel_ms::south ) );
+        REQUIRE( update( b ) );
+        CHECK( find_cell( scene, a + tripoint_rel_ms::above ) );
+        CHECK_FALSE( find_cell( scene, b + tripoint_rel_ms::above ) );
+    }
+    // Preserve evidence without writing any game state or timing-sensitive assertion.
+    if( const char *path = std::getenv( "CDDA_FP3D_CUTAWAY_TIMING" ) ) {
+        std::ofstream out( path );
+        out << "cells=" << count << ", full_capture_ms=" << full_ms
+            << ", room_updates=300, total_update_ms=" << updates_ms << '\n';
+    }
+    CHECK( fp3d_snapshot::update_pointer_room( scene, you, here, you.pos_abs() ) );
+    CHECK_FALSE( scene.pointer_room );
+    CHECK_FALSE( fp3d_snapshot::update_pointer_room( scene, you, here, std::nullopt ) );
+    CHECK( find_cell( scene, a + tripoint_rel_ms::above ) );
+    CHECK( find_cell( scene, b + tripoint_rel_ms::above ) );
+    CHECK( scene.cells.data() == allocation );
+    CHECK( scene.cells.size() == count );
+    CHECK( scene.geometry_generation == 54321 );
+    CHECK( scene.render_generation == 54321 );
+    CHECK( scene.capture_full_ms == full_ms );
+    CHECK( you.get_memorized_tile( a ).get_ter_id() == memory_a );
+    CHECK( you.get_memorized_tile( b ).get_ter_id() == memory_b );
+    CHECK( std::none_of( scene.sprites.begin(), scene.sprites.end(), [&]( const auto &sprite ) {
+        return sprite.position == a || sprite.position == b;
+    } ) );
+}
