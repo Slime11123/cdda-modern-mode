@@ -141,9 +141,9 @@ void wire_lattice( Sink &sink, float ax, float az, float bx, float bz, float bot
     }
     const float dx = ( bx - ax ) / width;
     const float dz = ( bz - az ) / width;
-    constexpr int columns = 8;
-    constexpr int rows = 13;
-    constexpr float thickness = .006f;
+    const int columns = std::max( 1, static_cast<int>( std::lround( width / .125f ) ) );
+    const int rows = std::max( 1, static_cast<int>( std::lround( ( top - bottom ) / .135f ) ) );
+    constexpr float thickness = .004f;
     const auto point = [&]( float u, float y ) {
         sink.point( ax + dx * u, y, az + dz * u );
     };

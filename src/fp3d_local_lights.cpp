@@ -25,6 +25,15 @@ bool contains( const std::string &id, const char *word )
 std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
                               fp3d_camera::offset camera )
 {
+    return select( scene, camera, max_active );
+}
+
+std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
+                              fp3d_camera::offset camera, std::size_t budget )
+{
+    if( budget == 0 ) {
+        return {};
+    }
     std::vector<ranked_light> ranked;
     ranked.reserve( scene.lights.size() );
     for( const auto &source : scene.lights ) {
@@ -79,9 +88,9 @@ std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
     std::sort( ranked.begin(), ranked.end(), []( const ranked_light &a,
     const ranked_light &b ) { return a.score > b.score; } );
     std::vector<selected> chosen;
-    const int n = std::min( static_cast<int>( ranked.size() ), max_active );
+    const auto n = std::min( ranked.size(), budget );
     chosen.reserve( n );
-    for( int i = 0; i < n; ++i ) {
+    for( std::size_t i = 0; i < n; ++i ) {
         chosen.push_back( ranked[i].value );
     }
     return chosen;

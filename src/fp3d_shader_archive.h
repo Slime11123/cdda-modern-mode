@@ -3,7 +3,9 @@
 #define CATA_SRC_FP3D_SHADER_ARCHIVE_H
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <filesystem>
+#include <map>
 #include <string>
+#include <vector>
 namespace fp3d_shader_archive
 {
 // ZIP32 only: deflate/stored and CRC-verified, no extraction to disk.
@@ -11,6 +13,10 @@ namespace fp3d_shader_archive
 bool read_post( const std::filesystem::path &file, std::string &source );
 bool read_mc_entry( const std::filesystem::path &file,
                     const std::string &entry, std::string &source );
+bool list_entries( const std::filesystem::path &file, std::vector<std::string> &entries );
+// Each key is an exact ZIP path. On success all values contain verified text.
+bool read_text_entries( const std::filesystem::path &file, std::map<std::string, std::string> &entries,
+                        std::string &failed_entry );
 } // namespace fp3d_shader_archive
 #endif
 #endif

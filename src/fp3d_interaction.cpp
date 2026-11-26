@@ -99,7 +99,8 @@ class approach_activity : public activity_actor
             act.set_to_null();
             arrived_2d_action.reset();
             if( !who.is_avatar() || who.pos_abs() != arrival ||
-                fp3d_compositor::controls() != fp3d_input::mode::modern_2d ) {
+                ( fp3d_compositor::controls() != fp3d_input::mode::modern_2d &&
+                  !fp3d_compositor::overhead() ) ) {
                 return;
             }
             avatar &you = get_avatar();
@@ -621,6 +622,20 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
     }
     if( items ) { result.push_back( { "拾取物品", "查看并拾取这格物品。", ACTION_PICKUP, nullptr,
                                      here.accessible_items( p ) } ); }
+    bool pulpable = false;
+    if( !creature && items && !here.has_flag( ter_furn_flag::TFLAG_SEALED, p ) &&
+        here.field_at( p ).displayed_field_type()->display_items ) {
+        bool corpse = false;
+        for( const item &object : here.maptile_at( p ).get_items() ) {
+            if( object.is_corpse() ) {
+                corpse = true;
+                pulpable |= object.can_revive();
+            }
+        }
+        if( corpse ) {
+            result.push_back( { "屠宰", "走近并按原版规则处理这格的尸体。", ACTION_BUTCHER, nullptr } );
+        }
+    }
     if( person ) {
         result.push_back( { "交谈", "走近并与点中的人物交谈。", ACTION_CHAT, nullptr } );
         if( npc_orders::can_issue( you, *person, npc_orders::kind::guard ) ) {
@@ -634,7 +649,9 @@ std::vector<fp3d_quick_menu::entry> context_2d_entries( const tripoint_bub_ms &p
         result.push_back( { "近战攻击", "走近并攻击点中的目标；非敌对目标仍需确认。", ACTION_NULL, "FP3D_ATTACK" } );
     } else {
         result.push_back( { "查看 / 搜索", "走近并检查这个地块、家具或车辆。", ACTION_EXAMINE_AND_PICKUP, nullptr } );
-        if( here.is_bashable( p ) ) {
+        if( pulpable ) {
+            result.push_back( { "砸碎尸体", "走近并按原版规则砸碎可复活的尸体。", ACTION_SMASH, "FP3D_PULP" } );
+        } else if( here.is_bashable( p ) ) {
             result.push_back( { "砸毁", "走近并按原版规则砸击这个物体。", ACTION_SMASH, nullptr, !self } );
         }
     }

@@ -1,4 +1,5 @@
 #include "fp3d_snapshot.h"
+#include "fp3d_scene.h"
 #include "fp3d_interaction.h"
 #include "fp3d_regression.h"
 
@@ -51,11 +52,36 @@
 
 namespace fp3d_snapshot
 {
+std::optional<water_traits> terrain_water( const ter_t &definition )
+{
+    using flag = ter_furn_flag;
+    if( !definition.has_flag( flag::TFLAG_SWIMMABLE ) ) {
+        return std::nullopt;
+    }
+    water_traits water;
+    if( definition.has_flag( flag::TFLAG_DEEP_WATER ) ) {
+        water.depth = water_depth::deep;
+    } else if( definition.has_flag( flag::TFLAG_SHALLOW_WATER ) ) {
+        water.depth = water_depth::shallow;
+    }
+    water.current = definition.has_flag( flag::TFLAG_CURRENT );
+    water.salt = definition.has_flag( flag::TFLAG_SALT_WATER ) ||
+                 definition.liquid_source_item_id.str() == "salt_water";
+    water.sewage = definition.liquid_source_item_id.str() == "water_sewage";
+    water.submerged = definition.has_flag( flag::TFLAG_WATER_CUBE );
+    return water;
+}
+
 void connect_ground_terrain( scene_snapshot &scene )
 {
     std::unordered_map<tripoint_abs_ms, const cell *> ground;
     for( auto &tile : scene.cells ) {
         tile.ground_connections = -1;
+        if( fp3d_scene::water_surface_offset( tile.terrain ) < 0.f && !tile.exterior_only ) {
+            ground.emplace( tile.position, &tile );
+            tile.ground_connections = 0;
+            continue;
+        }
         if( tile.kind != terrain_kind::floor || !tile.floor_present || tile.is_ramp ) { continue; }
         for( const char *prefix : { "t_grass", "t_dirt", "t_sand", "t_clay", "t_moss", "t_gravel" } ) {
             if( tile.terrain.compare( 0, std::char_traits<char>::length( prefix ), prefix ) == 0 ) {
@@ -69,9 +95,11 @@ void connect_ground_terrain( scene_snapshot &scene )
         tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
     for( auto &tile : scene.cells ) {
         if( tile.ground_connections < 0 ) { continue; }
+        const bool water = fp3d_scene::water_surface_offset( tile.terrain ) < 0.f;
         for( unsigned i = 0; i < dirs.size(); ++i ) {
             const auto neighbour = ground.find( tile.position + dirs[i] );
-            if( neighbour != ground.end() && neighbour->second->terrain == tile.terrain ) {
+            if( neighbour != ground.end() && ( neighbour->second->terrain == tile.terrain ||
+                ( water && fp3d_scene::water_surface_offset( neighbour->second->terrain ) < 0.f ) ) ) {
                 tile.ground_connections |= 1 << i;
             }
         }
@@ -108,15 +136,16 @@ void connect_ground_fields( scene_snapshot &scene )
 void reuse_geometry( scene_snapshot &scene, scene_snapshot *previous )
 {
     const auto equal = []( const cell &a, const cell &b ) {
-        if( std::tie( a.position, a.terrain, a.roof_connections, a.ground_connections, a.kind, a.known,
+        if( !( a.water == b.water ) ||
+            std::tie( a.position, a.terrain, a.roof_connections, a.ground_connections, a.kind, a.known,
                      a.vegetation, a.appliance, a.vegetation_height, a.pane, a.exterior_only,
                      a.ceiling_present, a.cutaway_ceiling, a.glass_ceiling, a.ceiling_surface, a.floor_present,
-                     a.metal_deck_railing, a.faded_tower, a.open_air, a.goes_up, a.goes_down, a.is_ramp,
+                     a.metal_deck_railing, a.open_structure_above, a.open_air, a.goes_up, a.goes_down, a.is_ramp,
                      a.ramp_delta, a.over_avatar_region ) !=
             std::tie( b.position, b.terrain, b.roof_connections, b.ground_connections, b.kind, b.known,
                      b.vegetation, b.appliance, b.vegetation_height, b.pane, b.exterior_only,
                      b.ceiling_present, b.cutaway_ceiling, b.glass_ceiling, b.ceiling_surface, b.floor_present,
-                     b.metal_deck_railing, b.faded_tower, b.open_air, b.goes_up, b.goes_down, b.is_ramp,
+                     b.metal_deck_railing, b.open_structure_above, b.open_air, b.goes_up, b.goes_down, b.is_ramp,
                      b.ramp_delta, b.over_avatar_region ) ||
             bool( a.furniture ) != bool( b.furniture ) || bool( a.stairs ) != bool( b.stairs ) ) {
             return false;
@@ -424,6 +453,7 @@ void capture_landscape( scene_snapshot &scene )
 
 float plant_height( const std::string &id )
 {
+    constexpr float hydrangea_height = 1.2f;
     // These native plants do not all carry the FLOWER or SHRUB flag.
     if( id == "f_brambles" ) {
         return 1.2f;
@@ -451,7 +481,7 @@ float plant_height( const std::string &id )
         return 0;
     }
     if( id == "t_grass_long" || id == "t_grass_tall" ) {
-        return .65f;
+        return hydrangea_height;
     }
     const auto height = []( const auto & definition ) {
         if( definition.has_flag( ter_furn_flag::TFLAG_TREE ) ) {
@@ -461,7 +491,7 @@ float plant_height( const std::string &id )
             return 2.2f;
         }
         if( definition.has_flag( ter_furn_flag::TFLAG_SHRUB ) ) {
-            return 1.2f;
+            return hydrangea_height;
         }
         return definition.has_flag( ter_furn_flag::TFLAG_FLOWER ) ? .5f : 0.0f;
     };
@@ -491,7 +521,8 @@ terrain_kind classify( const std::string &id )
         id == "t_fence" || id == "t_privacy_fence" ||
         id == "t_fence_post" || id == "t_screened_porch_wall" ||
         id == "t_concrete_railing" || id == "t_railing" ||
-        id == "t_metal_railing" || id == "t_guardrail" ||
+        id == "t_metal_railing" || id == "t_fence_metal" ||
+        id == "t_glass_railing" || id == "t_guardrail" ||
         id == "t_guardrail_bg_dp" || id == "t_guardrail_hw_air" ) {
         return terrain_kind::fence;
     }
@@ -856,7 +887,15 @@ bool fence_connects( const std::string &a, const std::string &b )
         return starts( id, "t_chainfence" ) ||
                starts( id, "t_chickenwire_fence" ) || is_chain_gate( id );
     };
+    const auto steel = []( const std::string &id ) {
+        return id == "t_fence_metal" || id == "t_metal_railing" || is_metal_gate( id );
+    };
+    const auto picket = []( const std::string &id ) {
+        return id == "t_fence" || is_picket_gate( id );
+    };
     return ( chain( a ) && chain( b ) ) ||
+           ( picket( a ) && picket( b ) ) ||
+           ( steel( a ) && steel( b ) ) ||
            ( starts( a, "t_guardrail" ) && starts( b, "t_guardrail" ) );
 }
 
@@ -864,6 +903,35 @@ bool is_chain_gate( const std::string &id )
 {
     return id == "t_chaingate_c" || id == "t_chaingate_o" || id == "t_chaingate_l" ||
            id == "t_chickenwire_gate_c" || id == "t_chickenwire_gate_o";
+}
+
+std::vector<fp3d_furniture::part> glass_barrier_parts( bool railing,
+        const std::array<bool, 4> &neighbours )
+{
+    const float height = railing ? 1.10f : fp3d_camera::floor_height;
+    const float sill = railing ? .12f : .055f;
+    constexpr float frame = .06f;
+    auto links = neighbours;
+    if( std::none_of( links.begin(), links.end(), []( bool connected ) { return connected; } ) ) {
+        links[1] = links[3] = true;
+    }
+    std::vector<fp3d_furniture::part> parts{ { 0, 0, .085f, .085f, 0, height } };
+    for( unsigned direction = 0; direction < links.size(); ++direction ) {
+        if( !links[direction] ) {
+            continue;
+        }
+        const bool along_x = direction % 2 != 0;
+        const float offset = ( direction == 1 || direction == 2 ) ? .25f : -.25f;
+        const float x = along_x ? offset : 0.f;
+        const float z = along_x ? 0.f : offset;
+        parts.push_back( { x, z, along_x ? .5f : frame, along_x ? frame : .5f,
+                           height - frame, height } );
+        parts.push_back( { x, z, along_x ? .5f : frame, along_x ? frame : .5f,
+                           sill - .04f, sill } );
+        parts.push_back( { x, z, along_x ? .5f : .012f, along_x ? .012f : .5f,
+                           sill, height - frame, false, true } );
+    }
+    return parts;
 }
 
 bool chain_gate_along_x( const std::array<bool, 4> &neighbours )
@@ -897,7 +965,7 @@ std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool 
         // crosswise wall remaining in the closed position.
         frame.push_back( { -.425f, -.03f, .057f, .057f, .18f, 1.87f } );
         frame.push_back( { -.425f, -.74f, .057f, .057f, .18f, 1.87f } );
-        for( const float y : { .20f, .985f, 1.85f } ) {
+        for( const float y : { .20f, 1.85f } ) {
             frame.push_back( { -.425f, -.385f, .056f, .77f, y - .03f, y + .03f } );
         }
         frame.push_back( { -.425f, -.74f, .11f, .085f, .91f, 1.08f } );
@@ -905,7 +973,7 @@ std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool 
         // Rectangular hollow leaf, separate from the two exterior posts.
         frame.push_back( { -.36f, 0, .055f, .055f, .16f, 1.89f } );
         frame.push_back( { .36f, 0, .055f, .055f, .16f, 1.89f } );
-        for( const float y : { .16f, .98f, 1.87f } ) {
+        for( const float y : { .16f, 1.87f } ) {
             frame.push_back( { 0, 0, .76f, .052f, y - .026f, y + .026f } );
         }
         frame.push_back( { .365f, .035f, .095f, .085f, .91f, 1.07f } ); // latch
@@ -925,6 +993,53 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
         const std::array<bool, 4> &neighbours )
 {
     using part = fp3d_furniture::part;
+    if( is_picket_gate( id ) ) {
+        const bool open = id == "t_fencegate_o";
+        std::vector<part> parts{
+            { -.455f, 0.f, .09f, .10f, 0.f, 1.13f },
+            { .455f, 0.f, .09f, .10f, 0.f, 1.13f }
+        };
+        for( const float y : { .32f, .76f } ) {
+            parts.push_back( { open ? -.40f : 0.f, open ? -.39f : 0.f,
+                               open ? .045f : .78f, open ? .78f : .045f, y, y + .084f } );
+        }
+        for( const float offset : { -.31f, -.155f, 0.f, .155f, .31f } ) {
+            const float x = open ? -.40f : offset;
+            const float z = open ? offset - .39f : 0.f;
+            parts.push_back( { x, z, open ? .05f : .105f, open ? .105f : .05f, .06f, 1.02f } );
+            parts.push_back( { x, z, open ? .05f : .064f, open ? .064f : .05f, 1.02f, 1.08f } );
+        }
+        if( !chain_gate_along_x( neighbours ) ) {
+            for( auto &piece : parts ) {
+                piece = fp3d_furniture::rotated( piece, 1 );
+            }
+        }
+        return parts;
+    }
+    if( is_metal_gate( id ) ) {
+        constexpr float height = 1.68f;
+        const bool open = id == "t_gate_metal_o";
+        const bool along_x = chain_gate_along_x( neighbours );
+        std::vector<part> parts{
+            { -.46f, 0, .075f, .075f, 0, height },
+            { .46f, 0, .075f, .075f, 0, height }
+        };
+        for( const float y : { .15f, height - .08f } ) {
+            parts.push_back( { open ? -.42f : 0.f, open ? -.42f : 0.f,
+                               open ? .04f : .84f, open ? .84f : .04f, y, y + .04f } );
+        }
+        for( int bar = 0; bar <= 6; ++bar ) {
+            const float offset = .14f * bar;
+            parts.push_back( { open ? -.42f : offset - .42f, open ? -offset : 0.f,
+                               .028f, .028f, .15f, height - .04f } );
+        }
+        if( !along_x ) {
+            for( auto &piece : parts ) {
+                piece = fp3d_furniture::rotated( piece, 1 );
+            }
+        }
+        return parts;
+    }
     if( id == "t_radio_tower" ) {
         // Thin targeting proxies follow the open 3D steel frame. Never make
         // the entire transparent tile an invisible solid ray-hit box.
@@ -982,7 +1097,8 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
     const bool privacy = id == "t_privacy_fence";
     const bool concrete = id == "t_concrete_railing";
     const bool wood = id == "t_railing";
-    const bool steel = id == "t_metal_railing";
+    const bool metal_fence = id == "t_fence_metal";
+    const bool steel = id == "t_metal_railing" || metal_fence;
     const bool road = id.compare( 0, 11, "t_guardrail" ) == 0;
     if( !picket && !privacy && !concrete && !wood && !steel && !road ) {
         return {};
@@ -990,14 +1106,20 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
     // The UndeadPeople t_fence is a simple low white picket fence, not a
     // wrought-iron railing.  Leave space between the individual uprights.
     const float height = privacy ? 2.16f : picket ? 1.16f :
-                         concrete ? 1.06f : road ? .92f : 1.11f;
-    const float thickness = concrete ? .14f : road ? .11f : picket ? .073f : .095f;
+                         concrete ? 1.06f : road ? .92f : metal_fence ? 1.68f : 1.11f;
+    const float thickness = concrete ? .14f : road ? .11f : picket ? .073f :
+                            steel ? .043f : .095f;
     std::vector<part> out;
     out.reserve( privacy || picket ? 36 : 14 );
     // Each tile contributes one central post and half-rails connecting to
     // neighbours. A standalone segment is a full E-W tile, not one point.
-    out.push_back( { 0, 0, thickness + .09f, thickness + .09f, 0, height } );
-    out.push_back( { 0, 0, thickness + .15f, thickness + .15f, height - .08f, height } );
+    const float post = picket ? .105f : thickness + ( steel ? .023f : .09f );
+    out.push_back( { 0, 0, post, post, 0, height } );
+    const float cap = picket ? .067f : post + ( steel ? .022f : .06f );
+    if( picket ) {
+        out.back().top -= .08f;
+    }
+    out.push_back( { 0, 0, cap, cap, height - .08f, height } );
     auto links = neighbours;
     if( std::none_of( links.begin(), links.end(), []( bool linked ) { return linked; } ) ) {
         links[1] = links[3] = true;
@@ -1030,8 +1152,10 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
                 const float at = sign * ( .17f + n * .20f );
                 const float px = east_west ? at : 0.f;
                 const float pz = east_west ? 0.f : at;
-                out.push_back( { px, pz, .062f, .062f, .065f, height - .07f } );
-                out.push_back( { px, pz, .048f, .048f, height - .07f, height } );
+                out.push_back( { px, pz, east_west ? .093f : .05f,
+                                 east_west ? .05f : .093f, .065f, height - .09f } );
+                out.push_back( { px, pz, east_west ? .055f : .05f,
+                                 east_west ? .05f : .055f, height - .09f, height - .035f } );
             }
             out.push_back( { x, z, along_x, along_z, .35f, .42f } );
             out.push_back( { x, z, along_x, along_z, .80f, .88f } );
@@ -1042,6 +1166,14 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
             out.push_back( { x, z, along_x, along_z, .79f, .97f } );
         } else if( road ) {
             out.push_back( { x, z, along_x, along_z, .56f, .76f } );
+        } else if( steel ) {
+            out.push_back( { x, z, along_x, along_z, height - .045f, height } );
+            out.push_back( { x, z, along_x, along_z, .14f, .175f } );
+            for( const float distance : { .13f, .25f, .38f } ) {
+                const float at = sign * distance;
+                out.push_back( { east_west ? at : 0.f, east_west ? 0.f : at,
+                                 .028f, .028f, .175f, height - .045f } );
+            }
         } else {
             // Wooden or wrought-metal railings are spaced open with upper
             // and lower bars instead of a solid billboard.
@@ -1253,6 +1385,109 @@ bool update_pointer_room( scene_snapshot &scene, const avatar &you, const map &h
     return changed;
 }
 
+// The terrain model can be open even when native movement treats the tile as
+// a solid obstacle. Follow looks_like for modded variants of these models.
+static bool open_support( const ter_t &terrain )
+{
+    const auto is_support = []( const std::string &id ) {
+        return id == "t_radio_tower" || id == "t_column" || id == "t_pillar" ||
+               id == "t_column_halfway" || id == "t_little_column" ||
+               ( classify( id ) == terrain_kind::fence && id != "t_privacy_fence" ) ||
+               is_chain_gate( id );
+    };
+    return terrain.has_flag( "FP3D_OPEN_SUPPORT" ) || is_support( terrain.id.str() ) ||
+           ( !terrain.looks_like.empty() && is_support( terrain.looks_like ) ) ||
+           ( terrain.has_flag( ter_furn_flag::TFLAG_THIN_OBSTACLE ) &&
+             terrain.has_flag( ter_furn_flag::TFLAG_TRANSPARENT ) &&
+             !terrain.has_flag( ter_furn_flag::TFLAG_WINDOW ) );
+}
+
+static bool enclosure( const map &here, const tripoint_bub_ms &p )
+{
+    const auto &terrain = here.ter( p ).obj();
+    const auto &furn = here.furn( p ).obj();
+    const auto kind = classify( terrain.id.str() );
+    const bool open_furniture = furn.has_flag( "FP3D_OPEN_SUPPORT" ) ||
+                                ( furn.has_flag( ter_furn_flag::TFLAG_THIN_OBSTACLE ) &&
+                                  furn.has_flag( ter_furn_flag::TFLAG_TRANSPARENT ) );
+    return ( !open_furniture && ( furn.has_flag( ter_furn_flag::TFLAG_WALL ) ||
+                                  furn.has_flag( ter_furn_flag::TFLAG_DOOR ) ||
+                                  furn.has_flag( ter_furn_flag::TFLAG_WINDOW ) ) ) ||
+           ( !open_support( terrain ) && ( kind == terrain_kind::wall ||
+             kind == terrain_kind::window || kind == terrain_kind::glass ||
+             kind == terrain_kind::open_door || kind == terrain_kind::closed_door ||
+             kind == terrain_kind::damaged_door || kind == terrain_kind::fence ) );
+}
+
+static std::unordered_set<tripoint_bub_ms> open_structure_tiles( const map &here,
+        const tripoint_bub_ms &player, int max_z )
+{
+    std::unordered_set<tripoint_bub_ms> result;
+    if( player.z() >= max_z || !here.inbounds( player ) ||
+        !here.has_floor( player ) || enclosure( here, player ) ) {
+        return result;
+    }
+    const auto within = [&]( const tripoint_bub_ms &p ) {
+        return here.inbounds( p ) && std::abs( p.x() - player.x() ) <= SEEX * 2 &&
+               std::abs( p.y() - player.y() ) <= SEEY * 2;
+    };
+    const std::array<tripoint_rel_ms, 4> directions{ tripoint_rel_ms::north,
+        tripoint_rel_ms::east, tripoint_rel_ms::south, tripoint_rel_ms::west
+    };
+    const auto has_cover = [&]( const tripoint_bub_ms &p ) {
+        const auto above = p + tripoint_rel_ms::above;
+        return here.inbounds( above ) && here.has_floor( above ) &&
+               !here.is_open_air( above ) && !enclosure( here, above );
+    };
+    std::vector<tripoint_bub_ms> seeds{ player };
+    for( int z = player.z(); z < max_z && !seeds.empty(); ++z ) {
+        std::unordered_set<tripoint_bub_ms> visited;
+        std::vector<tripoint_bub_ms> next_storey;
+        for( const auto &seed : seeds ) {
+            if( !has_cover( seed ) || enclosure( here, seed ) || !visited.insert( seed ).second ) {
+                continue;
+            }
+            std::vector<tripoint_bub_ms> footprint{ seed };
+            std::unordered_set<tripoint_bub_ms> exterior;
+            for( size_t i = 0; i < footprint.size(); ++i ) {
+                const auto p = footprint[i];
+                for( const auto &dir : directions ) {
+                    const auto next = p + dir;
+                    if( !within( next ) || visited.count( next ) || enclosure( here, next ) ) {
+                        continue;
+                    }
+                    if( has_cover( next ) ) {
+                        visited.insert( next );
+                        footprint.push_back( next );
+                    } else {
+                        const auto &terrain = here.ter( next ).obj();
+                        const auto &furniture = here.furn( next ).obj();
+                        // The outside cache pads INDOORS tiles by one cell.
+                        // A roofed porch can open directly onto that halo.
+                        if( !terrain.has_flag( ter_furn_flag::TFLAG_INDOORS ) &&
+                            !furniture.has_flag( ter_furn_flag::TFLAG_INDOORS ) &&
+                            ( terrain.movecost > 0 || here.is_open_air( next ) ) ) {
+                            exterior.insert( next );
+                        }
+                    }
+                }
+            }
+            // A connected footprint needs multiple real openings to uncovered
+            // exterior. A doorway, skylight or missing wall tile is insufficient.
+            if( footprint.size() < 2 || exterior.size() < 2 ) {
+                continue;
+            }
+            for( const auto &p : footprint ) {
+                const auto above = p + tripoint_rel_ms::above;
+                result.insert( above );
+                next_storey.push_back( above );
+            }
+        }
+        seeds = std::move( next_storey );
+    }
+    return result;
+}
+
 static scene_snapshot capture_impl( avatar &you, const map &here, int above, int below,
                                     bool cut_overhead, bool camera_geometry, scene_snapshot *previous = nullptr,
                                     bool reveal_visible_interiors = false )
@@ -1266,6 +1501,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     result.camera_cutaway = cut_overhead && camera_geometry;
     result.origin = you.pos_abs();
     result.player_crouching = you.is_crouching();
+    result.player_underwater = you.is_underwater();
     // The player's discrete map cell is for CDDA collision/interactions,
     // not necessarily the centre of a rotating 3D passenger seat. Publish
     // the exact native mount transformed by the same rigid vehicle root
@@ -1386,10 +1622,18 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 enqueue( p + dir );
             }
         }
-        if( !has_lattice ) {
+        if( !has_lattice || enclosure( here, player ) ||
+            std::none_of( pending.begin(), pending.end(), [&]( const tripoint_bub_ms &p ) {
+                const auto &id = here.ter( p ).id().str();
+                return p.z() > player.z() &&
+                       ( id == "t_metal_floor_no_roof" || id == "t_floor_metal_gangway" );
+            } ) ) {
             tower.clear();
         }
     }
+    const auto open_structure = cut_overhead && camera_geometry ?
+                                open_structure_tiles( here, player, result.max_z ) :
+                                std::unordered_set<tripoint_bub_ms>{};
     std::vector<unsigned char> perception( ( result.max_z - result.min_z + 1 ) * side * side );
     const auto index = [&]( const tripoint_bub_ms & p ) {
         return ( ( p.z() - result.min_z ) * side + p.y() - first_y ) * side + p.x() - first_x;
@@ -1765,6 +2009,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                 }
                 const bool region_column = over_avatar_region( p );
                 const bool upper_tower = !tower.empty() && p.z() > player.z() && tower.count( p );
+                const bool open_upper = upper_tower || ( !open_structure.empty() && open_structure.count( p ) );
                 // P3: the overhead camera looks down through the avatar's own
                 // roof. Dropping that geometry IS the cut: this path never adds
                 // a cell, never reads an unseen storey and never reveals an
@@ -1816,6 +2061,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     if( entry.second ) {
                         cell &base = entry.first->second;
                         base.terrain = terrain.id().str();
+                        base.water = terrain_water( definition );
                         base.kind = classify( base.terrain );
                         base.floor_present = !definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR_WATER ) &&
                                              !furn_definition.has_flag( ter_furn_flag::TFLAG_NO_FLOOR ) &&
@@ -1865,6 +2111,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     const auto overhead = p + tripoint_rel_ms::above;
                     const bool cutaway_ceiling = cut_overhead && region_column &&
                         p.z() == player.z() && here.inbounds( overhead ) && !tower.count( overhead ) &&
+                        !open_structure.count( overhead ) &&
                         here.has_floor( overhead ) &&
                         here.ter( overhead ).id().str() != "t_radio_tower" &&
                         !is_glass_roof( here.ter( overhead ).id().str() );
@@ -1911,7 +2158,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                             old->vegetation == base.vegetation && old->vegetation_height == base.vegetation_height &&
                             old->pane == base.pane && old->floor_present == floor && !old->ceiling_present &&
                             old->cutaway_ceiling == cutaway_ceiling &&
-                            old->faded_tower == upper_tower &&
+                            old->open_structure_above == open_upper &&
                             !old->open_air && old->metal_deck_railing == metal_railing &&
                             old->over_avatar_region == region_column && old->appliance == *appliance &&
                             old->goes_up == base.goes_up && old->goes_down == base.goes_down &&
@@ -1938,7 +2185,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     tile.cutaway_ceiling = cutaway_ceiling;
                     tile.over_avatar_region = region_column;
                     tile.metal_deck_railing = metal_railing;
-                    tile.faded_tower = upper_tower;
+                    tile.open_structure_above = open_upper;
                     tile.ground_fields = std::move( ground_fields );
                     tile.furniture = *projected_furniture;
                     tile.appliance = *appliance;
@@ -2128,6 +2375,7 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
                     continue;
                 }
                 const ter_t &definition = terrain.obj();
+                tile.water = terrain_water( definition );
                 tile.open_air = ( visible ||
                                   tile.exterior_only ) ? here.is_open_air( p ) : tile.terrain == "t_open_air";
                 tile.floor_present = ( visible || tile.exterior_only ) ? here.has_floor( p ) :

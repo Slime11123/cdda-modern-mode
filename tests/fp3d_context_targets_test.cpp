@@ -214,6 +214,51 @@ TEST_CASE( "fp3d_hidden_npc_does_not_leak_through_terrain_interaction_hints",
     CHECK( calendar::turn == clock );
     CHECK( you.get_moves() == moves );
 }
+TEST_CASE( "fp3d_tile_dropdown_handles_corpses_in_item_stacks", "[fp3d][context_2d]" )
+{
+    clear_avatar();
+    clear_map();
+    clear_npcs();
+    set_time_to_day();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto p = you.pos_bub( here ) + tripoint_rel_ms::north;
+    here.ter_set( p, ter_str_id( "t_floor" ) );
+    item corpse = item::make_corpse( mtype_id( "mon_zombie" ), calendar::turn );
+    REQUIRE( corpse.can_revive() );
+    here.add_item_or_charges( p, corpse );
+    here.add_item_or_charges( p, item( itype_id( "rock" ) ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto choices = fp3d_interaction::context_2d_entries( p, you, here );
+    const auto butcher = std::find_if( choices.begin(), choices.end(), []( const auto &choice ) {
+        return choice.action == ACTION_BUTCHER && choice.enabled;
+    } );
+    REQUIRE( butcher != choices.end() );
+    const auto pulp = std::find_if( choices.begin(), choices.end(), []( const auto &choice ) {
+        return choice.action == ACTION_SMASH && std::string( choice.label ) == "砸碎尸体";
+    } );
+    REQUIRE( pulp != choices.end() );
+    const auto intent = fp3d_interaction::resolve_2d_choice( *butcher, p, you, here );
+    REQUIRE( intent );
+    CHECK( intent->action == ACTION_BUTCHER );
+    CHECK( intent->position == p );
+
+    here.i_clear( p );
+    CHECK_FALSE( fp3d_interaction::resolve_2d_choice( *butcher, p, you, here ) );
+    corpse.set_flag( flag_id( "PULPED" ) );
+    REQUIRE_FALSE( corpse.can_revive() );
+    here.add_item_or_charges( p, corpse );
+    const auto pulped = fp3d_interaction::context_2d_entries( p, you, here );
+    CHECK_FALSE( fp3d_interaction::resolve_2d_choice( *pulp, p, you, here ) );
+    CHECK( std::any_of( pulped.begin(), pulped.end(), []( const auto &choice ) {
+        return choice.action == ACTION_BUTCHER && choice.enabled;
+    } ) );
+    CHECK_FALSE( std::any_of( pulped.begin(), pulped.end(), []( const auto &choice ) {
+        return choice.action == ACTION_SMASH && std::string( choice.label ) == "砸碎尸体";
+    } ) );
+}
+
 TEST_CASE( "modern_2d_context_options_follow_target_and_revalidate", "[fp3d][context_2d]" )
 {
     clear_avatar();

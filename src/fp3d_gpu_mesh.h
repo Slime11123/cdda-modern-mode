@@ -79,10 +79,21 @@ class indexed_mesh
             return draw_range( pass, 0, count_, instance_count, first_instance );
         }
 
+        bool ready() const {
+            return uploaded_ && count_ != 0;
+        }
+
+        Uint32 index_count() const {
+            return count_;
+        }
+
+        bool can_draw_range( Uint32 first, Uint32 count, Uint32 instances ) const {
+            return ready() && count && instances && first <= count_ && count <= count_ - first;
+        }
+
         bool draw_range( SDL_GPURenderPass *pass, Uint32 first_index, Uint32 index_count,
                          Uint32 instance_count, Uint32 first_instance ) const {
-            if( !pass || !uploaded_ || !instance_count || !index_count ||
-                first_index > count_ || index_count > count_ - first_index ) {
+            if( !pass || !can_draw_range( first_index, index_count, instance_count ) ) {
                 return SDL_SetError( "FP3D mesh not ready for indexed draw" );
             }
             bind_buffers( pass );
@@ -136,6 +147,39 @@ class indexed_mesh
         Uint32 count_ = 0;
         bool uploaded_ = false;
         bool retained_ = false;
+};
+
+// Borrow the uploaded GPU mesh and its optional instance stream for a draw.
+struct indexed_draw {
+    const indexed_mesh *mesh;
+    Uint32 first_index;
+    Uint32 index_count;
+    Uint32 first_instance;
+    Uint32 instance_count;
+    SDL_GPUBuffer *instances;
+
+    indexed_draw( const indexed_mesh *mesh, Uint32 first_index, Uint32 index_count,
+                  Uint32 first_instance, Uint32 instance_count, SDL_GPUBuffer *instances ) :
+        mesh( mesh ), first_index( first_index ), index_count( index_count ),
+        first_instance( first_instance ), instance_count( instance_count ), instances( instances ) {}
+
+    indexed_draw( const indexed_mesh *mesh ) : indexed_draw( mesh, 0, mesh ? mesh->index_count() : 0,
+                0, 1, nullptr ) {}
+
+    bool ready() const {
+        return mesh && mesh->can_draw_range( first_index, index_count, instance_count );
+    }
+
+    bool record( SDL_GPURenderPass *pass ) const {
+        if( !pass || !ready() ) {
+            return SDL_SetError( "FP3D indexed draw is not ready" );
+        }
+        if( instances ) {
+            const SDL_GPUBufferBinding binding{ instances, 0 };
+            SDL_BindGPUVertexBuffers( pass, 1, &binding, 1 );
+        }
+        return mesh->draw_range( pass, first_index, index_count, instance_count, first_instance );
+    }
 };
 } // namespace fp3d_gpu
 #endif // CATA_SRC_FP3D_GPU_MESH_H

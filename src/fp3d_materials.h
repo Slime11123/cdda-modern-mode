@@ -65,21 +65,6 @@ const tile_type *resolve_overlay( const tileset &set, bool male, const std::stri
                                   const std::string &variant );
 std::string terrain_key( const fp3d_snapshot::cell &tile );
 std::string sprite_key( const fp3d_snapshot::sprite &image );
-// Treetop terrain is a separate z-level from its parent tree. Map its
-// visual-only crown to a native tree sprite of the selected tileset.
-inline std::string treetop_plant_key( const std::string &terrain )
-{
-    if( terrain == "t_treetop_dead" ) {
-        return "$plant:t_tree_dead";
-    }
-    if( terrain == "t_treetop_evergreen" ) {
-        return "$plant:t_tree_pine";
-    }
-    if( terrain == "t_treetop_giant_fern" ) {
-        return "$plant:t_mega_fern";
-    }
-    return "$plant:t_tree";
-}
 // Native vpart_id plus cosmetic variant; independent of world orientation.
 std::string vehicle_key( const fp3d_vehicle::part_view &part );
 std::string ground_field_key( const fp3d_snapshot::ground_field &field );
@@ -116,6 +101,7 @@ bool bind();
 // until GPU fences retire; never use the handle after a revision/reset.
 SDL_Texture *gpu_colour_atlas( SDL_Renderer *renderer );
 std::optional<uv_rect> lookup_gpu( const std::string &id );
+std::optional<uv_rect> picket_wood_gpu();
 void unbind();
 std::optional<uv_rect> lookup( const std::string &id );
 // Same UVs as colour atlas, usable while the auxiliary shader owns GL textures.

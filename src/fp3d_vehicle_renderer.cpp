@@ -1341,6 +1341,90 @@ bool emit_bicycle_part( const vehicle_view &v, const part_view &part, const Whee
 }
 
 
+bool is_motorcycle( const vehicle_view &v )
+{
+    // Use installed parts so saved and player-built bikes use the same model.
+    // Sidecars and enclosed tandem cars have parts outside the centerline.
+    return std::any_of( v.parts.begin(), v.parts.end(), []( const part_view &p ) {
+        return ( p.id == "saddle" && p.variant == "motor" ) ||
+               ( p.kind == role::wheel && p.id.find( "wheel_motorbike" ) == 0 );
+    } ) && std::all_of( v.parts.begin(), v.parts.end(), [&]( const part_view &p ) {
+        return p.mount_y == v.parts.front().mount_y && p.id != "foot_pedals" &&
+               p.kind != role::roof;
+    } );
+}
+
+template<typename Beam, typename Box>
+bool emit_motorcycle_part( const vehicle_view &v, const part_view &part,
+                           const Beam &beam, const Box &box )
+{
+    const float x = float( part.mount_x - v.pivot_x );
+    const float z = float( part.mount_y - v.pivot_y );
+    const float condition = part.broken ? .52f : .60f + .40f * std::clamp( part.health, 0.f, 1.f );
+    const color3 red{ .64f * condition, .095f * condition, .07f * condition };
+    const color3 steel{ .53f * condition, .55f * condition, .57f * condition };
+    const color3 frame{ .17f * condition, .18f * condition, .19f * condition };
+    const color3 rubber{ .075f, .08f, .09f };
+    if( part.kind == role::frame ) {
+        box( x, z, 1.f, .12f, .36f, .44f, frame );
+    } else if( part.id == "wheel_mount_light_steerable" ) {
+        for( float side : { -.135f, .135f } ) {
+            beam( {x, .35f, z + side}, {x - .43f, 1.02f, z + side}, .055f, steel );
+        }
+        box( x - .42f, z, .15f, .32f, .98f, 1.05f, frame );
+        beam( {x - .43f, 1.02f, z}, {x - .52f, 1.19f, z}, .07f, steel );
+        beam( {x - .52f, 1.19f, z - .32f}, {x - .52f, 1.19f, z + .32f}, .045f, steel );
+        for( float side : { -.31f, .31f } ) {
+            box( x - .52f, z + side, .065f, .16f, 1.16f, 1.22f, rubber );
+        }
+        box( x + .03f, z, .55f, .24f, .76f, .81f, red );
+    } else if( part.id == "wheel_mount_light" ) {
+        for( float side : { -.14f, .14f } ) {
+            beam( {x, .35f, z + side}, {x + .54f, .48f, z + side}, .067f, steel );
+        }
+        beam( {x + .20f, .42f, z}, {x + .49f, .83f, z}, .085f, frame );
+        box( x + .14f, z, .78f, .26f, .81f, .89f, red );
+    } else if( part.id == "saddle" ) {
+        beam( {x - .43f, .86f, z}, {x + .39f, .91f, z}, .10f, frame );
+        box( x - .23f, z, .54f, .31f, .87f, .98f, rubber );
+        box( x + .09f, z, .27f, .24f, .90f, .98f, rubber );
+        for( float side : { -.24f, .24f } ) {
+            box( x - .13f, z + side, .14f, .19f, .42f, .47f, steel );
+        }
+    } else if( part.id == "tank_small" ) {
+        box( x + .38f, z, .53f, .35f, .69f, .96f, red );
+        box( x + .40f, z, .40f, .29f, .95f, 1.02f, red );
+        box( x + .46f, z, .105f, .105f, 1.02f, 1.045f, steel );
+    } else if( part.kind == role::engine ) {
+        box( x + .13f, z, .47f, .36f, .28f, .52f, frame );
+        box( x + .20f, z, .27f, .28f, .50f, .72f, steel );
+        for( float height : { .53f, .59f, .65f } ) {
+            box( x + .20f, z, .31f, .34f, height, height + .025f, steel );
+        }
+    } else if( part.id == "muffler" ) {
+        beam( {x + 1.02f, .39f, z + .20f}, {x + .38f, .63f, z + .20f}, .057f, steel );
+        box( x + .10f, z + .20f, .59f, .13f, .58f, .70f, steel );
+    } else if( part.id == "motorcycle_headlight" ) {
+        const bool on_fork = std::any_of( v.parts.begin(), v.parts.end(), [&]( const part_view &p ) {
+            return p.mount_x == part.mount_x && p.id == "wheel_mount_light_steerable";
+        } );
+        const float lens_x = x + ( on_fork ? -.27f : .73f );
+        box( lens_x, z, .19f, .24f, .91f, 1.09f, frame );
+        box( lens_x + .10f, z, .035f, .19f, .94f, 1.06f,
+             part.broken ? frame : color3{ .93f, .87f, .67f } );
+    } else if( part.id == "motorcycle_kickstand" ) {
+        beam( {x - .26f, .38f, z - .11f}, {x - .59f, .29f, z - .22f}, .045f, steel );
+    } else if( part.id == "box" ) {
+        box( x + .10f, z, .30f, .32f, .89f, 1.07f, frame );
+    } else {
+        // These small parts fit within the frame or controls assembly.
+        return part.id == "controls" || part.id == "controls_electronic" ||
+               part.id == "horn_car" || part.id == "vehicle_alarm" ||
+               part.id == "alternator_motorbike" || part.id.find( "battery_motorbike" ) == 0;
+    }
+    return true;
+}
+
 struct wheel_spec {
     float lateral_offset;
     bool narrow;
@@ -1696,6 +1780,7 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
         const auto profile = build_shell( v );
         const silhouette shape = build_silhouette( v, profile );
         const bool connected_shell = shape.usable;
+        const bool motorcycle = !connected_shell && is_motorcycle( v );
         shell_profile modular = profile;
         modular.enclosed = false;
         modular.centerline_motorcycle_cabin = false;
@@ -1745,6 +1830,10 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
                 continue;
             }
             const auto before = mesh.vertices.size();
+            if( motorcycle && emit_motorcycle_part( v, part, bike_beam, emit ) ) {
+                counts.modular_parts += mesh.vertices.size() != before;
+                continue;
+            }
             if( !connected_shell && modular.pedal_cycle &&
                 emit_bicycle_part( v, part, bike_wheel, bike_beam, emit ) ) {
                 counts.modular_parts += mesh.vertices.size() != before;
@@ -1809,7 +1898,7 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
             const auto spec = wheel_placement( v, part, profile );
             const auto uv = fp3d_materials::lookup_gpu( fp3d_materials::vehicle_key( part ) );
             fp3d_geometry::vehicle_wheel( sink, part.mount_x - v.pivot_x,
-                                          part.mount_y - v.pivot_y + spec.lateral_offset,
+                                          part.mount_y - v.pivot_y + ( motorcycle ? 0.f : spec.lateral_offset ),
                                           part.broken, spec.narrow, uv );
             ++counts.wheels;
         }

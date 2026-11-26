@@ -40,7 +40,8 @@ V main(float3 pos : TEXCOORD0, float2 uv : TEXCOORD1,
     o.color = color * tint;
     o.ambient_color = o.color.rgb;
     float diffuse = max(0.0, dot(normal, light_direction_ambient.xyz)) * direct_and_padding.x;
-    if ((offset.w >= -1.0 && offset.w <= 1.0) || offset.w == -3.0) {
+    if ((offset.w >= -1.0 && offset.w <= 1.0) || offset.w == -3.0 ||
+        offset.w == -3.5 || offset.w == 1.5) {
         o.ambient_color = saturate(o.color.rgb * light_direction_ambient.w);
         o.color.rgb = saturate(o.color.rgb * (light_direction_ambient.w + diffuse));
     }
@@ -67,6 +68,11 @@ float4 material_color(float2 uv, float4 color, float mode) {
     }
     if (mode == 4.0)
         return float4(1, 1, 1, 1);
+    if (mode == -3.5) {
+        float4 texel = atlas.Sample(atlas_sampler, uv);
+        if (texel.a <= 0.5) discard;
+        return texel * color;
+    }
     float4 c = (mode > 0.0 ? float4(1, 1, 1, 1) : atlas.Sample(atlas_sampler, uv)) * color;
     if (mode > -2.0) {
         float cutoff = mode < 0.0 ? -mode : (mode > 1.0 ? 0.0 : 0.5);
@@ -309,7 +315,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0,
     float4 c = material_color(uv, color, material_mode);
     if (material_mode == 3.0 || abs(material_mode) == 4.0)
         return c;
-    bool lit = (material_mode >= -1.0 && material_mode <= 1.0) || material_mode == -3.0;
+    bool lit = (material_mode >= -1.0 && material_mode <= 1.0) || material_mode == -3.0 ||
+               material_mode == -3.5 || material_mode == 1.5;
     float shadow = 0.0;
     float3 ambient = 0.0;
     if (lit && sun_direction_strength.w > 0.0) {
@@ -331,7 +338,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0,
 #endif
 )hlsl";
 inline constexpr float lit_texture_without_cutout = -3.f;
-inline constexpr float unknown_background_material = 3.f;
+inline constexpr float faded_texture_material = -3.5f;
+constexpr float faded_solid_material = 1.5f;
+constexpr float unknown_background_material = 3.f;
 inline constexpr float white_model_material = 4.f;
 inline constexpr float white_sprite_material = -4.f;
 inline constexpr float soft_curtain_material = -5.f;

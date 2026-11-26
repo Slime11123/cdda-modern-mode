@@ -22,6 +22,7 @@
 class avatar;
 class item;
 class map;
+struct ter_t;
 
 namespace fp3d_snapshot
 {
@@ -48,6 +49,23 @@ constexpr int below_for_storey( int player_z )
 enum class knowledge { visible, remembered };
 enum class window_pane { glazed, opening, covered };
 
+enum class water_depth : unsigned char { unspecified, shallow, deep };
+
+struct water_traits {
+    water_depth depth = water_depth::unspecified;
+    bool current = false;
+    bool salt = false;
+    bool sewage = false;
+    bool submerged = false;
+
+    bool operator==( const water_traits &other ) const {
+        return depth == other.depth && current == other.current && salt == other.salt &&
+               sewage == other.sewage && submerged == other.submerged;
+    }
+};
+
+std::optional<water_traits> terrain_water( const ter_t &definition );
+
 enum class terrain_kind { floor, wall, closed_door, open_door, window, obstacle, glass, damaged_door, fence, ladder, downspout };
 // Read-only terrain-definition classification, also used by construction ghosts.
 terrain_kind terrain_shape( const std::string &id );
@@ -61,10 +79,20 @@ std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighb
         bool posts_only = false );
 // True when adjacent segments belong to one continuous real-world railing.
 bool fence_connects( const std::string &left, const std::string &right );
+std::vector<fp3d_furniture::part> glass_barrier_parts( bool railing,
+        const std::array<bool, 4> &neighbours );
 // Chain-link fence gates use a dedicated open steel-frame model, including the
 // locked, closed and swung-open native states. Orientation is derived only
 // from already-visible neighbours, not hidden map data.
 bool is_chain_gate( const std::string &id );
+inline bool is_picket_gate( const std::string &id )
+{
+    return id == "t_fencegate_c" || id == "t_fencegate_o";
+}
+inline bool is_metal_gate( const std::string &id )
+{
+    return id == "t_gate_metal_c" || id == "t_gate_metal_o";
+}
 bool chain_gate_along_x( const std::array<bool, 4> &neighbours );
 std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x );
 // Custom solid models shared by scene drawing and pointer targeting. Empty
@@ -117,8 +145,8 @@ struct cell {
     // exposed metal walkway of a radio tower. Determined from real adjacent
     // terrain while the cell is visible, not from partially visible sprites.
     bool metal_deck_railing = false;
-    // Render upper tower structures translucent while preserving physical geometry.
-    bool faded_tower = false;
+    // Upper open structure selected during capture. Camera zoom only changes its presentation.
+    bool open_structure_above = false;
     bool open_air = false;
     bool goes_up = false;
     bool goes_down = false;
@@ -129,6 +157,7 @@ struct cell {
     // lift that region's ceiling and the storeys above it; it never widens
     // perception, never carries contents and must not be read as "known".
     bool over_avatar_region = false;
+    std::optional<water_traits> water{};
 };
 
 enum class sprite_kind { monster, character, item, held_item, field };
@@ -232,6 +261,7 @@ struct scene_snapshot {
     unsigned visible_vehicle_parts = 0;
     std::optional<sprite> held_item;
     bool player_crouching = false;
+    bool player_underwater = false;
     int min_z = 0;
     int max_z = 0;
     double capture_ms = 0;
@@ -255,7 +285,7 @@ inline bool cutaway_column( const scene_snapshot &scene, const cell &tile )
 inline bool hidden_by_cutaway( const scene_snapshot &scene, const cell &tile )
 {
     return scene.camera_cutaway && tile.position.z() > scene.origin.z() &&
-           !tile.faded_tower && cutaway_column( scene, tile );
+           !tile.open_structure_above && cutaway_column( scene, tile );
 }
 
 // Updates only bounded topology and the draw mask; never captures the map or changes cells.

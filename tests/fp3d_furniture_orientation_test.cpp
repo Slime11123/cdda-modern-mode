@@ -30,15 +30,24 @@ TEST_CASE( "fp3d_cabinet_front_faces_open_space_using_owned_walls", "[fp3d][furn
 TEST_CASE( "fp3d_chair_seat_faces_adjacent_table_with_backrest_outside", "[fp3d][furniture]" )
 {
     using fp3d_furniture::kind;
-    const auto &back = fp3d_furniture::parts( kind::chair )[1];
-    for( unsigned direction = 0; direction < 4; ++direction ) {
-        std::array<bool, 4> tables{};
-        tables[direction] = true;
-        const auto facing = fp3d_furniture::facing( kind::chair, {}, tables );
-        CHECK( facing == ( direction + 2 ) % 4 );
-        const auto oriented = fp3d_furniture::rotated( back, facing );
-        const std::array<float, 4> back_offset{ oriented.z, -oriented.x, -oriented.z, oriented.x };
-        CHECK( back_offset[direction] > 0 );
+    const auto folding_table = fp3d_furniture::describe( "f_tourist_table" );
+    REQUIRE( folding_table );
+    CHECK( folding_table->shape == kind::tourist_table );
+    CHECK( fp3d_furniture::chair_table( folding_table ) );
+    const auto camp_chair = fp3d_furniture::describe( "f_camp_chair" );
+    REQUIRE( camp_chair );
+    CHECK( camp_chair->shape == kind::camp_chair );
+    for( const kind shape : { kind::chair, kind::camp_chair } ) {
+        const auto &back = fp3d_furniture::parts( shape )[1];
+        for( unsigned direction = 0; direction < 4; ++direction ) {
+            std::array<bool, 4> tables{};
+            tables[direction] = true;
+            const auto facing = fp3d_furniture::facing( shape, {}, tables );
+            CHECK( facing == ( direction + 2 ) % 4 );
+            const auto oriented = fp3d_furniture::rotated( back, facing );
+            const std::array<float, 4> back_offset{ oriented.z, -oriented.x, -oriented.z, oriented.x };
+            CHECK( back_offset[direction] > 0 );
+        }
     }
 }
 

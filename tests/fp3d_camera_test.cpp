@@ -12,6 +12,26 @@
 #include "player_helpers.h"
 #include "type_id.h"
 
+TEST_CASE( "fp3d_overhead_zoom_smoothly_fades_upper_open_structures",
+           "[fp3d][camera][open_structure]" )
+{
+    using namespace fp3d_camera;
+    const auto opacity = []( float zoom ) {
+        return open_structure_opacity( orbit_max_distance -
+                                       zoom * ( orbit_max_distance - orbit_min_distance ) );
+    };
+    CHECK( opacity( 0 ) == 1.f );
+    CHECK( opacity( .35f ) == Approx( 1.f ) );
+    CHECK( opacity( .55f ) == Approx( .55f ) );
+    CHECK( opacity( .75f ) == Approx( .1f ) );
+    CHECK( opacity( 1.f ) == Approx( .1f ) );
+    CHECK( 1.f - opacity( .36f ) < .002f );
+    CHECK( opacity( .74f ) - .1f < .002f );
+    for( int i = 1; i <= 100; ++i ) {
+        CHECK( opacity( i / 100.f ) <= opacity( ( i - 1 ) / 100.f ) );
+    }
+}
+
 TEST_CASE( "right_camera_hold_and_drag_are_distinct_from_context_clicks",
            "[fp3d][camera][edge_pan]" )
 {

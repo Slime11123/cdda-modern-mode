@@ -9995,7 +9995,13 @@ void game::butcher( std::optional<tripoint_bub_ms> corpse_target )
     const tripoint_bub_ms origin = u.pos_bub( here );
     const tripoint_bub_ms position = corpse_target.value_or( origin );
     if( corpse_target && ( !here.inbounds( position ) || position.z() != origin.z() ||
-                           square_dist( origin, position ) > 1 || !u.sees( here, position ) ||
+                           square_dist( origin, position ) > 1 ||
+#if defined(TILES) && defined(ENABLE_FP3D)
+                           ( !u.sees( here, position ) &&
+                             !fp3d_compositor::overhead_tile_visible( here.get_abs( position ) ) ) ||
+#else
+                           !u.sees( here, position ) ||
+#endif
                            !here.could_see_items( position, u ) ) ) {
         return;
     }

@@ -41,7 +41,7 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_aut_gas_console_o", kind::udp_machine },
         { "f_autodoc", kind::udp_autodoc },
         { "f_ball_mach", kind::udp_ball_machine },
-        { "f_bandsaw", kind::udp_bandsaw },
+        { "f_bandsaw", kind::udp_vertical_bandsaw },
         { "f_barber_chair", kind::udp_chair },
         { "f_barricade_road", kind::udp_barricade },
         { "f_beaded_door", kind::udp_gate },
@@ -86,7 +86,7 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_coffin_c", kind::udp_closed_coffin },
         { "f_coffin_o", kind::udp_open_coffin },
         { "f_compact_ASRG_containment", kind::udp_generator },
-        { "f_console", kind::udp_machine },
+        { "f_console", kind::udp_terminal },
         { "f_console_broken", kind::udp_machine },
         { "f_control_station", kind::udp_machine },
         { "f_counter_gate_c", kind::udp_gate },
@@ -95,7 +95,7 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_curtain_open", kind::udp_curtain },
         { "f_dancing_pole", kind::udp_pole },
         { "f_dialysis", kind::udp_dialysis },
-        { "f_diesel_generator", kind::udp_generator },
+        { "f_diesel_generator", kind::udp_diesel_unit },
         { "f_diesel_tank", kind::udp_fuel_tank },
         { "f_diesel_tank_smashed", kind::udp_fuel_tank },
         { "f_dive_block", kind::udp_diving_platform },
@@ -134,6 +134,7 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_firering", kind::udp_fire_ring },
         { "f_flagpole", kind::udp_flagpole },
         { "f_floor_mattress", kind::udp_mattress },
+        { "f_forge", kind::udp_coal_forge },
         { "f_fog_breather", kind::udp_machine },
         { "f_fvat_empty", kind::udp_keg },
         { "f_fvat_full", kind::udp_keg },
@@ -165,7 +166,7 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_hammock", kind::udp_hammock },
         { "f_hammock_net", kind::udp_hammock },
         { "f_hay", kind::udp_hay_bale },
-        { "f_heavy_lathe", kind::udp_lathe },
+        { "f_heavy_lathe", kind::udp_heavy_lathe },
         { "f_hobo_stove", kind::udp_hobo_stove },
         { "f_home_furnace", kind::udp_home_furnace },
         { "f_hydraulic_press", kind::udp_press },
@@ -246,16 +247,14 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_sand_mound_mid", kind::udp_mound_mid },
         { "f_sand_mound_short", kind::udp_mound_short },
         { "f_sand_mound_tall", kind::udp_mound_tall },
-        { "f_sandbag_half", kind::udp_barricade },
+        { "f_sandbag_half", kind::udp_sandbag_low },
         { "f_sandbag_wall", kind::udp_barricade },
         { "f_satellite", kind::udp_scrap_heap },
         { "f_scrap_antenna", kind::udp_dish },
         { "f_scrap_bridge", kind::udp_bridge_flat },
         { "f_shackle", kind::udp_shackle },
         { "f_shower", kind::udp_shower },
-        { "f_sign", kind::udp_sign },
         { "f_sign_stop", kind::udp_stop_sign },
-        { "f_sign_warning", kind::udp_sign },
         { "f_skin_door", kind::udp_gate },
         { "f_skin_door_o", kind::udp_gate },
         { "f_skin_groundsheet", kind::udp_mat },
@@ -266,7 +265,7 @@ std::optional<kind> catalog_kind( const std::string &id )
         { "f_solar_unit_v2", kind::udp_solar },
         { "f_speaker_cabinet", kind::udp_speaker },
         { "f_standing_tank", kind::udp_tank },
-        { "f_statue", kind::udp_decor },
+        { "f_statue", kind::udp_stone_statue },
         { "f_stick_long_stack_mid", kind::udp_twigs_mid },
         { "f_stick_long_stack_short", kind::udp_twigs_short },
         { "f_stick_long_stack_tall", kind::udp_twigs_tall },
@@ -322,26 +321,33 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_ct: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.95f, 0.66f, 0.f, 0.29f },
-                { -0.385f, 0.f, 0.2f, 0.66f, 0.29f, 1.51f },
-                { 0.385f, 0.f, 0.2f, 0.66f, 0.29f, 1.51f },
-                { 0.f, 0.f, 0.95f, 0.66f, 1.33f, 1.51f },
-                { 0.f, 0.39f, 0.52f, 1.02f, 0.59f, 0.7f },
-                { 0.f, 0.41f, 0.6f, 0.31f, 0.7f, 0.74f },
-                { 0.f, -0.31f, 0.95f, 0.055f, 0.29f, 1.33f },
+                // Gantry and bore trim share an axis, with clear space through the middle.
+                { 0.f, -0.25f, 1.00f, 0.47f, 0.f, 0.25f },
+                { 0.f, -0.22f, 1.04f, 0.36f, 0.21f, 1.37f, true, false, true, true, 0.61f },
+                { 0.f, -0.018f, 0.83f, 0.070f, 0.33f, 1.25f, true, false, true, true, 0.76f },
+                { 0.f, 0.38f, 0.38f, 0.49f, 0.f, 0.49f },
+                { 0.f, 0.35f, 0.47f, 0.88f, 0.49f, 0.55f },
+                { 0.f, 0.34f, 0.40f, 0.82f, 0.55f, 0.59f },
             };
             return &geometry;
         }
         case kind::udp_autodoc: {
             static const std::vector<part> geometry{
-                { 0.f, -0.28f, 0.9f, 0.35f, 0.f, 1.67f },
-                { 0.f, -0.12f, 0.87f, 0.23f, 0.7f, 1.67f },
-                { 0.f, 0.14f, 0.7f, 0.8f, 0.48f, 0.64f },
-                { 0.f, 0.26f, 0.6f, 0.32f, 0.64f, 0.73f },
-                { 0.34f, 0.19f, 0.08f, 0.68f, 0.05f, 0.48f },
-                { -0.34f, 0.19f, 0.08f, 0.68f, 0.05f, 0.48f },
-                { 0.32f, -0.05f, 0.12f, 0.2f, 1.05f, 1.82f },
-                { 0.3f, 0.13f, 0.32f, 0.08f, 1.77f, 1.87f },
+                // Console and articulated arm sit beside the separate operation couch.
+                { 0.f, 0.f, 0.97f, 0.69f, 0.f, 0.16f },
+                { -0.22f, -0.04f, 0.50f, 0.53f, 0.16f, 1.43f },
+                { -0.22f, 0.235f, 0.44f, 0.055f, 0.94f, 1.27f },
+                { -0.22f, 0.267f, 0.34f, 0.018f, 1.00f, 1.21f },
+                { -0.22f, 0.25f, 0.43f, 0.08f, 0.58f, 0.83f },
+                { -0.34f, 0.30f, 0.09f, 0.025f, 0.68f, 0.77f },
+                { -0.16f, 0.30f, 0.09f, 0.025f, 0.68f, 0.77f },
+                { 0.29f, -0.05f, 0.31f, 0.48f, 0.16f, 0.59f },
+                { 0.29f, 0.005f, 0.20f, 0.23f, 0.56f, 0.72f, true },
+                { 0.34f, 0.02f, 0.12f, 0.15f, 0.61f, 1.14f, false, false, false, false, 0.60f, 13.f },
+                { 0.39f, 0.02f, 0.17f, 0.17f, 1.06f, 1.24f, true, false, true },
+                { 0.24f, 0.02f, 0.11f, 0.13f, 1.11f, 1.50f, false, false, false, false, 0.60f, 53.f },
+                { 0.085f, 0.02f, 0.13f, 0.14f, 1.37f, 1.51f, true, false, true },
+                { 0.085f, 0.085f, 0.045f, 0.09f, 1.31f, 1.44f },
             };
             return &geometry;
         }
@@ -410,6 +416,28 @@ const std::vector<part> *catalog_parts( kind shape )
             };
             return &geometry;
         }
+        case kind::udp_heavy_lathe: {
+            static const std::vector<part> geometry{
+                // Headstock, chuck and tailstock align on the long axis of the machine bed.
+                { 0.f, 0.f, 0.74f, 1.08f, 0.43f, 0.63f },
+                { 0.f, -0.40f, 0.64f, 0.24f, 0.f, 0.43f },
+                { 0.f, 0.39f, 0.64f, 0.23f, 0.f, 0.43f },
+                { -0.17f, 0.02f, 0.075f, 0.90f, 0.63f, 0.68f },
+                { 0.17f, 0.02f, 0.075f, 0.90f, 0.63f, 0.68f },
+                { 0.f, -0.37f, 0.55f, 0.29f, 0.64f, 1.06f },
+                { 0.f, -0.36f, 0.49f, 0.27f, 0.96f, 1.20f, true, false, true },
+                { 0.f, -0.173f, 0.30f, 0.12f, 0.85f, 1.15f, true, false, true },
+                { 0.f, -0.02f, 0.10f, 0.22f, 0.95f, 1.05f, true, false, true },
+                { 0.f, 0.10f, 0.40f, 0.23f, 0.67f, 0.76f },
+                { 0.11f, 0.09f, 0.15f, 0.12f, 0.76f, 0.97f },
+                { 0.f, 0.38f, 0.36f, 0.21f, 0.67f, 0.94f },
+                { 0.f, 0.35f, 0.25f, 0.25f, 0.875f, 1.125f, true, false, true },
+                { 0.f, 0.177f, 0.083f, 0.11f, 0.958f, 1.042f, true, false, true },
+                { 0.f, 0.515f, 0.22f, 0.055f, 0.89f, 1.11f, true, false, true, true, 0.66f },
+                { 0.39f, 0.14f, 0.075f, 0.075f, 0.49f, 0.57f, true, false, true },
+            };
+            return &geometry;
+        }
         case kind::udp_lathe: {
             static const std::vector<part> geometry{
                 { 0.f, 0.f, 0.97f, 0.75f, 0.63f, 0.82f },
@@ -436,24 +464,35 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_mixer: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.8f, 0.73f, 0.f, 0.8f },
-                { 0.f, 0.f, 0.65f, 0.64f, 0.79f, 1.02f, true },
-                { 0.f, 0.f, 0.41f, 0.39f, 1.0f, 1.1f, true },
-                { -0.2f, 0.37f, 0.17f, 0.04f, 0.42f, 0.65f },
-                { 0.22f, 0.38f, 0.12f, 0.05f, 0.42f, 0.68f },
+                { 0, 0, .90f, .65f, 0, .12f },
+                { .29f, -.008f, .26f, .55f, .12f, 1.21f },
+                { 0, -.24f, .82f, .14f, .12f, 1.16f },
+                { 0, -.02f, .89f, .54f, 1.13f, 1.32f },
+                { -.19f, .12f, .40f, .41f, .18f, .60f, false, false, false, false, .60f, 0.f, false, part_form::basin },
+                { -.19f, .11f, .10f, .10f, .40f, 1.14f, true },
+                { -.19f, .11f, .26f, .07f, .40f, .46f },
+                { .29f, .278f, .17f, .027f, .61f, 1.06f },
+                { .29f, .295f, .07f, .015f, .94f, 1.01f },
+                { .29f, .295f, .07f, .015f, .80f, .87f },
             };
             return &geometry;
         }
         case kind::udp_compressor: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.67f, 0.56f, 0.26f, 0.86f, true },
-                { 0.f, 0.f, 0.91f, 0.77f, 0.f, 0.18f },
-                { -0.27f, 0.26f, 0.16f, 0.16f, 0.f, 0.28f, true },
-                { 0.27f, 0.26f, 0.16f, 0.16f, 0.f, 0.28f, true },
-                { -0.27f, -0.26f, 0.16f, 0.16f, 0.f, 0.28f, true },
-                { 0.27f, -0.26f, 0.16f, 0.16f, 0.f, 0.28f, true },
-                { 0.3f, 0.f, 0.12f, 0.14f, 0.86f, 1.2f },
-                { 0.3f, 0.f, 0.18f, 0.2f, 1.19f, 1.25f, true },
+                { 0, 0, .54f, .93f, .13f, .58f, true, false, true },
+                { 0, .44f, .53f, .25f, .13f, .58f, false, false, false, false, .60f, 0.f, true },
+                { 0, -.44f, .53f, .25f, .13f, .58f, false, false, false, false, .60f, 0.f, true },
+                { 0, -.28f, .49f, .15f, 0, .18f },
+                { 0, .30f, .49f, .15f, 0, .18f },
+                { 0, -.02f, .42f, .65f, .51f, .61f },
+                { 0, .18f, .34f, .36f, .61f, .95f, true, false, true },
+                { 0, .37f, .36f, .065f, .60f, .96f, true, false, true },
+                { 0, -.27f, .29f, .23f, .59f, .92f },
+                { 0, -.27f, .22f, .17f, .89f, 1.01f },
+                { .18f, -.04f, .10f, .18f, .65f, .82f },
+                { .22f, -.015f, .10f, .06f, .82f, .92f, true },
+                { .268f, .26f, .052f, .17f, .29f, .47f },
+                { .297f, .29f, .014f, .05f, .38f, .43f },
             };
             return &geometry;
         }
@@ -481,23 +520,37 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_arcade: {
             static const std::vector<part> geometry{
-                { 0.f, -0.11f, 0.77f, 0.65f, 0.f, 1.71f },
-                { 0.f, 0.24f, 0.77f, 0.22f, 0.8f, 1.4f },
-                { 0.f, 0.35f, 0.58f, 0.03f, 1.03f, 1.32f, false, true },
-                { 0.f, 0.32f, 0.7f, 0.16f, 0.69f, 0.84f },
-                { 0.f, 0.02f, 0.79f, 0.7f, 1.63f, 1.77f },
+                { 0.f, -0.16f, 0.70f, 0.51f, 0.f, 1.69f },
+                { 0.f, 0.11f, 0.62f, 0.12f, 0.08f, 0.63f },
+                { -0.325f, 0.15f, 0.064f, 0.20f, 0.08f, 1.65f },
+                { 0.325f, 0.15f, 0.064f, 0.20f, 0.08f, 1.65f },
+                { 0.f, 0.108f, 0.57f, 0.022f, 0.85f, 1.39f },
+                { 0.f, 0.124f, 0.47f, 0.018f, 0.92f, 1.33f },
+                { 0.f, 0.19f, 0.63f, 0.27f, 0.64f, 0.77f },
+                { -0.16f, 0.24f, 0.032f, 0.032f, 0.77f, 0.85f, true },
+                { -0.16f, 0.24f, 0.073f, 0.073f, 0.82f, 0.89f, false, false, false, false, 0.60f, 0.f, true },
+                { 0.08f, 0.25f, 0.049f, 0.049f, 0.77f, 0.80f, true },
+                { 0.19f, 0.25f, 0.049f, 0.049f, 0.77f, 0.80f, true },
+                { 0.f, 0.16f, 0.66f, 0.20f, 1.46f, 1.66f },
+                { 0.f, 0.268f, 0.53f, 0.02f, 1.51f, 1.62f },
+                { 0.f, 0.179f, 0.15f, 0.02f, 0.32f, 0.52f },
             };
             return &geometry;
         }
         case kind::udp_treadmill: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.81f, 0.94f, 0.2f, 0.35f },
-                { 0.f, -0.37f, 0.77f, 0.06f, 0.35f, 1.03f },
-                { -0.35f, -0.37f, 0.06f, 0.58f, 0.35f, 1.31f },
-                { 0.35f, -0.37f, 0.06f, 0.58f, 0.35f, 1.31f },
-                { 0.f, -0.36f, 0.77f, 0.17f, 1.27f, 1.36f },
-                { -0.39f, 0.08f, 0.08f, 0.14f, 0.f, 0.31f },
-                { 0.39f, 0.08f, 0.08f, 0.14f, 0.f, 0.31f },
+                { 0, .06f, .71f, 1.04f, .09f, .20f },
+                { 0, .07f, .51f, .86f, .199f, .223f },
+                { -.325f, .07f, .071f, 1.02f, .19f, .235f },
+                { .325f, .07f, .071f, 1.02f, .19f, .235f },
+                { 0, -.34f, .69f, .22f, .18f, .34f },
+                { -.319f, -.37f, .067f, .083f, .20f, 1.25f },
+                { .319f, -.37f, .067f, .083f, .20f, 1.25f },
+                { -.319f, -.17f, .066f, .40f, .88f, .95f },
+                { .319f, -.17f, .066f, .40f, .88f, .95f },
+                { 0, -.36f, .70f, .21f, 1.18f, 1.30f },
+                { 0, -.316f, .36f, .12f, 1.292f, 1.315f },
+                { 0, .43f, .61f, .07f, 0, .11f },
             };
             return &geometry;
         }
@@ -556,9 +609,9 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_trash: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.67f, 0.65f, 0.f, 0.82f, true },
-                { 0.f, 0.f, 0.73f, 0.7f, 0.8f, 0.88f, true },
-                { 0.f, 0.f, 0.7f, 0.68f, 0.04f, 0.09f, true },
+                { 0.f, 0.f, 0.56f, 0.55f, 0.f, 0.69f, true },
+                { 0.f, 0.f, 0.61f, 0.59f, 0.67f, 0.74f, true },
+                { 0.f, 0.f, 0.59f, 0.57f, 0.03f, 0.08f, true },
             };
             return &geometry;
         }
@@ -572,10 +625,9 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_hammock: {
             static const std::vector<part> geometry{
-                { -0.42f, 0.f, 0.1f, 0.1f, 0.f, 1.31f },
-                { 0.42f, 0.f, 0.1f, 0.1f, 0.f, 1.31f },
-                { 0.f, 0.f, 0.77f, 0.78f, 0.59f, 0.64f },
-                { 0.f, 0.f, 0.62f, 0.68f, 0.63f, 0.71f },
+                { -.52f, 0, .079f, .082f, 0, .89f, true },
+                { .52f, 0, .079f, .082f, 0, .89f, true },
+                { 0, 0, 1.04f, .48f, .34f, .86f, false, false, false, false, .60f, 0.f, false, part_form::sling },
             };
             return &geometry;
         }
@@ -932,18 +984,27 @@ const std::vector<part> *catalog_parts( kind shape )
             return &geometry;
         }
         case kind::udp_water_purifier: {
-            static const std::vector<part> geometry{
-                { 0.f, -0.12f, 0.83f, 0.68f, 0.f, 1.15f },
-                { 0.f, 0.234f, 0.76f, 0.03f, 0.15f, 0.99f },
-                { 0.f, -0.12f, 0.86f, 0.72f, 1.15f, 1.24f },
-                { -0.25f, 0.262f, 0.18f, 0.18f, 0.31f, 0.93f, true },
-                { 0.f, 0.262f, 0.18f, 0.18f, 0.31f, 0.93f, true },
-                { 0.25f, 0.262f, 0.18f, 0.18f, 0.31f, 0.93f, true },
-                { 0.29f, 0.267f, 0.15f, 0.034f, 0.98f, 1.1f },
-                { -0.26f, 0.267f, 0.1f, 0.034f, 0.13f, 0.22f },
-                { 0.f, 0.267f, 0.1f, 0.034f, 0.13f, 0.22f },
-                { 0.26f, 0.267f, 0.1f, 0.034f, 0.13f, 0.22f },
-            };
+            static const std::vector<part> geometry = [] {
+                std::vector<part> pieces{
+                    { -.165f, -.16f, .51f, .43f, .27f, 1.23f }, // rear enclosure
+                    { .255f, -.0175f, .33f, .715f, .27f, 1.23f }, // right machinery bay
+                    { 0.f, -.0175f, .84f, .715f, .07f, .27f }, // gauge housing
+                    { -.28f, -.025f, .13f, .56f, 0.f, .07f },
+                    { .28f, -.025f, .13f, .56f, 0.f, .07f },
+                };
+                for( const float x : { -.30f, -.153f, -.006f } ) {
+                    pieces.push_back( { x, .16f, .113f, .113f, .36f, .91f, true } );
+                    pieces.push_back( { x, .16f, .139f, .139f, .89f, 1.05f, true } );
+                    pieces.push_back( { x, .16f, .128f, .128f, .33f, .40f, true } );
+                    pieces.push_back( { x, .335f, .11f, .022f, .112f, .222f, true, false, true } );
+                    pieces.push_back( { x, .353f, .076f, .016f, .129f, .205f, true, false, true } );
+                }
+                pieces.push_back( { -.406f, .1975f, .028f, .285f, .27f, 1.23f } );
+                pieces.push_back( { -.149f, .080f, .467f, .17f, 1.01f, 1.08f } );
+                pieces.push_back( { -.151f, .333f, .482f, .014f, .27f, 1.216f, false, true } );
+                pieces.push_back( { -.151f, .1975f, .482f, .285f, 1.216f, 1.23f, false, true } );
+                return pieces;
+            }();
             return &geometry;
         }
         case kind::udp_archery_bale: {
@@ -1003,15 +1064,26 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_windmill_real: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.2f, 0.2f, 0.f, 2.17f },
-                { 0.f, 0.f, 0.47f, 0.47f, 0.f, 0.17f },
-                { 0.f, 0.15f, 0.46f, 0.26f, 2.1f, 2.27f },
-                { 0.f, 0.33f, 0.21f, 0.18f, 2.15f, 2.4f, true, false, true },
-                { 0.f, 0.34f, 0.21f, 0.1f, 2.32f, 3.08f },
-                { -0.43f, 0.34f, 0.21f, 0.1f, 1.89f, 2.65f, false, false, false, false, 0.6f, 90.0f },
-                { 0.f, 0.34f, 0.21f, 0.1f, 1.46f, 2.22f, false, false, false, false, 0.6f, 180.0f },
-                { 0.43f, 0.34f, 0.21f, 0.1f, 1.89f, 2.65f, false, false, false, false, 0.6f, 270.0f },
-                { 0.f, 0.36f, 0.16f, 0.16f, 2.18f, 2.37f, true, false, true },
+                // Splayed lattice tower with a central drive shaft and four diagonal sails.
+                { -0.25f, -0.22f, 0.055f, 0.055f, 0.f, 1.94f, false, false, false, false, 0.60f, -10.f },
+                { 0.25f, -0.22f, 0.055f, 0.055f, 0.f, 1.94f, false, false, false, false, 0.60f, 10.f },
+                { -0.25f, 0.22f, 0.055f, 0.055f, 0.f, 1.94f, false, false, false, false, 0.60f, -10.f },
+                { 0.25f, 0.22f, 0.055f, 0.055f, 0.f, 1.94f, false, false, false, false, 0.60f, 10.f },
+                { 0.f, 0.f, 0.70f, 0.47f, 0.32f, 0.38f },
+                { 0.f, 0.f, 0.49f, 0.47f, 0.92f, 0.98f },
+                { 0.f, 0.f, 0.28f, 0.47f, 1.51f, 1.57f },
+                { 0.f, 0.22f, 0.049f, 0.040f, 0.19f, 1.08f, false, false, false, false, 0.60f, 47.f },
+                { 0.f, 0.22f, 0.049f, 0.040f, 0.19f, 1.08f, false, false, false, false, 0.60f, -47.f },
+                { 0.f, 0.22f, 0.042f, 0.040f, 0.90f, 1.59f, false, false, false, false, 0.60f, 31.f },
+                { 0.f, 0.22f, 0.042f, 0.040f, 0.90f, 1.59f, false, false, false, false, 0.60f, -31.f },
+                { 0.f, 0.f, 0.05f, 0.05f, 0.10f, 1.96f, true },
+                { 0.f, 0.f, 0.25f, 0.50f, 1.83f, 2.03f },
+                { 0.f, 0.33f, 0.18f, 0.20f, 1.84f, 2.04f, true, false, true },
+                { -0.34f, 0.34f, 0.12f, 0.05f, 1.93f, 2.88f, false, false, false, false, 0.60f, 46.f },
+                { 0.34f, 0.34f, 0.12f, 0.05f, 1.93f, 2.88f, false, false, false, false, 0.60f, -46.f },
+                { -0.34f, 0.34f, 0.12f, 0.05f, 0.98f, 1.93f, false, false, false, false, 0.60f, -46.f },
+                { 0.34f, 0.34f, 0.12f, 0.05f, 0.98f, 1.93f, false, false, false, false, 0.60f, 46.f },
+                { 0.f, 0.45f, 0.15f, 0.11f, 1.86f, 2.01f, true, false, true },
             };
             return &geometry;
         }
@@ -1037,12 +1109,14 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_bellows: {
             static const std::vector<part> geometry{
-                { -0.15f, 0.f, 0.55f, 0.59f, 0.04f, 0.18f },
-                { 0.f, 0.f, 0.64f, 0.64f, 0.22f, 0.35f },
-                { -0.02f, 0.f, 0.54f, 0.53f, 0.35f, 0.52f },
-                { -0.12f, 0.09f, 0.18f, 0.12f, 0.51f, 0.72f },
-                { 0.36f, 0.f, 0.48f, 0.13f, 0.2f, 0.37f },
-                { 0.52f, 0.f, 0.15f, 0.12f, 0.21f, 0.34f, true },
+                { .05f, 0, .69f, .56f, .07f, .51f, false, false, false, false, .60f, 0.f, false, part_form::bellows },
+                { .05f, 0, .70f, .57f, .031f, .075f, false, false, false, false,
+                  .60f, 0.f, false, part_form::bellows_board },
+                { .05f, 0, .70f, .57f, .17f, .55f, false, false, false, false,
+                  .60f, 0.f, false, part_form::bellows_board },
+                { -.375f, 0, .22f, .105f, .118f, .198f },
+                { -.477f, 0, .08f, .092f, .115f, .201f },
+                { .39f, 0, .31f, .076f, .486f, .55f, false, false, false, false, .60f, 12.f },
             };
             return &geometry;
         }
@@ -1102,13 +1176,14 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_ball_machine: {
             static const std::vector<part> geometry{
-                { -0.25f, 0.f, 0.36f, 0.69f, 0.65f, 0.89f },
-                { -0.25f, 0.f, 0.27f, 0.56f, 0.89f, 1.06f },
-                { 0.19f, 0.05f, 0.61f, 0.24f, 0.73f, 0.81f },
-                { -0.1f, -0.24f, 0.07f, 0.07f, 0.f, 0.73f },
-                { -0.1f, 0.27f, 0.07f, 0.07f, 0.f, 0.73f },
-                { 0.42f, -0.24f, 0.07f, 0.07f, 0.f, 0.73f },
-                { 0.42f, 0.27f, 0.07f, 0.07f, 0.f, 0.73f },
+                { -.31f, -.04f, .31f, .57f, 0, 1.01f },
+                { -.26f, -.024f, .41f, .49f, .88f, 1.10f },
+                { -.12f, -.03f, .18f, .19f, .66f, .85f },
+                { .20f, -.14f, .52f, .068f, .57f, .64f },
+                { .20f, .14f, .52f, .068f, .57f, .64f },
+                { .42f, -.14f, .055f, .064f, 0, .60f },
+                { .42f, .14f, .055f, .064f, 0, .60f },
+                { .415f, 0, .065f, .32f, .05f, .112f },
             };
             return &geometry;
         }
@@ -1136,15 +1211,21 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_air_conditioner: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.84f, 0.6f, 0.18f, 0.77f },
-                { 0.f, 0.31f, 0.75f, 0.04f, 0.29f, 0.64f },
-                { -0.31f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
-                { -0.21f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
-                { -0.11f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
-                { -0.01f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
-                { 0.09f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
-                { 0.19f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
-                { 0.29f, 0.345f, 0.034f, 0.015f, 0.3f, 0.61f },
+                { 0.f, 0.f, .88f, .68f, .09f, .79f },
+                { 0.f, 0.f, .90f, .70f, .79f, .83f },
+                { -.31f, 0.f, .11f, .64f, 0.f, .09f },
+                { .31f, 0.f, .11f, .64f, 0.f, .09f },
+                { -.15f, .353f, .49f, .036f, .19f, .68f, true, false, true },
+                { -.15f, .379f, .43f, .021f, .22f, .65f, true, false, true },
+                { -.15f, .399f, .105f, .022f, .3825f, .4875f, true, false, true },
+                { -.15f, .423f, .29f, .021f, .275f, .300f },
+                { -.15f, .423f, .39f, .021f, .348f, .373f },
+                { -.15f, .423f, .42f, .021f, .422f, .447f },
+                { -.15f, .423f, .39f, .021f, .495f, .520f },
+                { -.15f, .423f, .29f, .021f, .568f, .593f },
+                { .267f, .350f, .22f, .024f, .22f, .65f }, // service cover
+                { -.15f, .396f, .375f, .013f, .41f, .46f, false, false, false, false, .60f, 35.f },
+                { -.15f, .396f, .375f, .013f, .41f, .46f, false, false, false, false, .60f, -55.f },
             };
             return &geometry;
         }
@@ -1229,25 +1310,22 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_boulder_small: {
             static const std::vector<part> geometry{
-                { -0.17f, -0.12f, 0.3325f, 0.3395f, 0.f, 0.28f, false, false, false, false, 0.6f, 0.f, true },
-                { 0.16f, 0.16f, 0.322f, 0.3045f, 0.f, 0.287f, false, false, false, false, 0.6f, 0.f, true },
-                { 0.14f, -0.13f, 0.2625f, 0.252f, 0.049f, 0.343f, false, false, false, false, 0.6f, 0.f, true },
+                { -.17f, .11f, .47f, .44f, 0, .34f, false, false, false, false, .60f, 0.f, false, part_form::rock },
+                { .22f, -.105f, .40f, .35f, 0, .45f, false, false, false, false, .60f, 0.f, false, part_form::rock },
             };
             return &geometry;
         }
         case kind::udp_boulder_medium: {
             static const std::vector<part> geometry{
-                { -0.17f, -0.12f, 0.532f, 0.5432f, 0.f, 0.448f, false, false, false, false, 0.6f, 0.f, true },
-                { 0.16f, 0.16f, 0.5152f, 0.4872f, 0.f, 0.4592f, false, false, false, false, 0.6f, 0.f, true },
-                { 0.14f, -0.13f, 0.42f, 0.4032f, 0.0784f, 0.5488f, false, false, false, false, 0.6f, 0.f, true },
+                { -.07f, -.01f, .87f, .73f, 0, .83f, false, false, false, false, .60f, 0.f, false, part_form::rock },
+                { .33f, .19f, .30f, .33f, 0, .29f, false, false, false, false, .60f, 0.f, false, part_form::rock },
             };
             return &geometry;
         }
         case kind::udp_boulder_large: {
             static const std::vector<part> geometry{
-                { -0.17f, -0.12f, 0.7315f, 0.7469f, 0.f, 0.616f, false, false, false, false, 0.6f, 0.f, true },
-                { 0.16f, 0.16f, 0.7084f, 0.6699f, 0.f, 0.6314f, false, false, false, false, 0.6f, 0.f, true },
-                { 0.14f, -0.13f, 0.5775f, 0.5544f, 0.1078f, 0.7546f, false, false, false, false, 0.6f, 0.f, true },
+                { -.04f, -.01f, .69f, .68f, 0, 1.65f, false, false, false, false, .60f, 0.f, false, part_form::rock },
+                { .24f, .27f, .37f, .32f, 0, .40f, false, false, false, false, .60f, 0.f, false, part_form::rock },
             };
             return &geometry;
         }
@@ -1388,12 +1466,10 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_brazier: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.71f, 0.71f, 0.49f, 0.78f, true },
-                { 0.f, 0.f, 0.78f, 0.78f, 0.75f, 0.83f, true },
-                { -0.26f, -0.26f, 0.08f, 0.08f, 0.f, 0.5f },
-                { -0.26f, 0.26f, 0.08f, 0.08f, 0.f, 0.5f },
-                { 0.26f, -0.26f, 0.08f, 0.08f, 0.f, 0.5f },
-                { 0.26f, 0.26f, 0.08f, 0.08f, 0.f, 0.5f },
+                { 0, 0, .70f, .58f, .23f, .49f, false, false, false, false, .60f, 0.f, false, part_form::basin },
+                { -.23f, -.15f, .055f, .056f, 0, .27f, false, false, false, false, .60f, -14.f },
+                { .23f, -.15f, .055f, .056f, 0, .27f, false, false, false, false, .60f, 14.f },
+                { 0, .19f, .066f, .071f, 0, .27f },
             };
             return &geometry;
         }
@@ -1854,6 +1930,91 @@ const std::vector<part> *catalog_parts( kind shape )
                 { -0.19f, 0.f, 0.16f, 0.19f, 0.11f, 0.35f, true },
                 { 0.19f, 0.f, 0.16f, 0.19f, 0.11f, 0.35f, true },
                 { 0.f, 0.f, 0.88f, 0.1f, 0.29f, 0.37f },
+            };
+            return &geometry;
+        }
+        case kind::udp_coal_forge: {
+            static const std::vector<part> geometry{
+                { 0, 0, .87f, .76f, 0, .23f },
+                { 0, -.335f, .87f, .094f, .23f, .34f },
+                { 0, .335f, .87f, .094f, .23f, .34f },
+                { -.385f, 0, .095f, .59f, .23f, .34f },
+                { .385f, 0, .095f, .59f, .23f, .34f },
+                { 0, 0, .68f, .54f, .23f, .268f },
+                { -.18f, .03f, .26f, .20f, .24f, .31f, false, false, false, false, .60f, 0.f, true },
+                { .14f, -.13f, .27f, .19f, .24f, .32f, false, false, false, false, .60f, 0.f, true },
+                { .13f, .14f, .20f, .21f, .24f, .30f, false, false, false, false, .60f, 0.f, true },
+                { -.11f, -.15f, .16f, .15f, .24f, .30f, false, false, false, false, .60f, 0.f, true },
+                { .02f, .02f, .16f, .12f, .27f, .33f, false, false, false, false, .60f, 0.f, true },
+            };
+            return &geometry;
+        }
+        case kind::udp_vertical_bandsaw: {
+            static const std::vector<part> geometry{
+                { 0, 0, .90f, .64f, 0, .13f },
+                { 0, -.15f, .73f, .32f, .13f, .59f },
+                { -.34f, -.09f, .16f, .39f, .47f, 1.55f },
+                { .08f, -.075f, .71f, .40f, 1.30f, 1.62f },
+                { .09f, .035f, .69f, .68f, .62f, .73f },
+                { .22f, .06f, .023f, .036f, .73f, 1.32f },
+                { .22f, .055f, .082f, .085f, 1.14f, 1.31f },
+                { .10f, .14f, .18f, .032f, 1.38f, 1.51f },
+                { -.34f, .12f, .10f, .05f, .92f, 1.08f },
+                { -.34f, .15f, .043f, .021f, .975f, 1.016f },
+            };
+            return &geometry;
+        }
+        case kind::udp_sandbag_low: {
+            static const std::vector<part> geometry{
+                { -.25f, -.015f, .51f, .43f, 0, .24f, false, false, false, false, .60f, 0.f, false, part_form::sandbag },
+                { .25f, -.015f, .51f, .43f, 0, .24f, false, false, false, false, .60f, 0.f, false, part_form::sandbag },
+                { -.36f, .025f, .32f, .41f, .18f, .38f, false, false, false, false, .60f, 0.f, false, part_form::sandbag },
+                { 0, .025f, .50f, .43f, .17f, .40f, false, false, false, false, .60f, 0.f, false, part_form::sandbag },
+                { .36f, .025f, .32f, .41f, .18f, .38f, false, false, false, false, .60f, 0.f, false, part_form::sandbag },
+            };
+            return &geometry;
+        }
+        case kind::udp_stone_statue: {
+            static const std::vector<part> geometry{
+                { 0, 0, .73f, .62f, 0, .12f },
+                { 0, 0, .65f, .54f, .12f, .28f },
+                { 0, 0, .70f, .59f, .28f, .34f },
+                { -.12f, .01f, .17f, .23f, .33f, .72f, false, false, false, false, .60f, -9.f },
+                { .10f, -.04f, .17f, .24f, .33f, .74f, false, false, false, false, .60f, 17.f },
+                { 0, -.02f, .34f, .24f, .64f, .84f },
+                { 0, -.02f, .37f, .28f, .76f, 1.15f, false, false, false, false, .60f, 0.f, true },
+                { -.20f, -.02f, .14f, .15f, .79f, 1.13f, false, false, false, false, .60f, -13.f },
+                { .22f, -.025f, .13f, .15f, .86f, 1.12f, false, false, false, false, .60f, 31.f },
+                { .21f, .055f, .13f, .15f, .77f, .96f, false, false, false, false, .60f, -34.f },
+                { 0, -.026f, .13f, .13f, 1.06f, 1.23f, true },
+                { 0, -.02f, .25f, .21f, 1.16f, 1.48f, false, false, false, false, .60f, 0.f, true },
+            };
+            return &geometry;
+        }
+        case kind::udp_diesel_unit: {
+            static const std::vector<part> geometry{
+                { 0, 0, .79f, .87f, .08f, .20f },
+                { -.30f, 0, .10f, .84f, 0, .10f },
+                { .30f, 0, .10f, .84f, 0, .10f },
+                { 0, -.026f, .58f, .69f, .23f, .60f },
+                { 0, 0, .70f, .79f, .60f, .80f },
+                { 0, 0, .65f, .72f, .80f, .86f },
+                { -.365f, -.34f, .064f, .065f, .15f, .89f, true },
+                { .365f, -.34f, .064f, .065f, .15f, .89f, true },
+                { -.365f, .34f, .064f, .065f, .15f, .89f, true },
+                { .365f, .34f, .064f, .065f, .15f, .89f, true },
+                { -.365f, 0, .072f, .79f, .84f, .91f },
+                { .365f, 0, .072f, .79f, .84f, .91f },
+                { 0, .387f, .54f, .04f, .27f, .53f },
+                { -.12f, .412f, .16f, .022f, .33f, .43f },
+                { .16f, .416f, .11f, .05f, .31f, .42f, true, false, true },
+                { .04f, -.13f, .13f, .13f, .85f, .90f, true },
+            };
+            return &geometry;
+        }
+        case kind::udp_terminal: {
+            static const std::vector<part> geometry{
+                { 0, 0, .80f, .80f, 0, .80f },
             };
             return &geometry;
         }

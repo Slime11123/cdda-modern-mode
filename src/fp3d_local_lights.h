@@ -3,6 +3,7 @@
 #define CATA_SRC_FP3D_LOCAL_LIGHTS_H
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <array>
+#include <cstddef>
 #include <vector>
 #include "fp3d_snapshot.h"
 #include "fp3d_camera.h"
@@ -19,6 +20,8 @@ struct selected {
 };
 std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
                               fp3d_camera::offset camera );
+std::vector<selected> select( const fp3d_snapshot::scene_snapshot &scene,
+                              fp3d_camera::offset camera, std::size_t budget );
 } // namespace fp3d_local_lights
 #endif
 #endif

@@ -22,7 +22,11 @@
 #include "game.h"
 #include "field_type.h"
 #include "fp3d_camera.h"
+#include "fp3d_iris_block_light.h"
+#include "fp3d_iris_frame.h"
+#include "fp3d_iris_materials.h"
 #include "fp3d_materials.h"
+#include "fp3d_scene.h"
 #include "item.h"
 #include "item_location.h"
 #include "level_cache.h"
@@ -123,7 +127,7 @@ TEST_CASE( "fp3d_chainlink_gates_have_hollow_open_and_closed_models", "[fp3d][ge
     const auto opened = chain_gate_parts( "t_chaingate_o", true );
     REQUIRE( closed.size() == 10 );
     CHECK( locked.size() == closed.size() + 1 );
-    REQUIRE( opened.size() == 9 );
+    REQUIRE( opened.size() == closed.size() );
     CHECK( chain_gate_parts( "t_door_c", true ).empty() );
     CHECK( chain_gate_parts( "t_chickenwire_gate_c", true ).size() == closed.size() );
     CHECK( chain_gate_parts( "t_chickenwire_gate_o", true ).size() == opened.size() );
@@ -132,6 +136,8 @@ TEST_CASE( "fp3d_chainlink_gates_have_hollow_open_and_closed_models", "[fp3d][ge
     CHECK( terrain_shape( "t_chickenwire_fence_post" ) == terrain_kind::fence );
     CHECK( terrain_shape( "t_fence_post" ) == terrain_kind::fence );
     CHECK( terrain_shape( "t_screened_porch_wall" ) == terrain_kind::fence );
+    CHECK( terrain_shape( "t_fence_metal" ) == terrain_kind::fence );
+    CHECK( fence_connects( "t_fence_metal", "t_gate_metal_c" ) );
     CHECK( fence_parts( { true, true, true, true }, true ).size() == 1 );
     CHECK( fence_parts( { false, true, false, true }, false ).size() == 3 );
     for( const auto &part : closed ) {
@@ -140,9 +146,66 @@ TEST_CASE( "fp3d_chainlink_gates_have_hollow_open_and_closed_models", "[fp3d][ge
         CHECK_FALSE( ( part.width > .8f && part.depth > .8f ) );
     }
     // The open leaf folds toward the hinge, leaving the center passage free.
-    CHECK( opened[4].x < -.3f );
     CHECK( opened[5].x < -.3f );
-    CHECK( std::abs( chain_gate_parts( "t_chaingate_o", false )[4].z + .43f ) < .01f );
+    CHECK( opened[6].x < -.3f );
+    CHECK( std::abs( chain_gate_parts( "t_chaingate_o", false )[5].z + .43f ) < .01f );
+    const auto metal_closed = terrain_model_parts( "t_gate_metal_c", { false, true, false, true } );
+    const auto metal_open = terrain_model_parts( "t_gate_metal_o", { false, true, false, true } );
+    REQUIRE( metal_closed.size() == 11 );
+    REQUIRE( metal_open.size() == metal_closed.size() );
+    CHECK( metal_closed.back().x > .4f );
+    CHECK( metal_closed.back().z == 0.f );
+    CHECK( metal_open.back().x < -.4f );
+    CHECK( metal_open.back().z < -.8f );
+}
+
+TEST_CASE( "fp3d_glass_barriers_fill_connected_edges_and_turn_corners", "[fp3d][geometry]" )
+{
+    using namespace fp3d_snapshot;
+    CHECK( terrain_shape( "t_glass_railing" ) == terrain_kind::fence );
+    CHECK( terrain_shape( "t_laminated_glass" ) == terrain_kind::glass );
+    for( const bool railing : { false, true } ) {
+        const auto corner = glass_barrier_parts( railing, { true, true, false, false } );
+        REQUIRE( corner.size() == 7 );
+        CHECK( corner.front().top == Approx( railing ? 1.10f : fp3d_camera::floor_height ) );
+        CHECK( corner[3].glass );
+        CHECK( corner[3].z - corner[3].depth / 2 == Approx( -.5f ) );
+        CHECK( corner[6].glass );
+        CHECK( corner[6].x + corner[6].width / 2 == Approx( .5f ) );
+    }
+}
+
+TEST_CASE( "fp3d_monster_cutaway_uses_only_camera_side_walls_for_visible_monsters",
+           "[fp3d][overhead][geometry]" )
+{
+    using namespace fp3d_snapshot;
+    scene_snapshot scene;
+    scene.origin = tripoint_abs_ms::zero;
+    cell support;
+    support.position = scene.origin;
+    cell near_wall;
+    near_wall.kind = terrain_kind::wall;
+    near_wall.position = scene.origin + tripoint_rel_ms::south;
+    cell far_wall = near_wall;
+    far_wall.position = scene.origin + tripoint_rel_ms::north;
+    scene.cells = { support, near_wall, far_wall };
+    sprite monster;
+    monster.position = support.position;
+    monster.kind = sprite_kind::monster;
+    monster.height = 1.2f;
+    scene.sprites.push_back( monster );
+    const auto cell_at = [&]( const tripoint_abs_ms &position ) -> const cell * {
+        const auto found = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const cell &tile ) {
+            return tile.position == position;
+        } );
+        return found == scene.cells.end() ? nullptr : &*found;
+    };
+    const fp3d_camera::offset eye{ 0.f, 8.f, 9.f };
+    const auto walls = fp3d_scene::monster_cutaway_walls( scene, eye, cell_at );
+    CHECK( walls.count( near_wall.position ) == 1 );
+    CHECK( walls.count( far_wall.position ) == 0 );
+    scene.cells.front().known = knowledge::remembered;
+    CHECK( fp3d_scene::monster_cutaway_walls( scene, eye, cell_at ).empty() );
 }
 
 TEST_CASE( "fp3d_snapshot_keeps_hidden_door_memory", "[fp3d][vision]" )
@@ -231,6 +294,105 @@ TEST_CASE( "fp3d_snapshot_classifies_visible_wall", "[fp3d][vision]" )
     CHECK( wall->terrain == wall_id );
     CHECK( wall->known == fp3d_snapshot::knowledge::visible );
     CHECK( wall->kind == fp3d_snapshot::terrain_kind::wall );
+}
+
+TEST_CASE( "fp3d_iris_water_uses_native_terrain_definitions", "[fp3d][iris_water]" )
+{
+    using fp3d_snapshot::terrain_water;
+    using fp3d_snapshot::water_depth;
+    const auto traits = []( const char *id ) {
+        const ter_str_id terrain( id );
+        REQUIRE( terrain.is_valid() );
+        return terrain_water( terrain.obj() );
+    };
+    const auto tidal = traits( "t_swater_surf" );
+    REQUIRE( tidal );
+    CHECK( tidal->salt );
+    const auto sewage = traits( "t_sewage" );
+    REQUIRE( sewage );
+    CHECK( sewage->sewage );
+    CHECK( sewage->depth == water_depth::shallow );
+    const auto flood = traits( "t_water_sh_flood" );
+    REQUIRE( flood );
+    CHECK( flood->depth == water_depth::shallow );
+    CHECK_FALSE( flood->current );
+    const auto volume = traits( "t_water_cube" );
+    REQUIRE( volume );
+    CHECK( volume->submerged );
+    CHECK( volume->depth == water_depth::deep );
+    CHECK_FALSE( traits( "t_water_pump" ) );
+    CHECK_FALSE( traits( "t_lava" ) );
+
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto pool_location = you.pos_bub( here ) + tripoint_rel_ms::east;
+    const auto river_location = you.pos_bub( here ) + tripoint_rel_ms::west;
+    REQUIRE( here.ter_set( pool_location, ter_str_id( "t_water_pool" ) ) );
+    REQUIRE( here.ter_set( river_location, ter_str_id( "t_water_moving_dp" ) ) );
+    refresh_vision( here, you.posz() );
+    for( const bool camera : { false, true } ) {
+        const auto scene = camera ? fp3d_snapshot::capture_camera( you, here, 0, 0 ) :
+                           fp3d_snapshot::capture( you, here, 0, 0 );
+        const auto *pool = find_cell( scene, here.get_abs( pool_location ) );
+        const auto *river = find_cell( scene, here.get_abs( river_location ) );
+        REQUIRE( pool );
+        REQUIRE( river );
+        REQUIRE( pool->water );
+        REQUIRE( river->water );
+        const auto material = fp3d_iris::terrain_material( *pool );
+        CHECK( material.shader_id == "minecraft:water" );
+        CHECK( material.deep_water );
+        CHECK_FALSE( material.flowing_water );
+        CHECK( fp3d_iris::terrain_material( *river ).flowing_water );
+    }
+}
+
+TEST_CASE( "fp3d_iris_uses_native_submersion_only_for_the_player_camera", "[fp3d][iris_water]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto position = you.pos_bub( here );
+    REQUIRE( here.ter_set( position, ter_str_id( "t_water_dp" ) ) );
+    refresh_vision( here, you.posz() );
+    fp3d_iris::frame_history history;
+    const fp3d_camera::pose camera{};
+    const auto clock = fp3d_iris::read_world_clock( calendar::turn );
+    const auto frame = [&]( const fp3d_snapshot::scene_snapshot &scene, bool overhead ) {
+        return history.prepare( scene, camera, {}, 640, 480, overhead, clock, 1 );
+    };
+
+    const bool original_underwater = you.is_underwater();
+    on_out_of_scope restore( [&]() { you.set_underwater( original_underwater ); } );
+    you.set_underwater( false );
+    const auto surface = fp3d_snapshot::capture_camera( you, here, 0, 0 );
+    const auto above = frame( surface, false );
+    REQUIRE( above );
+    CHECK( above->current.eye_in_water == 0 );
+    history.presented( *above );
+
+    you.set_underwater( true );
+    const auto submerged = fp3d_snapshot::capture_camera( you, here, 0, 0 );
+    CHECK( submerged.player_underwater );
+    const auto below = frame( submerged, false );
+    REQUIRE( below );
+    CHECK( below->current.eye_in_water == 1 );
+    CHECK_FALSE( below->previous );
+    history.presented( *below );
+    const auto still_below = frame( submerged, false );
+    REQUIRE( still_below );
+    REQUIRE( still_below->previous );
+    CHECK( still_below->previous->eye_in_water == 1 );
+
+    const auto orbit = frame( submerged, true );
+    REQUIRE( orbit );
+    CHECK( orbit->current.eye_in_water == 0 );
+    CHECK_FALSE( orbit->previous );
+    const auto resurfaced = frame( surface, false );
+    REQUIRE( resurfaced );
+    CHECK_FALSE( resurfaced->previous );
+    CHECK( you.is_underwater() );
 }
 
 TEST_CASE( "fp3d_snapshot_preserves_state_and_absolute_coordinates", "[fp3d]" )
@@ -845,7 +1007,7 @@ TEST_CASE( "fp3d_low_plants_use_visible_or_remembered_appearance", "[fp3d][visio
     CHECK( t->vegetation == "t_tree" );
     CHECK( t->kind == fp3d_snapshot::terrain_kind::floor );
     CHECK( t->vegetation_height > s->vegetation_height );
-    CHECK( g->vegetation_height < s->vegetation_height );
+    CHECK( g->vegetation_height == Approx( s->vegetation_height ) );
     CHECK( you.pos_abs() == position );
     CHECK( calendar::turn == turn );
     CHECK( you.get_moves() == moves );
@@ -1083,7 +1245,7 @@ TEST_CASE( "fp3d_overhead_fades_the_structure_above_the_current_radio_tower_floo
         const auto *tile = find_cell( scene, here.get_abs( p ) );
         REQUIRE( tile );
         CHECK( tile->floor_present );
-        return tile->faded_tower;
+        return tile->open_structure_above;
     };
     auto scene = fp3d_snapshot::capture_camera( you, here, 2, 0, true );
     CHECK_FALSE( faded( scene, ground ) );
@@ -1112,6 +1274,58 @@ TEST_CASE( "fp3d_overhead_fades_the_structure_above_the_current_radio_tower_floo
     const auto left = fp3d_snapshot::capture_camera( you, here, 2, 0, true );
     CHECK_FALSE( faded( left, first_deck ) );
     CHECK_FALSE( faded( left, detached ) );
+}
+
+TEST_CASE( "fp3d_open_structure_capture_separates_adjacent_rooms_from_canopies",
+           "[fp3d][camera_geometry][overhead][open_structure]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto player = you.pos_bub( here );
+    const std::string ground = GENERATE( "t_pavement", "t_concrete", "t_floor" );
+    CAPTURE( ground );
+    const auto pos = [&]( int x, int y, int z = 0 ) {
+        return player + tripoint_rel_ms( x, y, z );
+    };
+    for( int y = -2; y <= 2; ++y ) {
+        for( int x = -3; x <= 5; ++x ) {
+            const bool room_wall = x >= 1 && ( x == 1 || x == 5 || std::abs( y ) == 2 );
+            const auto id = room_wall ? ( x == 1 && y == 0 ? "t_door_o" : "t_wall" ) :
+                            x > 1 ? "t_floor" : ground;
+            REQUIRE( here.ter_set( pos( x, y ), ter_str_id( id ) ) );
+            REQUIRE( here.ter_set( pos( x, y, 1 ), ter_str_id( "t_flat_roof" ) ) );
+        }
+    }
+    REQUIRE( here.ter_set( pos( -2, -2 ), ter_str_id( "t_column" ) ) );
+    REQUIRE( here.ter_set( pos( -1, -2 ), ter_str_id( "t_chainfence" ) ) );
+    REQUIRE( here.ter_set( pos( -3, 1 ), ter_str_id( "t_railing" ) ) );
+    here.furn_set( pos( -1, 0 ), furn_str_id( "f_table" ) );
+    fp3d_snapshot::prepare_view( you, here );
+    const auto selected = [&]( const fp3d_snapshot::scene_snapshot &scene, int x, int y, int z ) {
+        const auto tile = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto &t ) {
+            return t.position == here.get_abs( pos( x, y, z ) );
+        } );
+        REQUIRE( tile != scene.cells.end() );
+        return tile->open_structure_above;
+    };
+    const auto initial = fp3d_snapshot::capture_camera( you, here, 2, 1, true );
+    CHECK( selected( initial, 0, 0, 1 ) );
+    CHECK( selected( initial, -2, -2, 1 ) );
+    CHECK( selected( initial, -1, -2, 1 ) );
+    CHECK( selected( initial, -3, 1, 1 ) );
+    CHECK_FALSE( selected( initial, 0, 0, 0 ) );
+    CHECK_FALSE( selected( initial, 1, 0, 1 ) );
+    CHECK_FALSE( selected( initial, 3, 0, 1 ) );
+    CHECK_FALSE( selected( fp3d_snapshot::capture_camera( you, here, 2, 1 ), 0, 0, 1 ) );
+    you.setpos( here, pos( 3, 0 ) );
+    const auto room = fp3d_snapshot::capture_camera( you, here, 2, 1, true );
+    CHECK_FALSE( selected( room, 3, 0, 1 ) );
+    CHECK_FALSE( selected( room, 0, 0, 1 ) );
+    you.setpos( here, pos( -4, 0 ) );
+    CHECK_FALSE( selected( fp3d_snapshot::capture_camera( you, here, 2, 1, true ), 0, 0, 1 ) );
+    you.setpos( here, pos( 0, 0, 1 ) );
+    CHECK_FALSE( selected( fp3d_snapshot::capture_camera( you, here, 2, 1, true ), 0, 0, 1 ) );
 }
 
 TEST_CASE( "fp3d_upper_facades_enclose_a_multistorey_building", "[fp3d][multilevel]" )
@@ -1716,6 +1930,40 @@ TEST_CASE( "fp3d_skylight_is_a_translucent_ceiling_not_an_opaque_roof", "[fp3d][
     REQUIRE( room );
     CHECK( room->ceiling_present );
     CHECK_FALSE( room->glass_ceiling );
+}
+
+TEST_CASE( "fp3d_iris_capture_sky_from_native_map_caches", "[fp3d][iris_sky_capture]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto open = you.pos_bub( here );
+    const auto covered = open + tripoint_rel_ms( 1, 0, 0 );
+    const auto remembered = open + tripoint_rel_ms( 2, 0, 0 );
+    const auto proxy = open + tripoint_rel_ms( 3, 0, 0 );
+    const auto cutaway = open + tripoint_rel_ms( 4, 0, 0 );
+    REQUIRE( here.ter_set( covered + tripoint_rel_ms( 0, 0, 2 ), ter_str_id( "t_flat_roof" ) ) );
+    refresh_vision( here, open.z() );
+
+    fp3d_snapshot::scene_snapshot scene;
+    scene.weather.particles = fp3d_weather::precipitation::none;
+    for( const auto &pos : { open, covered, remembered, proxy, cutaway } ) {
+        scene.cells.emplace_back().position = here.get_abs( pos );
+    }
+    scene.cells[2].known = fp3d_snapshot::knowledge::remembered;
+    scene.cells[3].exterior_only = true;
+    scene.cells[4].cutaway_ceiling = true;
+    const auto exposed = fp3d_iris::capture_sky_exposure( scene, here );
+    CHECK( exposed == std::vector<tripoint_abs_ms>{ here.get_abs( open ) } );
+    const auto levels = fp3d_iris::scene_sky_light( scene, here );
+    CHECK( levels.at( here.get_abs( open ) ) == 15 );
+    CHECK( levels.at( here.get_abs( covered ) ) == 14 );
+    CHECK( !levels.count( here.get_abs( remembered ) ) );
+
+    REQUIRE( here.ter_set( covered + tripoint_rel_ms( 0, 0, 2 ), ter_str_id( "t_open_air" ) ) );
+    refresh_vision( here, open.z() );
+    const auto opened = fp3d_iris::capture_sky_exposure( scene, here );
+    CHECK( std::find( opened.begin(), opened.end(), here.get_abs( covered ) ) != opened.end() );
 }
 
 TEST_CASE( "fp3d_upstairs_atrium_does_not_cover_the_visible_lower_room", "[fp3d][multilevel]" )
@@ -2720,6 +2968,33 @@ TEST_CASE( "fp3d_natural_ground_connections_follow_captured_neighbours", "[fp3d]
     scene.cells.back().terrain = "t_floor";
     fp3d_snapshot::connect_ground_terrain( scene );
     CHECK( scene.cells.back().ground_connections == -1 );
+}
+
+TEST_CASE( "fp3d_shore_connects_water_depths_without_connecting_to_land", "[fp3d][ground_terrain]" )
+{
+    using namespace fp3d_snapshot;
+    scene_snapshot scene;
+    scene.origin = tripoint_abs_ms::zero;
+    cell shallow;
+    shallow.position = scene.origin;
+    shallow.terrain = "t_water_sh";
+    cell deep = shallow;
+    deep.position += tripoint_rel_ms::east;
+    deep.terrain = "t_water_dp";
+    deep.floor_present = false;
+    deep.known = knowledge::remembered;
+    cell land = shallow;
+    land.position += tripoint_rel_ms::south;
+    land.terrain = "t_grass";
+    cell upstairs = shallow;
+    upstairs.position += tripoint_rel_ms::north + tripoint_rel_ms::above;
+    scene.cells = { shallow, deep, land, upstairs };
+    connect_ground_terrain( scene );
+    CHECK( scene.cells[0].ground_connections == 2 );
+    CHECK( scene.cells[1].ground_connections == 4 );
+    CHECK( scene.cells[2].ground_connections == 0 );
+    CHECK( scene.cells[3].ground_connections == 0 );
+    CHECK( fp3d_materials::terrain_key( scene.cells[0] ) == "$ground:2:t_water_sh" );
 }
 
 #endif

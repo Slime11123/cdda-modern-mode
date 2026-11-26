@@ -5,6 +5,14 @@
 
 namespace fp3d_camera
 {
+float open_structure_opacity( float orbit_distance )
+{
+    const float zoom = ( orbit_max_distance - orbit_distance ) /
+                       ( orbit_max_distance - orbit_min_distance );
+    const float t = std::clamp( ( zoom - .35f ) / .40f, 0.f, 1.f );
+    return 1.f - .9f * t * t * ( 3.f - 2.f * t );
+}
+
 namespace
 {
 constexpr float radians = 3.14159265358979323846f / 180;

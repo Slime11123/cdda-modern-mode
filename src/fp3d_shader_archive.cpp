@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <vector>
 #include <zlib.h>
 
@@ -54,11 +55,11 @@ bool unpack( const std::vector<byte> &zip, size_t offset, uint16_t method,
              uint32_t packed, uint32_t unpacked, uint32_t checksum,
              std::string &source )
 {
-    if( !range( offset, packed, zip.size() ) || !unpacked ||
+    if( !range( offset, packed, zip.size() ) ||
         unpacked > max_source_size || packed > max_compressed_size ) {
         return false;
     }
-    std::vector<byte> result( unpacked );
+    std::vector<byte> result( std::max( 1u, unpacked ) );
     if( method == 0 ) {
         if( packed != unpacked ) { return false; }
         std::copy_n( zip.data() + offset, unpacked, result.data() );
@@ -67,7 +68,7 @@ bool unpack( const std::vector<byte> &zip, size_t offset, uint16_t method,
         stream.next_in = const_cast<Bytef *>( zip.data() + offset );
         stream.avail_in = packed;
         stream.next_out = result.data();
-        stream.avail_out = unpacked;
+        stream.avail_out = static_cast<uInt>( result.size() );
         if( inflateInit2( &stream, -MAX_WBITS ) != Z_OK ) { return false; }
         const int status = inflate( &stream, Z_FINISH );
         const bool success = status == Z_STREAM_END &&
@@ -78,18 +79,16 @@ bool unpack( const std::vector<byte> &zip, size_t offset, uint16_t method,
     } else {
         return false;
     }
-    if( crc32( 0L, result.data(), static_cast<uInt>( result.size() ) ) != checksum ) {
+    if( crc32( 0L, result.data(), unpacked ) != checksum ) {
         return false;
     }
-    source.assign( reinterpret_cast<const char *>( result.data() ), result.size() );
+    source.assign( reinterpret_cast<const char *>( result.data() ), unpacked );
     return source.find( '\0' ) == std::string::npos;
 }
 
-bool read_entry( const std::filesystem::path &file, const std::string &relative,
-                 std::string &source, bool mc )
+template<typename Visitor>
+bool visit_entries( const std::filesystem::path &file, Visitor visit )
 {
-    source.clear();
-    if( !safe_name( relative ) ) { return false; }
     std::error_code error;
     const auto length = std::filesystem::file_size( file, error );
     if( error || length < 22 || length > max_zip_size ) { return false; }
@@ -120,37 +119,58 @@ bool read_entry( const std::filesystem::path &file, const std::string &relative,
     }
     size_t cursor = directory_offset;
     for( size_t entry = 0; entry < count; ++entry ) {
-        if( !range( cursor, 46, zip.size() ) || u32( zip, cursor ) != 0x02014b50 ) {
+        if( !range( cursor, 46, directory_offset + directory_size ) || u32( zip, cursor ) != 0x02014b50 ) {
             return false;
         }
-        const auto flags = u16( zip, cursor + 8 );
-        const auto method = u16( zip, cursor + 10 );
-        const auto checksum = u32( zip, cursor + 16 );
-        const auto packed = u32( zip, cursor + 20 );
-        const auto unpacked = u32( zip, cursor + 24 );
         const auto name_len = u16( zip, cursor + 28 );
         const auto extra_len = u16( zip, cursor + 30 );
         const auto comment_len = u16( zip, cursor + 32 );
-        const auto local_offset = u32( zip, cursor + 42 );
         if( !range( cursor + 46, static_cast<size_t>( name_len ) + extra_len + comment_len,
                     directory_offset + directory_size ) ) {
             return false;
         }
         const std::string name( reinterpret_cast<const char *>( zip.data() + cursor + 46 ),
                                 name_len );
-        cursor += 46 + name_len + extra_len + comment_len;
-        if( !matches( name, relative, mc ) ) { continue; }
-        if( ( flags & 1 ) || !range( local_offset, 30, zip.size() ) ||
-            u32( zip, local_offset ) != 0x04034b50 ||
-            u16( zip, local_offset + 8 ) != method ||
-            u16( zip, local_offset + 6 ) != flags ) {
-            return false;
+        if( const auto result = visit( zip, cursor, name ) ) {
+            return *result;
         }
-        const size_t data_offset = local_offset + 30 +
-                                   u16( zip, local_offset + 26 ) + u16( zip, local_offset + 28 );
-        return unpack( zip, data_offset, method, packed, unpacked, checksum, source );
+        cursor += 46 + name_len + extra_len + comment_len;
     }
-    return false;
+    return cursor == directory_offset + directory_size;
+}
+
+bool unpack_entry( const std::vector<byte> &zip, size_t cursor, std::string &source )
+{
+    const auto flags = u16( zip, cursor + 8 );
+    const auto method = u16( zip, cursor + 10 );
+    const auto checksum = u32( zip, cursor + 16 );
+    const auto packed = u32( zip, cursor + 20 );
+    const auto unpacked = u32( zip, cursor + 24 );
+    const auto local_offset = u32( zip, cursor + 42 );
+    if( ( flags & 1 ) || !range( local_offset, 30, zip.size() ) ||
+        u32( zip, local_offset ) != 0x04034b50 ||
+        u16( zip, local_offset + 8 ) != method ||
+        u16( zip, local_offset + 6 ) != flags ) {
+        return false;
+    }
+    const size_t data_offset = local_offset + 30 +
+                               u16( zip, local_offset + 26 ) + u16( zip, local_offset + 28 );
+    return unpack( zip, data_offset, method, packed, unpacked, checksum, source );
+}
+
+bool read_entry( const std::filesystem::path &file, const std::string &relative,
+                 std::string &source, bool mc )
+{
+    source.clear();
+    if( !safe_name( relative ) ) { return false; }
+    bool found = false;
+    const bool valid = visit_entries( file, [&]( const auto &zip, size_t cursor,
+    const std::string &name ) -> std::optional<bool> {
+        if( !matches( name, relative, mc ) ) { return std::nullopt; }
+        found = true;
+        return unpack_entry( zip, cursor, source ) && !source.empty();
+    } );
+    return valid && found;
 }
 } // namespace
 
@@ -165,6 +185,48 @@ bool read_mc_entry( const std::filesystem::path &file,
 {
     if( entry.find( "shaders/" ) != 0 || !safe_name( entry ) ) { return false; }
     return read_entry( file, entry, source, true );
+}
+
+bool list_entries( const std::filesystem::path &file, std::vector<std::string> &entries )
+{
+    entries.clear();
+    if( !visit_entries( file, [&]( const auto &, size_t,
+    const std::string &name ) -> std::optional<bool> {
+        if( safe_name( name ) && name.back() != '/' ) {
+            entries.push_back( name );
+        }
+        return std::nullopt;
+    } ) ) {
+        entries.clear();
+        return false;
+    }
+    return true;
+}
+
+bool read_text_entries( const std::filesystem::path &file, std::map<std::string, std::string> &entries,
+                        std::string &failed_entry )
+{
+    auto pending = entries;
+    size_t remaining = 16 * 1024 * 1024;
+    failed_entry.clear();
+    const bool valid = visit_entries( file, [&]( const auto &zip, size_t cursor,
+    const std::string &name ) -> std::optional<bool> {
+        const auto output = entries.find( name );
+        if( output == entries.end() ) {
+            return std::nullopt;
+        }
+        if( pending.erase( name ) == 0 || !safe_name( name ) ||
+            u32( zip, cursor + 24 ) > remaining || !unpack_entry( zip, cursor, output->second ) ) {
+            failed_entry = name;
+            return false;
+        }
+        remaining -= output->second.size();
+        return std::nullopt;
+    } );
+    if( valid && !pending.empty() ) {
+        failed_entry = pending.begin()->first;
+    }
+    return valid && pending.empty();
 }
 } // namespace fp3d_shader_archive
 #endif

@@ -7,8 +7,11 @@
 #include "fp3d_snapshot.h"
 #include "fp3d_targeting.h"
 #include "coordinates.h"
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
+#include <unordered_set>
 namespace fp3d_snapshot
 {
 struct scene_snapshot;
@@ -59,6 +62,69 @@ inline bool wall_neighbour( const fp3d_snapshot::cell *tile )
     return tile && ( tile->kind == kind::wall || tile->kind == kind::glass ||
                      tile->kind == kind::window );
 }
+inline bool glass_wall( const fp3d_snapshot::cell &tile )
+{
+    return tile.kind == fp3d_snapshot::terrain_kind::glass &&
+           tile.terrain.find( "door" ) == std::string::npos;
+}
+template<typename Lookup>
+std::array<bool, 4> glass_barrier_links( const fp3d_snapshot::cell &tile, const Lookup &cell_at )
+{
+    std::array<bool, 4> links{};
+    const std::array<tripoint_rel_ms, 4> directions{
+        tripoint_rel_ms::north, tripoint_rel_ms::east, tripoint_rel_ms::south, tripoint_rel_ms::west
+    };
+    for( size_t i = 0; i < links.size(); ++i ) {
+        const auto *adjacent = cell_at( tile.position + directions[i] );
+        using kind = fp3d_snapshot::terrain_kind;
+        links[i] = tile.terrain == "t_glass_railing" ?
+                   adjacent && adjacent->terrain == tile.terrain :
+                   wall_neighbour( adjacent ) ||
+                   ( adjacent && ( adjacent->kind == kind::closed_door || adjacent->kind == kind::open_door ) );
+    }
+    return links;
+}
+inline constexpr float cutaway_wall_height = .45f;
+
+template<typename Lookup>
+std::unordered_set<tripoint_abs_ms> monster_cutaway_walls(
+    const fp3d_snapshot::scene_snapshot &scene, const fp3d_camera::offset &eye,
+    const Lookup &cell_at )
+{
+    std::unordered_set<tripoint_abs_ms> walls;
+    for( const auto &monster : scene.sprites ) {
+        if( monster.kind != fp3d_snapshot::sprite_kind::monster ) {
+            continue;
+        }
+        const auto *support = cell_at( monster.position );
+        if( !support || support->known != fp3d_snapshot::knowledge::visible || support->exterior_only ) {
+            continue;
+        }
+        const auto rel = monster.position - scene.origin;
+        const float level = rel.z() * fp3d_camera::floor_height;
+        const float body = level + monster.elevation + monster.height * monster.display_scale * .5f;
+        if( eye.height <= body || body >= level + fp3d_camera::floor_height ) {
+            continue;
+        }
+        const float dx = eye.x - rel.x();
+        const float dz = eye.y - rel.y();
+        const float length = std::hypot( dx, dz );
+        // Follow the view through the monster's own storey. Only wall tiles
+        // in front of an already-visible monster are shortened.
+        const float end = length * std::min( 1.f,
+                          ( level + fp3d_camera::floor_height - body ) / ( eye.height - body ) );
+        for( float distance = .25f; distance < std::min( end, 6.f ); distance += .25f ) {
+            const auto position = monster.position + tripoint_rel_ms(
+                                      static_cast<int>( std::lround( dx * distance / length ) ),
+                                      static_cast<int>( std::lround( dz * distance / length ) ), 0 );
+            const auto *tile = cell_at( position );
+            if( position != monster.position && tile && tile->kind == fp3d_snapshot::terrain_kind::wall ) {
+                walls.insert( position );
+            }
+        }
+    }
+    return walls;
+}
 template<typename Lookup>
 unsigned furniture_facing( const fp3d_snapshot::cell &tile, const Lookup &known_cell )
 {
@@ -72,7 +138,8 @@ unsigned furniture_facing( const fp3d_snapshot::cell &tile, const Lookup &known_
     if( !tile.furniture ) {
         return 0u;
     }
-    if( tile.furniture->shape == fp3d_furniture::kind::chair ) {
+    if( tile.furniture->shape == fp3d_furniture::kind::chair ||
+        tile.furniture->shape == fp3d_furniture::kind::camp_chair ) {
         return fp3d_furniture::facing( tile.furniture->shape, {},
         { table_at( tile.position + tripoint_rel_ms::north ), table_at( tile.position + tripoint_rel_ms::east ),
           table_at( tile.position + tripoint_rel_ms::south ), table_at( tile.position + tripoint_rel_ms::west ) } );

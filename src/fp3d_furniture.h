@@ -16,6 +16,7 @@ enum class kind {
     display_case, file_cabinet, vending_machine, workbench, piano,
     pool_table, anvil, kiln, table_saw, planter, metal_kiln,
     street_light, traffic_light, utility_pole, mailbox, floor_lamp, battery_unit,
+    camp_chair, tourist_table, signpost,
     udp_alien, udp_analyzer, udp_antenna, udp_arcade, udp_autodoc, udp_bandsaw, udp_barricade,
     udp_cabinet, udp_chair, udp_coffin, udp_compressor, udp_crate, udp_ct, udp_decor,
     udp_dish, udp_drill, udp_dumpster, udp_fire, udp_firebarrel, udp_forge, udp_gate,
@@ -43,12 +44,15 @@ enum class kind {
     udp_twigs_short, udp_twigs_tall, udp_water_heater, udp_weight_bench, udp_wind_vane,
     udp_woodchips, udp_wreath,
     udp_cleat,
-    udp_anesthetic, udp_archery_bale, udp_archery_box, udp_ash_decal, udp_bollard, udp_chimney, udp_dialysis, udp_hay_bale, udp_leaf_litter, udp_midden, udp_punching_bag, udp_rubble, udp_target_board, udp_turbine_vent, udp_vent_pipe, udp_ventilator, udp_water_purifier, udp_waterwheel, udp_windmill_real,
+    udp_anesthetic, udp_archery_bale, udp_archery_box, udp_ash_decal, udp_bollard, udp_chimney, udp_dialysis, udp_hay_bale, udp_leaf_litter, udp_midden, udp_punching_bag, udp_rubble, udp_target_board, udp_turbine_vent, udp_vent_pipe, udp_ventilator, udp_water_purifier, udp_waterwheel, udp_windmill_real, udp_heavy_lathe,
+    udp_coal_forge, udp_vertical_bandsaw, udp_sandbag_low, udp_stone_statue, udp_diesel_unit,
+    udp_terminal,
 };
 struct model {
     std::string id;
     kind shape;
 };
+enum class part_form { standard, arch, sling, rock, basin, sandbag, bellows, bellows_board };
 struct part {
     float x, z, width, depth, bottom, top;
     bool round = false;
@@ -58,6 +62,7 @@ struct part {
     float inner = .60f; // Hollow radius fraction.
     float roll = 0.f; // Box-plane rotation around local Z, degrees.
     bool sphere = false; // Ellipsoid, not a capped cylinder.
+    part_form form = part_form::standard;
 };
 // Owned, read-only presentation shared by built furniture, ghosts and picking.
 std::optional<model> describe( const std::string &id );

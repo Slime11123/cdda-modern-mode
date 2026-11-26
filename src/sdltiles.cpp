@@ -433,10 +433,13 @@ static void WinCreate()
     throwErrorIf( format == SDL_PIXELFORMAT_UNKNOWN, "SDL_GetWindowPixelFormat failed" );
     std::string renderer_name;
 #if defined(_WIN32)
-    constexpr bool use_gpu_renderer = true;
-    bool software_renderer = false;
-    renderer_name = "gpu";
-    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    // The isolated title demo uses SDL's headless video driver, which has no GPU window.
+    const bool use_gpu_renderer = SDL_strcmp( SDL_GetCurrentVideoDriver(), "dummy" ) != 0;
+    bool software_renderer = !use_gpu_renderer;
+    if( use_gpu_renderer ) {
+        renderer_name = "gpu";
+        SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    }
 #elif !defined(__ANDROID__)
     constexpr bool use_gpu_renderer = false;
     renderer_name = get_option<std::string>( "RENDERER" );

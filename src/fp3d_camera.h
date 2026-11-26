@@ -69,6 +69,10 @@ constexpr float orbit_elevation_degrees = 60;
 constexpr float orbit_min_distance = 6;
 constexpr float orbit_max_distance = 48;
 constexpr float orbit_default_distance = 18;
+
+// Orbit distance increases when zooming out. Smoothstep keeps the
+// opacity derivative continuous at both ends of the transition.
+float open_structure_opacity( float orbit_distance );
 // Pivot height above the avatar's own floor. The look-at point is the centre of
 // the tile the avatar stands on, so the screen centre is always that tile and
 // rotating/zooming can never slide the player out of frame.

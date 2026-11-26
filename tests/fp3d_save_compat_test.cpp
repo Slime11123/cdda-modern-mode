@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <numeric>
 #include "avatar.h"
 #include "calendar.h"
 #include "cata_catch.h"
@@ -17,6 +18,7 @@
 #include "fp3d_compositor.h"
 #include "fp3d_camera.h"
 #include "fp3d_snapshot.h"
+#include "fp3d_shaderpacks.h"
 #include "fp3d_interaction.h"
 #include "fp3d_map.h"
 #include "game.h"
@@ -114,6 +116,166 @@ TEST_CASE( "fp3d_character_save_restores_its_view_mode_after_renderer_restart",
     load( legacy );
     CHECK( fp3d_compositor::view_3d() );
     CHECK_FALSE( fp3d_compositor::overhead() );
+}
+
+TEST_CASE( "fp3d_open_structure_live_gpu_continuous_wheel",
+           "[.fp3d_open_structure_live_gpu]" )
+{
+    const auto pack = fp3d_shaderpacks::selected();
+    if( pack != "off" ) {
+        REQUIRE( fp3d_shaderpacks::selected_gpu_profile() );
+    }
+    CAPTURE( pack );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
+    on_out_of_scope quit_video( []() { SDL_QuitSubSystem( SDL_INIT_VIDEO ); } );
+    SDL_Window_Ptr window( SDL_CreateWindow( "SDL3 canopy zoom regression", 800, 600, 0 ) );
+    REQUIRE( window );
+    SDL_SetHintWithPriority( SDL_HINT_GPU_DRIVER, "direct3d12", SDL_HINT_OVERRIDE );
+    SDL_Renderer_Ptr renderer( SDL_CreateRenderer( window.get(), "gpu" ) );
+    REQUIRE( renderer );
+    GeometryRenderer_Ptr geometry = std::make_unique<DefaultGeometryRenderer>();
+    tileset_cache cache;
+    restore_on_out_of_scope restore_tiles( tilecontext );
+    tilecontext = std::make_shared<cata_tiles>( renderer, geometry, cache );
+    tilecontext->load_tileset( "UltimateCataclysm", false, false, false );
+    fp3d_compositor::attach( renderer.get(), window.get() );
+    on_out_of_scope cleanup( []() { fp3d_compositor::release(); } );
+    clear_avatar();
+    clear_map();
+    set_time_to_day();
+    auto &you = get_avatar();
+    auto &here = get_map();
+    you.setpos( here, tripoint_bub_ms( 65, 65, 0 ) );
+    const auto player = you.pos_bub( here );
+    for( int y = -2; y <= 2; ++y ) {
+        for( int x = -2; x <= 2; ++x ) {
+            const auto p = player + tripoint_rel_ms( x, y, 0 );
+            REQUIRE( here.ter_set( p, ter_str_id( x && y && std::abs( x ) == 2 &&
+                                                std::abs( y ) == 2 ? "t_column" : "t_pavement" ) ) );
+            REQUIRE( here.ter_set( p + tripoint_rel_ms::above, ter_str_id( "t_flat_roof" ) ) );
+        }
+    }
+    fp3d_snapshot::prepare_view( you, here );
+    fp3d_compositor::apply_modes( true, true );
+    fp3d_compositor::restore_view_mode( "overhead" );
+    fp3d_compositor::set_input_context( "DEFAULTMODE" );
+    fp3d_compositor::set_viewport( 0, 0, 800, 600, 800, 600 );
+    auto opaque_scene = fp3d_snapshot::capture_camera( you, here, fp3d_snapshot::render_above,
+                        fp3d_snapshot::render_below, true );
+    fp3d_compositor::publish( opaque_scene );
+    int selected = 0;
+    for( auto &cell : opaque_scene.cells ) {
+        selected += cell.open_structure_above;
+        cell.open_structure_above = false;
+    }
+    REQUIRE( selected == 25 );
+    const int moves = you.get_moves();
+    const auto turn = calendar::turn;
+    const auto draw = [&]() {
+        fp3d_compositor::tick();
+        fp3d_compositor::compose();
+        fp3d_compositor::gpu_world_qa_after_present( SDL_RenderPresent( renderer.get() ) );
+        REQUIRE( SDL_WaitForGPUIdle( SDL_GetGPURendererDevice( renderer.get() ) ) );
+    };
+    const auto center_pixels = [&]() {
+        auto image = fp3d_compositor::copy_view();
+        REQUIRE( image );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), image.get() ) );
+        const SDL_Rect crop{ 375, 275, 50, 50 };
+        SDL_Surface_Ptr raw( SDL_RenderReadPixels( renderer.get(), &crop ) );
+        REQUIRE( raw );
+        SDL_Surface_Ptr rgba( SDL_ConvertSurface( raw.get(), SDL_PIXELFORMAT_RGBA32 ) );
+        REQUIRE( rgba );
+        REQUIRE( SDL_SetRenderTarget( renderer.get(), nullptr ) );
+        std::vector<Uint32> pixels;
+        for( int y = 0; y < rgba->h; ++y ) {
+            const auto *row = reinterpret_cast<const Uint32 *>(
+                                  static_cast<const Uint8 *>( rgba->pixels ) + y * rgba->pitch );
+            pixels.insert( pixels.end(), row, row + rgba->w );
+        }
+        return pixels;
+    };
+    SDL_Event wheel{};
+    wheel.type = SDL_EVENT_MOUSE_WHEEL;
+    wheel.wheel.windowID = SDL_GetWindowID( window.get() );
+    wheel.wheel.mouse_x = 410;
+    wheel.wheel.mouse_y = 305;
+    const auto zoom = [&]( float amount ) {
+        wheel.wheel.y = amount;
+        REQUIRE( fp3d_compositor::process_event( wheel ) );
+    };
+    zoom( -40.f );
+    CHECK( fp3d_compositor::overhead_distance() == fp3d_camera::orbit_max_distance );
+    for( int n = 0; n < 4; ++n ) {
+        draw();
+    }
+    // Continuous zoom from far to near and back. The one snapshot published
+    // above feeds every frame, including both opacity thresholds.
+    double total_ms = 0;
+    double worst_ms = 0;
+    constexpr int frames = 28;
+    for( const float step : { 1.f, -1.f } ) {
+        for( int n = 0; n < frames; ++n ) {
+            zoom( step );
+            const auto begin = std::chrono::steady_clock::now();
+            draw();
+            const double elapsed = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - begin ).count();
+            total_ms += elapsed;
+            worst_ms = std::max( worst_ms, elapsed );
+        }
+        CHECK( fp3d_compositor::overhead_distance() == ( step > 0 ?
+               fp3d_camera::orbit_min_distance : fp3d_camera::orbit_max_distance ) );
+        REQUIRE( fp3d_compositor::copy_view() );
+    }
+    zoom( 40.f );
+    for( int n = 0; n < 4; ++n ) {
+        draw();
+    }
+    const auto faded = center_pixels();
+    fp3d_compositor::publish( std::move( opaque_scene ) );
+    for( int n = 0; n < 4; ++n ) {
+        draw();
+    }
+    const auto opaque = center_pixels();
+    CHECK( fp3d_compositor::overhead_distance() == fp3d_camera::orbit_min_distance );
+    REQUIRE( faded.size() == opaque.size() );
+    const auto differing = std::inner_product( faded.begin(), faded.end(), opaque.begin(), 0,
+                           std::plus<>(), std::not_equal_to<>() );
+    CHECK( differing > 250 );
+    if( const char *path = std::getenv( "CDDA_FP3D_OPEN_STRUCTURE_TIMING" ) ) {
+        std::ofstream timing( path, std::ios::app );
+        timing << "pack=" << pack << ", frames=" << frames * 2
+               << ", mean_draw_wait_ms=" << total_ms / ( frames * 2 )
+               << ", max_draw_wait_ms=" << worst_ms << ", changed_pixels=" << differing << '\n';
+    }
+    // Exercise first-person submission and native 2D drawing in the same fixture.
+    fp3d_compositor::restore_view_mode( "first_person" );
+    CHECK( fp3d_compositor::view_3d() );
+    CHECK_FALSE( fp3d_compositor::overhead() );
+    fp3d_compositor::publish_camera( you, here, false );
+    for( int n = 0; n < 4; ++n ) {
+        draw();
+    }
+    REQUIRE( fp3d_compositor::copy_view() );
+    fp3d_compositor::restore_view_mode( "2d" );
+    CHECK_FALSE( fp3d_compositor::view_3d() );
+    restore_on_out_of_scope restore_posx( POSX );
+    restore_on_out_of_scope restore_posy( POSY );
+    POSX = 12;
+    POSY = 9;
+    SDL_Texture_Ptr canvas( SDL_CreateTexture( renderer.get(), SDL_PIXELFORMAT_RGBA8888,
+                            SDL_TEXTUREACCESS_TARGET, 800, 600 ) );
+    REQUIRE( canvas );
+    REQUIRE( SDL_SetRenderTarget( renderer.get(), canvas.get() ) );
+    std::multimap<point, formatted_text> strings;
+    color_block_overlay_container blocks;
+    tilecontext->draw( point::zero, player, 800, 600, strings, blocks );
+    SDL_Surface_Ptr pixels( SDL_RenderReadPixels( renderer.get(), nullptr ) );
+    REQUIRE( pixels );
+    REQUIRE( SDL_SetRenderTarget( renderer.get(), nullptr ) );
+    CHECK( you.get_moves() == moves );
+    CHECK( calendar::turn == turn );
 }
 
 // Explicit opt-in: briefly opens a dedicated SDL3 window, without a player save.

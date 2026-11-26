@@ -15,6 +15,7 @@
 #include "field_type.h"
 #include <SDL3/SDL_gpu.h>
 #include "fp3d_snapshot.h"
+#include "fp3d_scene.h"
 #include "mapdata.h"
 #include "item.h"
 #include "itype.h"
@@ -846,13 +847,19 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 pending.push_back( { std::move( key ), nullptr } );
             }
         }
-        if( tile.kind == fp3d_snapshot::terrain_kind::fence && pending.size() < max_slots ) {
-            std::string key = "$fence:" + tile.terrain;
+        if( ( tile.kind == fp3d_snapshot::terrain_kind::fence ||
+              fp3d_snapshot::is_picket_gate( tile.terrain ) ) && pending.size() < max_slots ) {
+            std::string key = fp3d_snapshot::is_picket_gate( tile.terrain ) ?
+                              "$fence:t_fence" : "$fence:" + tile.terrain;
             if( model_keys.insert( key ).second ) {
                 pending.push_back( { std::move( key ), nullptr, false, false, false, false, true } );
             }
         }
         if( tile.furniture && pending.size() < max_slots ) {
+            if( tile.furniture->id == "f_planter_seedling" &&
+                model_keys.insert( "$plant:f_planter_seedling" ).second ) {
+                pending.push_back( { "$plant:f_planter_seedling", nullptr, true } );
+            }
             // The UndeadPeople bed picture is cloth only. Fetch a second
             // opaque, real wood tile for frame rails instead of stretching
             // beige upholstery on all upright surfaces.
@@ -868,7 +875,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 pending.push_back( { "t_metal_floor", nullptr } );
             }
             std::string key = "$furniture:" + tile.furniture->id;
-            if( model_keys.insert( key ).second ) {
+            if( pending.size() < max_slots && model_keys.insert( key ).second ) {
                 pending.push_back( { std::move( key ), nullptr, false, false, true } );
             }
         }
@@ -948,8 +955,14 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
         if( tile.kind == fp3d_snapshot::terrain_kind::ladder ) {
             add( "t_concrete", nullptr );
-        } else if( tile.kind == fp3d_snapshot::terrain_kind::downspout || tile.kind == fp3d_snapshot::terrain_kind::fence ) {
+        } else if( tile.kind == fp3d_snapshot::terrain_kind::downspout ||
+                   tile.kind == fp3d_snapshot::terrain_kind::fence ||
+                   fp3d_snapshot::is_picket_gate( tile.terrain ) ) {
             add( "t_dirt", nullptr );
+            if( tile.terrain == "t_glass_railing" || tile.terrain == "t_metal_railing" ||
+                tile.terrain == "t_fence_metal" ) {
+                add( "t_floor", nullptr );
+            }
             if( tile.terrain == "t_railing" ) {
                 // When a railing borders a metal tower deck, its lower
                 // 8cm foundation uses the same metal atlas material.
@@ -963,17 +976,13 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             if( pending.size() > before ) {
                 pending.back().window = true;
             }
-        } else if( tile.terrain.compare( 0, 9, "t_treetop" ) == 0 ) {
-            // The native treetop belongs to a higher z-level, but its art
-            // must come from the corresponding tree, not a missing ground
-            // tile. This is an alpha-cutout atlas slot for crossed cards.
-            const size_t before = pending.size();
-            add( treetop_plant_key( tile.terrain ), nullptr );
-            if( pending.size() > before ) {
-                pending.back().plant = true;
-            }
-        } else if( tile.kind != fp3d_snapshot::terrain_kind::glass ) {
+        } else if( tile.kind != fp3d_snapshot::terrain_kind::glass &&
+                   tile.terrain.compare( 0, 9, "t_treetop" ) != 0 ) {
             add( terrain_key( tile ), nullptr );
+            if( tile.ground_connections >= 0 && tile.ground_connections < 15 &&
+                fp3d_scene::water_surface_offset( tile.terrain ) < 0.f ) {
+                add( "t_dirt", nullptr );
+            }
         }
         if( !tile.ceiling_surface.empty() ) {
             // An exposed metal walkway can be visible from underneath even
@@ -1088,12 +1097,16 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     unsigned missing = 0;
     for( const request &entry : pending ) {
         const std::string &id = entry.key;
+        const bool ground_art = id.compare( 0, 8, "$ground:" ) == 0;
+        const auto ground_separator = ground_art ? id.find( ':', 8 ) : std::string::npos;
+        const bool water_art = ground_separator != std::string::npos &&
+                               fp3d_scene::water_surface_offset( id.substr( ground_separator + 1 ) ) < 0.f;
         const unsigned index = slots.size();
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
         const bool transparent = entry.image || entry.plant || entry.window || entry.field ||
                                  entry.field_sprite >= 0 ||
-                                 entry.fence || entry.vehicle || entry.status;
+                                 entry.fence || entry.vehicle || entry.status || water_art;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         RenderFillRectPixels( renderer, &slot );
@@ -1175,9 +1188,14 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 tile = wood;
             }
         }
+        if( id == "$furniture:f_planter_seedling" ) {
+            if( const auto *soil = resolve_vegetation( *selected, "f_planter", season ) ) {
+                tile = soil;
+            }
+        }
         int roof_rotation = 0;
         const bool roof_art = id.compare( 0, 6, "$roof:" ) == 0;
-        const bool ground_art = id.compare( 0, 8, "$ground:" ) == 0;
+        bool water_subtile = false;
         if( roof_art || ground_art ) {
             const std::size_t prefix = ground_art ? 8 : 6;
             const auto separator = id.find( ':', prefix );
@@ -1207,6 +1225,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                                  subtiles[mask] ) != tile->available_subtiles.end() ) ) ) {
                 tile = &connected->tile();
                 roof_rotation = rotations[mask];
+                water_subtile = water_art && mask != 15;
             }
         }
         bool painted = false;
@@ -1222,6 +1241,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 const unsigned seed = stable_seed( entry.field ? entry.field_id + ":" +
                                                   std::to_string( entry.field_connections ) : id );
                 for( bool foreground : { false, true } ) {
+                    // Native shore sprites have transparent land outside the water.
+                    // The world mesh supplies the soil below, including in the reflection pass.
+                    if( water_subtile && !foreground ) { continue; }
                     const auto *choices = ( foreground ? tile->fg : tile->bg ).pick( seed );
                     if( !choices || choices->empty() ) { continue; }
                     const int index = ( *choices )[choices->size() > 1 ?
@@ -1245,9 +1267,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         if( entry.field_sprite >= 0 ) {
             painted = paint( entry.field_sprite, slot );
         }
-        if( painted && entry.status ) {
-            // Native badges are positioned within a full creature-sized canvas.
-            // Crop transparent padding before placing them on the small 3D quad.
+        if( painted && ( entry.status || id == "$plant:f_planter_seedling" ) ) {
+            // Fit badges and isolated planter foliage inside their 3D quads.
             std::array<Uint8, slot_size * slot_size * 4> pixels{};
             if( ReadRenderPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32,
                                       pixels.data(), slot_size * 4 ) == 0 ) {
@@ -1381,7 +1402,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 }
             }
         }
-        if( painted && entry.image && entry.image->kind == fp3d_snapshot::sprite_kind::monster ) {
+        if( painted && entry.image && ( entry.image->kind == fp3d_snapshot::sprite_kind::monster ||
+                                        entry.image->kind == fp3d_snapshot::sprite_kind::item ) ) {
             // Once per newly populated atlas slot, including animation frames.
             // Hover/picking only use this CPU bitmask; no per-frame readback.
             std::array<Uint8, slot_size * slot_size * 4> rgba{};
@@ -1449,6 +1471,21 @@ std::optional<uv_rect> lookup_gpu( const std::string &id )
                     ( y + slot_size - inset ) / atlas_size };
 }
 
+
+std::optional<uv_rect> picket_wood_gpu()
+{
+    if( !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ) {
+        return std::nullopt;
+    }
+    const auto stock = lookup_gpu( "$fence:t_fence" );
+    if( !stock ) {
+        return std::nullopt;
+    }
+    const float du = ( stock->right - stock->left ) / 31;
+    const float dv = ( stock->bottom - stock->top ) / 31;
+    return uv_rect{ stock->left + 4 * du, stock->top + 11 * dv,
+                    stock->left + 7 * du, stock->top + 14 * dv };
+}
 
 unsigned revision()
 {
@@ -1624,6 +1661,16 @@ static furniture_uv furniture_surfaces( const std::string &id, unsigned part_ind
 {
     const auto surface = lookup_surface( "$furniture:" + id );
     furniture_uv result{ surface, surface, surface };
+    const bool display_rack = id == "f_rack" || id == "f_rack_l" || id == "f_rack_wood";
+    const bool terminal = id == "f_console";
+    const bool rebuilt_appliance = id == "f_air_conditioner" || id == "f_water_purifier" || terminal;
+    if( ( display_rack || rebuilt_appliance ) &&
+        ( !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ) ) {
+        return {}; // The 3D parts have their own colors in other tilesets.
+    }
+    if( rebuilt_appliance && !selected->find_tile_type_by_season( id, season ) ) {
+        return {};
+    }
     if( !surface || !selected ) {
         return result;
     }
@@ -1656,8 +1703,53 @@ static furniture_uv furniture_surfaces( const std::string &id, unsigned part_ind
         }
         return result;
     }
+    if( terminal ) {
+        // The original sprite stacks the monitor above the controls.
+        // Lay the monitor on the horizontal face and sample plain cabinet pixels below it.
+        result.top = crop( 0, 0, 31, 17 );
+        result.front = result.side = result.back = crop( 3, 29, 12, 31 );
+        return result;
+    }
     // The remaining layouts are specific to the Undead People artwork.
-    if( uses( "f_coffee_table" ) ) {
+    const bool trashcan = uses( "f_trashcan" );
+    if( id == "f_air_conditioner" ) {
+        const auto sheet = crop( 25, 13, 29, 17 );
+        const auto dark = crop( 11, 19, 11, 19 );
+        result.top = result.front = result.side = sheet;
+        if( part_index <= 1 ) {
+            result.top = crop( 4, 4, 27, 7 );
+        } else if( part_index == 5 ) {
+            result.top = result.front = result.side = dark;
+        } else if( part_index >= 7 && part_index <= 11 ) {
+            result.top = result.front = result.side = crop( 5, 10, 12, 10 );
+        }
+    } else if( id == "f_water_purifier" ) {
+        const auto casing = crop( 25, 6, 29, 14 );
+        result.top = result.front = result.side = casing;
+        if( part_index == 1 ) {
+            result.front = crop( 25, 17, 29, 18 );
+        } else if( part_index == 2 ) {
+            result.front = crop( 6, 24, 15, 24 );
+        } else if( part_index >= 5 && part_index < 20 ) {
+            const unsigned piece = ( part_index - 5 ) % 5;
+            const auto filter = piece == 0 ? crop( 6, 13, 7, 18 ) :
+                                piece == 4 ? crop( 4, 27, 4, 27 ) :
+                                crop( 2, 15, 3, 18 );
+            result.top = result.front = result.side = filter;
+        }
+    } else if( trashcan || uses( "f_metal_trashcan" ) ) {
+        // Keep the sprite silhouette and its cast shadow off the cylindrical surfaces.
+        if( part_index == 1 ) {
+            result.top = trashcan ? crop( 13, 11, 17, 13 ) : crop( 12, 5, 20, 10 );
+            result.front = result.side = trashcan ? crop( 14, 15, 17, 16 ) : crop( 12, 13, 20, 15 );
+        } else if( part_index == 2 ) {
+            result.top = result.front = result.side = trashcan ? crop( 13, 27, 17, 28 ) :
+                          crop( 13, 26, 19, 27 );
+        } else {
+            result.top = result.front = result.side = trashcan ? crop( 13, 19, 17, 26 ) :
+                          crop( 12, 17, 20, 25 );
+        }
+    } else if( uses( "f_coffee_table" ) ) {
         // The artwork is a low table silhouette surrounded by transparency.
         // Map the wooden top, apron and leg wood to their physical parts only.
         const auto wood = crop( 3, 14, 5, 18 );
@@ -1691,6 +1783,14 @@ static furniture_uv furniture_surfaces( const std::string &id, unsigned part_ind
         result.top = crop( 3, 2, 28, 6 );
         result.front = crop( 3, 9, 28, 30 );
         result.side = crop( 4, 2, 26, 6 );
+    } else if( display_rack ) {
+        // Use opaque upright and board patches from each rack sprite.
+        if( part_index < 4 ) {
+            result.top = result.front = result.side = crop( 3, 11, 3, 14 );
+        } else {
+            result.top = crop( 2, 1, 29, 8 );
+            result.front = result.side = crop( 5, 2, 26, 3 );
+        }
     } else if( uses( "f_bookcase" ) ) {
         result.top = crop( 2, 1, 29, 6 );
         // The books are the front of the case, not the side or top.
@@ -1788,6 +1888,19 @@ static furniture_uv furniture_surfaces( const std::string &id, unsigned part_ind
         if( part_index == 0 ) {
             result.top = crop( 8, 10, 25, 19 );
             result.front = result.side = crop( 12, 16, 18, 18 );
+        }
+    } else if( uses( "f_tourist_table" ) ) {
+        const auto metal = crop( 7, 23, 7, 27 );
+        result.top = result.front = result.side = metal;
+        if( part_index == 0 ) {
+            result.top = crop( 3, 3, 28, 20 );
+            result.front = result.side = crop( 9, 21, 15, 21 );
+        }
+    } else if( uses( "f_sign" ) || uses( "f_sign_warning" ) ) {
+        const auto wood = crop( 15, 21, 16, 28 );
+        result.top = result.front = result.side = wood;
+        if( part_index == 1 ) {
+            result.front = crop( 6, 8, 24, 18 );
         }
     } else if( uses( "f_table" ) ) {
         // Flat overhead grain. Side/legs use a small neutral grain patch.
@@ -2050,11 +2163,21 @@ static furniture_uv furniture_surfaces( const std::string &id, unsigned part_ind
         } else if( part_index >= 2 ) {
             result.top = crop( 2, 3, 29, 5 );
         }
+    } else if( uses( "f_camp_chair" ) ) {
+        const auto frame = crop( 7, 4, 7, 11 );
+        result.top = result.front = result.side = frame;
+        if( part_index == 0 ) {
+            result.top = crop( 8, 16, 23, 18 );
+            result.front = result.side = crop( 8, 19, 23, 20 );
+        } else if( part_index == 1 ) {
+            result.front = result.back = crop( 11, 4, 21, 12 );
+        }
     } else if( uses( "f_chair" ) ) {
-        const auto wood = crop( 6, 23, 7, 29 );
+        // The sprite has black outlines on both sides of this wooden leg.
+        const auto wood = crop( 6, 24, 6, 28 );
         if( part_index == 0 ) {
             result.top = crop( 7, 17, 24, 18 );
-            result.front = crop( 6, 19, 25, 20 );
+            result.front = crop( 8, 19, 23, 20 );
             result.side = wood;
         } else if( part_index == 1 ) {
             result.top = result.side = wood;

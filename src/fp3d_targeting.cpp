@@ -150,6 +150,9 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         const auto it = indexed.find( p );
         return it == indexed.end() ? nullptr : it->second;
     };
+    const auto monster_walls = camera_facing_sprites ?
+                               fp3d_scene::monster_cutaway_walls( scene, offset, cell_at ) :
+                               std::unordered_set<tripoint_abs_ms>{};
     const auto wall_at = [&]( const tripoint_abs_ms & p ) {
         const auto *tile = cell_at( p );
         return tile && ( tile->kind == fp3d_snapshot::terrain_kind::wall ||
@@ -218,7 +221,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         };
         if( tile->furniture ) {
             const auto shape = tile->furniture->shape;
-            const unsigned facing = shape == fp3d_furniture::kind::chair ?
+            const unsigned facing = shape == fp3d_furniture::kind::chair ||
+                                    shape == fp3d_furniture::kind::camp_chair ?
                                     fp3d_furniture::facing( shape, {},
             { table_at( tile->position + tripoint_rel_ms::north ),
               table_at( tile->position + tripoint_rel_ms::east ),
@@ -317,6 +321,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             // Avoid four neighbour lookups for every ordinary floor tile.
             const bool special = tile->kind == terrain::fence ||
                                  fp3d_snapshot::is_chain_gate( tile->terrain ) ||
+                                 fp3d_snapshot::is_metal_gate( tile->terrain ) ||
+                                 fp3d_snapshot::is_picket_gate( tile->terrain ) ||
                                  tile->terrain == "t_radio_tower" ||
                                  tile->terrain == "t_column" ||
                                  tile->terrain == "t_pillar" ||
@@ -339,7 +345,12 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
             return fp3d_snapshot::terrain_model_parts( tile->terrain, links );
         }();
-        if( !model_parts.empty() ) {
+        if( fp3d_scene::glass_wall( *tile ) || tile->terrain == "t_glass_railing" ) {
+            for( const auto &part : fp3d_snapshot::glass_barrier_parts(
+                     tile->terrain == "t_glass_railing", fp3d_scene::glass_barrier_links( *tile, cell_at ) ) ) {
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+            }
+        } else if( !model_parts.empty() ) {
             for( const auto &part : model_parts ) {
                 box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
             }
@@ -357,7 +368,9 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
             }
         } else if( tile->kind == terrain::wall || tile->kind == terrain::obstacle ) {
-            box( 0, 0, .98f, .98f, 0, tile->kind == terrain::wall ? fp3d_camera::floor_height : 1 );
+            const float top = monster_walls.count( tile->position ) ? fp3d_scene::cutaway_wall_height :
+                              tile->kind == terrain::wall ? fp3d_camera::floor_height : 1.f;
+            box( 0, 0, .98f, .98f, 0, top );
         } else if( tile->kind == terrain::closed_door || tile->kind == terrain::open_door ||
                    tile->kind == terrain::damaged_door || tile->kind == terrain::glass ||
                    tile->kind == terrain::window ) {

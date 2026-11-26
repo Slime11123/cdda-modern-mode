@@ -763,9 +763,8 @@ int main( int argc, const char *argv[] )
     if( !cli.menu_demo_worker_output.empty() ) {
         // No second gameplay window or audio device; software SDL still runs
         // the same original tile renderer in the isolated demo process.
-        _putenv_s( "SDL_VIDEODRIVER", "dummy" );
-        _putenv_s( "SDL_AUDIODRIVER", "dummy" );
-        _putenv_s( "SDL_RENDER_DRIVER", "software" );
+        SDL_SetHintWithPriority( SDL_HINT_VIDEO_DRIVER, "dummy", SDL_HINT_OVERRIDE );
+        SDL_SetHintWithPriority( SDL_HINT_AUDIO_DRIVER, "dummy", SDL_HINT_OVERRIDE );
         _putenv_s( "CDDA_FP3D", "0" );
     }
 #endif

@@ -1140,6 +1140,20 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
         submit_world();
         REQUIRE( fp3d_compositor::draw_menu_background( 0, 0, 1280, 720 ) );
         save_menu( "curtain-peek-overhead.png" );
+        you.setpos( here, player, false );
+        fp3d_compositor::set_curtain_peek( std::nullopt );
+        CHECK_FALSE( fp3d_compositor::active() );
+        CHECK( fp3d_compositor::draw_menu_background( 0, 0, 1280, 720 ) );
+        fp3d_compositor::set_input_context( "DEFAULTMODE" );
+        CHECK( fp3d_compositor::copy_view() );
+        fp3d_snapshot::prepare_view( you, here );
+        fp3d_compositor::publish_camera( you, here, true );
+        submit_world();
+
+        you.setpos( here, ground, false );
+        fp3d_snapshot::prepare_view( you, here );
+        fp3d_compositor::set_curtain_peek( here.get_abs( ground ), point( 0, -1 ) );
+        fp3d_compositor::set_input_context( "LOOK" );
         fp3d_compositor::restore_view_mode( "first_person" );
         REQUIRE( fp3d_compositor::active() );
         fp3d_compositor::publish_camera( you, here, false );
@@ -1149,7 +1163,7 @@ TEST_CASE( "modern_2d_survival_panel_renders_without_a_3d_scene", "[.modern_2d_p
         you.setpos( here, player, false );
         fp3d_compositor::set_curtain_peek( std::nullopt );
         CHECK_FALSE( fp3d_compositor::active() );
-        CHECK_FALSE( fp3d_compositor::copy_view() );
+        CHECK( fp3d_compositor::draw_menu_background( 0, 0, 1280, 720 ) );
     }
 }
 #endif

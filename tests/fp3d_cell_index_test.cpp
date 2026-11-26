@@ -69,6 +69,53 @@ TEST_CASE( "fp3d_world_prepares_at_most_once_while_a_submission_is_busy",
     CHECK( preparation.choose( false, true ) == preparation_mode::reuse_materials );
 }
 
+TEST_CASE( "fp3d_iris_collects_prepared_water_without_wet_pavement", "[fp3d][iris_water]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 64, 64, 0 );
+    scene.weather.particles = fp3d_weather::precipitation::rain;
+    scene.weather.intensity = 1.f;
+    for( const char *terrain : { "t_water_sh", "t_water_dp", "t_pavement" } ) {
+        const int x = static_cast<int>( scene.cells.size() ) - 1;
+        auto &tile = scene.cells.emplace_back();
+        tile.position = scene.origin + tripoint_rel_ms( x, -3, 0 );
+        tile.terrain = terrain;
+    }
+    fp3d_camera::pose pose;
+    pose.eye.height = 1.5f;
+    const auto world = prepare( scene, pose, false, 512, 512, true );
+    REQUIRE( world );
+    REQUIRE( std::any_of( world->reflective_batches.begin(), world->reflective_batches.end(),
+    []( const reflective_batch &entry ) { return entry.surface == reflective_surface::asphalt; } ) );
+    const fp3d_gpu::indexed_mesh dynamic;
+    const fp3d_gpu::indexed_mesh resident;
+    const world_meshes meshes{ dynamic, &resident, { 4, 2, -3 } };
+    const auto selected = collect_water_geometry( *world, meshes );
+    REQUIRE( selected.size() == 2 );
+    for( const auto surface : { reflective_surface::water_shallow, reflective_surface::water_deep } ) {
+        const auto source = std::find_if( world->reflective_batches.begin(), world->reflective_batches.end(),
+        [surface]( const reflective_batch &entry ) { return entry.surface == surface; } );
+        const auto draw = std::find_if( selected.begin(), selected.end(),
+        [surface]( const water_geometry_draw &entry ) { return entry.surface == surface; } );
+        REQUIRE( source != world->reflective_batches.end() );
+        REQUIRE( draw != selected.end() );
+        CHECK( draw->draw.first_index == source->draws.first_index );
+        CHECK( draw->draw.index_count == source->draws.index_count );
+        CHECK( draw->draw.first_instance == source->draws.first_instance );
+        CHECK( draw->draw.instance_count == source->draws.instance_count );
+        CHECK( draw->draw.mesh == ( source->draws.resident ? &resident : &dynamic ) );
+    }
+    prepared_world resident_water;
+    resident_water.reflective_batches.push_back( { { 7, 6, 21, 2, true, true }, {},
+                                                 reflective_surface::water_deep } );
+    const auto anchored = collect_water_geometry( resident_water, meshes );
+    REQUIRE( anchored.size() == 1 );
+    CHECK( anchored[0].draw.mesh == &resident );
+    CHECK( anchored[0].draw.first_instance == 21 );
+    CHECK( anchored[0].anchor_to_scene == meshes.resident_to_scene );
+}
+
 TEST_CASE( "fp3d_pickup_highlight_is_scoped_to_the_selected_container",
            "[fp3d][gpu_presentation]" )
 {
@@ -616,6 +663,43 @@ TEST_CASE( "fp3d_packed_terrain_dirty_blocks", "[.][static_terrain_profile]" )
     CHECK( reflected == wet_packed.reflective_batches.front().draws.instance_count );
     const auto repeated = gather( split );
     CHECK( repeated.resident_page_revision == wet_split.resident_page_revision );
+    const auto selected = std::find_if( wet_split.batches.begin(), wet_split.batches.end(),
+    []( const batch &draw ) {
+        return draw.paged_instances && draw.instance_count == terrain_index::instance_pages::page_size;
+    } );
+    REQUIRE( selected != wet_split.batches.end() );
+    const auto &offset = ( *wet_split.resident_pages )[selected->first_instance].offset;
+    const auto coordinate = scene.origin + tripoint_rel_ms(
+                                static_cast<int>( offset[0] + wet_split.resident_to_scene[0] ),
+                                static_cast<int>( offset[2] + wet_split.resident_to_scene[2] ), 0 );
+    const auto edited_cell = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const auto &entry ) {
+        return entry.position == coordinate;
+    } );
+    REQUIRE( edited_cell != scene.cells.end() );
+    edited_cell->floor_present = false;
+    ++scene.geometry_generation;
+    const auto edited_packed = gather( resident );
+    const auto edited_split = gather( split );
+    CHECK( instances( edited_split, edited_split.batches ) == instances( edited_packed,
+            edited_packed.batches ) );
+    REQUIRE( edited_split.resident_pages );
+    REQUIRE( edited_split.resident_pages->size() == wet_split.resident_pages->size() );
+    constexpr size_t page_size = terrain_index::instance_pages::page_size;
+    constexpr size_t page_bytes = sizeof( fp3d_gpu::mesh_instance ) * page_size;
+    size_t dirty_pages = 0;
+    for( size_t i = 0; i < wet_split.resident_pages->size(); i += page_size ) {
+        if( std::memcmp( wet_split.resident_pages->data() + i,
+                         edited_split.resident_pages->data() + i, page_bytes ) != 0 ) {
+            ++dirty_pages;
+        }
+    }
+    CHECK( dirty_pages == 1 );
+    CHECK( dirty_packed_bytes( wet_split, edited_split ) == 0 );
+    const size_t packed_edit = dirty_packed_bytes( wet_packed, edited_packed );
+    CHECK( packed_edit > page_bytes );
+    WARN( "terrain_page_split packed_edit=" << packed_edit << ", split_edit=" <<
+          dirty_pages * page_bytes << ", extra_batches=" <<
+          wet_split.batches.size() - wet_packed.batches.size() );
 }
 
 TEST_CASE( "fp3d_static_instance_upload_positions_survive_movement_within_anchor",
@@ -792,6 +876,50 @@ TEST_CASE( "fp3d_block_instance_pages_retain_offsets_and_evict_inactive_blocks",
     pages.clear();
     CHECK( pages.data().empty() );
     CHECK( pages.write( 2, { 7 }, encode ) == first );
+}
+
+TEST_CASE( "fp3d_open_structure_reuses_resident_mesh_with_sorted_alpha_and_shadows",
+           "[fp3d][overhead][open_structure]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 0, 0, 0 );
+    scene.geometry_generation = 1;
+    for( int z = 0; z <= 2; ++z ) {
+        auto &tile = scene.cells.emplace_back();
+        tile.position = tripoint_abs_ms( 0, 0, z );
+        tile.terrain = z ? "t_flat_roof" : "t_pavement";
+        tile.open_structure_above = z > 0;
+    }
+    terrain_index cache( true, true, true );
+    const auto view = fp3d_camera::orbit_pose( {}, 0, 0 );
+    const auto frame = [&]( float opacity ) {
+        return prepare( scene, view, true, 512, 512, true, false, false, true, nullptr,
+                        nullptr, &cache, true, nullptr, nullptr, opacity );
+    };
+    const auto far = frame( 1.f );
+    const auto middle = frame( .55f );
+    const auto near = frame( .1f );
+    REQUIRE( far );
+    REQUIRE( middle );
+    REQUIRE( near );
+    REQUIRE( far->resident_geometry );
+    CHECK( far->resident_geometry == middle->resident_geometry );
+    CHECK( far->resident_geometry == near->resident_geometry );
+    CHECK( far->opaque_batches > near->opaque_batches );
+    CHECK( far->open_structure_shadows.empty() );
+    REQUIRE( near->badge_end + 2 == near->blend_end );
+    const auto alpha = []( const prepared_world &world, const batch &draw ) {
+        REQUIRE( draw.resident );
+        const size_t prefix = world.resident_pages ? world.resident_pages->size() : 0;
+        return world.resident_instances.at( draw.first_instance - prefix ).tint[3];
+    };
+    CHECK( alpha( *middle, middle->batches.at( middle->badge_end ) ) == Approx( .55f ) );
+    CHECK( alpha( *near, near->batches.at( near->badge_end ) ) == Approx( .1f ) );
+    CHECK( alpha( *near, near->batches.at( near->badge_end + 1 ) ) == Approx( .1f ) );
+    CHECK( near->open_structure_shadows.size() == 1 );
+    CHECK( near->batches.at( near->badge_end ).first_instance <
+           near->batches.at( near->badge_end + 1 ).first_instance );
 }
 
 TEST_CASE( "fp3d_pointer_cutaway_lowers_only_near_walls_in_cached_and_direct_geometry",

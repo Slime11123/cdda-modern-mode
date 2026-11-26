@@ -178,6 +178,54 @@ TEST_CASE( "fp3d_furniture_parts_fit_their_tiles_and_display_surfaces", "[fp3d][
     CHECK( fp3d_furniture::parts( freezer->shape ).back().top == Approx( 1 ) );
 }
 
+TEST_CASE( "fp3d_purifier_glass_covers_three_filter_housings", "[fp3d][furniture]" )
+{
+    using namespace fp3d_furniture;
+    const auto purifier = describe( "f_water_purifier" );
+    REQUIRE( purifier );
+    const auto &pieces = parts( purifier->shape );
+    const auto pane = std::find_if( pieces.begin(), pieces.end(), []( const part &piece ) {
+        return piece.glass;
+    } );
+    REQUIRE( pane != pieces.end() );
+    const auto roof_pane = std::find_if( pieces.begin(), pieces.end(), []( const part &piece ) {
+        return piece.glass && piece.depth > piece.top - piece.bottom;
+    } );
+    REQUIRE( roof_pane != pieces.end() );
+    CHECK( roof_pane->bottom == Approx( pane->top ) );
+    CHECK( roof_pane->x == Approx( pane->x ) );
+    CHECK( roof_pane->width == Approx( pane->width ) );
+    CHECK( roof_pane->z + roof_pane->depth / 2 == Approx( pane->z + pane->depth / 2 ) );
+    CHECK( pane->x + pane->width / 2 == Approx( .09f ) );
+    CHECK( std::count_if( pieces.begin(), pieces.end(), [&]( const part &piece ) {
+        return piece.round && !piece.horizontal && piece.top - piece.bottom > .45f &&
+               piece.z + piece.depth / 2 < pane->z - pane->depth / 2 &&
+               std::abs( piece.x - pane->x ) + piece.width / 2 < pane->width / 2 &&
+               piece.bottom > pane->bottom && piece.top < pane->top;
+    } ) == 3 );
+}
+
+TEST_CASE( "fp3d_wooden_rack_has_open_sides_and_three_shelves", "[fp3d][furniture]" )
+{
+    const auto rack = fp3d_furniture::describe( "f_rack_wood" );
+    REQUIRE( rack );
+    REQUIRE( rack->shape == fp3d_furniture::kind::rack );
+    const auto &pieces = fp3d_furniture::parts( rack->shape );
+    REQUIRE( pieces.size() == 7 );
+    for( size_t i = 0; i < 4; ++i ) {
+        CHECK( pieces[i].width < .1f );
+        CHECK( pieces[i].depth < .1f );
+        CHECK( pieces[i].bottom == 0.f );
+        CHECK( pieces[i].top > pieces.back().top );
+    }
+    for( size_t i = 4; i < pieces.size(); ++i ) {
+        CHECK( pieces[i].width > .8f );
+        CHECK( pieces[i].depth > .75f );
+        CHECK( pieces[i].bottom > pieces[i - 1].bottom );
+    }
+    CHECK( fp3d_furniture::item_surface( rack->shape ) == pieces[5].top );
+}
+
 TEST_CASE( "fp3d_round_stool_has_no_backrest_and_does_not_target_empty_corners",
            "[fp3d][furniture][ray]" )
 {

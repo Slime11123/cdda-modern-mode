@@ -31,6 +31,7 @@
 #include "fp3d_inventory.h"
 #include "fp3d_materials.h"
 #include "fp3d_gpu_world_qa.h"
+#include "fp3d_legacy_shader_bridge.h"
 #include "fp3d_shaderpacks.h"
 #include "fp3d_snapshot.h"
 #include "map.h"
@@ -140,7 +141,6 @@ struct pointer_state {
     float ndc_y = 0;
 } pointer;
 std::optional<fp3d_snapshot::scene_snapshot> latest_scene;
-fp3d_gpu_world_qa::terrain_index live_terrain_index( true, true );
 std::optional<fp3d_hud::data> latest_2d_hud;
 unsigned published_generation = 0;
 unsigned contents_generation = 0; // Native publications only; camera masks do not change atlas contents.
@@ -379,6 +379,14 @@ bool env_enabled( const char *name )
     const char *value = std::getenv( name );
     return value && std::strcmp( value, "1" ) == 0;
 }
+
+fp3d_gpu_world_qa::terrain_index &live_terrain_index()
+{
+    static fp3d_gpu_world_qa::terrain_index index( true, true,
+            env_enabled( "CDDA_FP3D_GPU_TERRAIN_PAGES" ) );
+    return index;
+}
+
 void disable( const char *reason )
 {
     enabled = false;
@@ -966,9 +974,7 @@ void set_curtain_peek( std::optional<tripoint_abs_ms> position, const point &dir
         pending_gpu_view.reset();
         gpu_world_qa_pending.reset();
         gpu_views.clear();
-        if( gpu_live_world ) {
-            gpu_live_world->hide();
-        }
+        // Keep displaying the last 3D texture until the restored camera submits a frame.
     }
     sync_mouse();
     if( g ) {
@@ -1209,7 +1215,8 @@ std::string interaction_prompt()
 }
 bool draw_menu_background( int x, int y, int width, int height )
 {
-    SDL_Texture *native_view = gpu_live_world && turn_based() ? gpu_live_world->texture() : nullptr;
+    SDL_Texture *native_view = gpu_live_world && enabled && in_world ? gpu_live_world->texture() :
+                               nullptr;
     if( curtain_peek ) {
         // Keep the previous 3D frame until the peek snapshot completes.
         if( !native_view ) {
@@ -1487,7 +1494,7 @@ void publish( fp3d_snapshot::scene_snapshot scene )
     if( !scene.geometry_generation ) {
         fp3d_snapshot::reuse_geometry( scene, latest_scene ? &*latest_scene : nullptr );
     }
-    live_terrain_index.invalidate_vehicle_roofs();
+    live_terrain_index().invalidate_vehicle_roofs();
     latest_scene = std::move( scene );
 }
 
@@ -1569,7 +1576,9 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
         outline = aim->outline;
         const bool hover_monster = overhead && world_pointer_input() && !selecting_with_pointer &&
                                    visible_pointer_monster( *aim );
-        if( ( selecting_with_pointer || hover_monster ) && !outline &&
+        const bool hover_item = overhead && world_pointer_input() &&
+                                aim->type == fp3d_targeting::kind::item;
+        if( ( selecting_with_pointer || hover_monster || hover_item ) && !outline &&
             ( aim->type == fp3d_targeting::kind::item || aim->type == fp3d_targeting::kind::creature ) ) {
             outline = pointer_sprite_outline( scene, *aim, view, aspect );
         }
@@ -1578,11 +1587,8 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
             outline->color = { 1.f, .12f, .12f, 1.f };
         }
     }
-    const bool post_enabled = gpu_live_world != nullptr;
-    const std::string selection = post_enabled ? fp3d_shaderpacks::selected() : "off";
-    const float builtin_style = selection == "cinematic" ? 1.f : selection == "warm" ? 2.f : 0.f;
-    const auto *pack = post_enabled && builtin_style == 0 ? fp3d_shaderpacks::selected_gpu_profile() : nullptr;
-    const bool daylight_shadows = pack || builtin_style > 0;
+    const auto legacy_shaders = fp3d_legacy_shader_bridge::current( gpu_live_world != nullptr );
+    const bool daylight_shadows = legacy_shaders.active();
     const bool local_lights = daylight_shadows && fp3d_shaderpacks::local_lights_enabled();
     gpu_world_qa_pending = fp3d_gpu_world_qa::prepare( scene, view, overhead, width, height,
                            gpu_live_world != nullptr, local_lights,
@@ -1591,70 +1597,13 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
                            fp3d_shaderpacks::shadows_enabled() && fp3d_shaderpacks::quality() >= 3,
                            gpu_live_world && construction_preview ? &*construction_preview : nullptr,
                            outline ? &*outline : nullptr,
-                           gpu_live_world ? &live_terrain_index : nullptr, reuse_material_slots,
+                           gpu_live_world ? &live_terrain_index() : nullptr, reuse_material_slots,
                            panel_input && pickup_source_highlight ? &*pickup_source_highlight : nullptr,
-                           curtain_peek ? &*curtain_peek : nullptr );
-    if( gpu_world_qa_pending && ( pack || builtin_style > 0 ) ) {
-        if( fp3d_shaderpacks::quality() == 3 && fp3d_shaderpacks::pbr_enabled() &&
-            fp3d_shaderpacks::pbr_strength_percent() > 0 && scene.sky.sun_y > .08f ) {
-            auto &lighting = gpu_world_qa_pending->atmosphere;
-            lighting.pbr_eye_strength = { view.eye.x, view.eye.height, view.eye.y,
-                                          fp3d_shaderpacks::pbr_strength_percent() / 100.f };
-            lighting.pbr_sun_daylight = { scene.sky.sun_x, scene.sky.sun_y, scene.sky.sun_z,
-                                          scene.sky.daylight * ( 1.f - .6f * scene.weather.clouds ) };
-        }
-        auto &photon = gpu_world_qa_pending->photon.emplace();
-        photon.texel_quality_daylight = { 1.f / width, 1.f / height,
-                                          static_cast<float>( fp3d_shaderpacks::quality() ),
-                                          scene.sky.daylight };
-        photon.grade = { 1.f, 0.f, builtin_style == 2.f ? 1.1f : .75f, 1.f };
-        photon.depth_and_ao[1] = !pack || pack->ao ? 1.f : 0.f;
-        photon.depth_and_ao[3] = builtin_style;
-        const auto &m = gpu_world_qa_pending->camera.elements;
-        const float horizontal = std::hypot( m[0], m[1], m[2] );
-        const float vertical = std::hypot( m[4], m[5], m[6] );
-        photon.projection = { horizontal, vertical, fp3d_camera::near_clip, fp3d_camera::far_clip };
-        photon.view_up_and_reflections = { m[1] / horizontal, m[5] / vertical, m[13],
-                                           pack && fp3d_shaderpacks::wet_ssr_enabled() ? 1.f : 0.f };
-        photon.water_east = { m[0] / horizontal, m[4] / vertical, m[12],
-                              static_cast<float>( scene.origin.x() ) + view.eye.x };
-        photon.water_south = { m[2] / horizontal, m[6] / vertical, m[14],
-                               static_cast<float>( scene.origin.y() ) + view.eye.y };
-        const float rain = scene.weather.particles == fp3d_weather::precipitation::rain ?
-                           std::clamp( scene.weather.intensity, 0.f, 1.f ) : 0.f;
-        if( pack ) {
-            photon.grade = { pack->saturation, pack->warmness, pack->bloom ? pack->glow : 0.f,
-                             fp3d_shaderpacks::mc_intensity_percent() / 100.f };
-            photon.water_parameters = { SDL_GetTicks() / 1000.f, pack->water_wave_strength, rain,
-                                    pack->has_water_waves ? 1.f : 0.f };
-            photon.wave_shape = { static_cast<float>( pack->water_waves.iterations ),
-                              pack->water_waves.frequency, pack->water_waves.persistence,
-                              pack->water_waves.lacunarity };
-            photon.wave_options = { pack->water_waves.speed_still,
-                                pack->water_waves.height_variation ? 1.f : 0.f,
-                                pack->water_texture, std::clamp( scene.weather.clouds, 0.f, 1.f ) };
-            photon.water_absorption = { pack->water_absorption[0], pack->water_absorption[1],
-                                     pack->water_absorption[2], 0.f };
-        }
-        photon.eye_volume = { view.eye.x, view.eye.height, view.eye.y, 0.f };
-        if( !overhead && pack && pack->volumetric && fp3d_shaderpacks::shadow_volume_enabled() ) {
-            const auto &sun = gpu_world_qa_pending->atmosphere.sun_direction_strength;
-            photon.sun_volume = { sun[0], sun[1], sun[2], sun[3] / .68f };
-        }
-        if( ( !pack || pack->volumetric ) && scene.origin.z() >= 0 && scene.sky.sun_y > .08f ) {
-            const auto sun = gpu_world_qa_pending->camera.transform(
-                                 scene.sky.sun_x, scene.sky.sun_y, scene.sky.sun_z, 0 );
-            if( sun[3] > .01f ) {
-                const float u = .5f + .5f * sun[0] / sun[3];
-                const float v = .5f - .5f * sun[1] / sun[3];
-                if( u > -.3f && u < 1.3f && v > -.3f && v < 1.3f ) {
-                    const float strength = scene.sky.daylight *
-                                           std::clamp( 1.f - scene.weather.clouds, 0.f, 1.f ) *
-                                           std::min( 1.f, scene.sky.sun_y * 4.f );
-                    photon.sun_position_strength = { u, v, strength, 0 };
-                }
-            }
-        }
+                           curtain_peek ? &*curtain_peek : nullptr,
+                           overhead ? fp3d_camera::open_structure_opacity( orbit_camera.distance ) : 1.f );
+    if( gpu_world_qa_pending && legacy_shaders.active() ) {
+        fp3d_legacy_shader_bridge::configure_frame( legacy_shaders, *gpu_world_qa_pending,
+                scene, view, overhead, width, height );
     }
     if( !gpu_world_qa_pending ) {
         DebugLog( D_WARNING, D_MAIN ) << "fp3d: GPU world has no eligible terrain geometry";

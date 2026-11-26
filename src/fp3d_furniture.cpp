@@ -35,6 +35,15 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_coffee_table" ) {
             return model{ id, kind::coffee_table };
         }
+        if( appearance == "f_camp_chair" ) {
+            return model{ id, kind::camp_chair };
+        }
+        if( appearance == "f_tourist_table" ) {
+            return model{ id, kind::tourist_table };
+        }
+        if( appearance == "f_sign" || appearance == "f_sign_warning" ) {
+            return model{ id, kind::signpost };
+        }
         if( appearance == "f_table" ) {
             return model{ id, kind::table };
         }
@@ -68,7 +77,7 @@ std::optional<model> describe( const std::string &id )
         if( appearance == "f_bookcase" ) {
             return model{ id, kind::cabinet };
         }
-        if( appearance == "f_rack" ) {
+        if( appearance == "f_rack" || appearance == "f_rack_wood" ) {
             return model{ id, kind::rack };
         }
         if( appearance == "f_counter" ) {
@@ -214,6 +223,29 @@ const std::vector<part> &parts( kind shape )
         { .23f, -.23f, .07f, .07f, 0, .40f },
         { -.23f, .23f, .07f, .07f, 0, .40f },
         { .23f, .23f, .07f, .07f, 0, .40f }
+    };
+    static const std::vector<part> camp_chair{
+        { 0, 0, .49f, .44f, .36f, .40f },
+        { 0, -.21f, .49f, .035f, .49f, .77f },
+        { -.25f, -.21f, .035f, .04f, .36f, .80f },
+        { .25f, -.21f, .035f, .04f, .36f, .80f },
+        { 0, -.18f, .035f, .04f, -.06f, .46f, false, false, false, false, .60f, 46.f },
+        { 0, -.18f, .035f, .04f, -.06f, .46f, false, false, false, false, .60f, -46.f },
+        { 0, .18f, .035f, .04f, -.06f, .46f, false, false, false, false, .60f, 46.f },
+        { 0, .18f, .035f, .04f, -.06f, .46f, false, false, false, false, .60f, -46.f }
+    };
+    static const std::vector<part> tourist_table{
+        { 0, 0, .86f, .63f, .65f, .70f },
+        { -.34f, -.23f, .043f, .043f, 0, .65f },
+        { -.34f, .23f, .043f, .043f, 0, .65f },
+        { .34f, -.23f, .043f, .043f, 0, .65f },
+        { .34f, .23f, .043f, .043f, 0, .65f },
+        { -.34f, 0, .043f, .50f, .12f, .163f },
+        { .34f, 0, .043f, .50f, .12f, .163f }
+    };
+    static const std::vector<part> signpost{
+        { 0, 0, .095f, .085f, 0, 1.63f },
+        { 0, .065f, .78f, .06f, 1.13f, 1.56f }
     };
     static const std::vector<part> stool{
         { 0, 0, .56f, .56f, .45f, .53f, true },
@@ -558,11 +590,18 @@ const std::vector<part> &parts( kind shape )
         { .38f, 0, .075f, .075f, 3.19f, 3.82f, true }
     };
     static const std::vector<part> mailbox{
-        { 0, 0, .13f, .13f, 0, 1.08f },        // wooden support
-        { 0, .06f, .35f, .32f, 1.01f, 1.065f },// shelf
-        { 0, .08f, .60f, .41f, 1.065f, 1.37f },// red mail box
-        { 0, .295f, .51f, .025f, 1.13f, 1.33f }, // door lip
-        { .33f, .10f, .055f, .08f, 1.27f, 1.55f } // raised flag
+        { -.25f, -.03f, .10f, .11f, 0, 1.45f },
+        { -.08f, -.03f, .44f, .15f, .97f, 1.045f },
+        { .06f, -.03f, .52f, .31f, 1.03f, 1.20f },
+        { .06f, -.03f, .52f, .31f, 1.20f, 1.36f, false, false, false, false, .60f, 0.f,
+          false, part_form::arch },
+        { .06f, .137f, .48f, .026f, 1.05f, 1.20f },
+        { .06f, .137f, .48f, .026f, 1.20f, 1.34f, false, false, false, false, .60f, 0.f,
+          false, part_form::arch },
+        { -.13f, -.033f, .065f, .082f, .68f, .99f, false, false, false, false, .60f, -39.f },
+        { .30f, .12f, .047f, .030f, 1.15f, 1.42f },
+        { .335f, .12f, .104f, .035f, 1.36f, 1.42f },
+        { .047f, .155f, .10f, .035f, 1.14f, 1.177f },
     };
     // Original UnDeadPeople floor lamp (both unlit and powered):
     // weighted circular foot, thin pole, and a WIDE-BOTTOM tapered shade.
@@ -607,6 +646,12 @@ const std::vector<part> &parts( kind shape )
             return table;
         case kind::chair:
             return chair;
+        case kind::camp_chair:
+            return camp_chair;
+        case kind::tourist_table:
+            return tourist_table;
+        case kind::signpost:
+            return signpost;
         case kind::stool:
             return stool;
         case kind::chest_freezer:
@@ -715,6 +760,10 @@ float item_surface( kind shape )
             return .78f;
         case kind::chair:
             return .48f;
+        case kind::camp_chair:
+            return .40f;
+        case kind::tourist_table:
+            return .70f;
         case kind::stool:
             return .53f;
         case kind::chest_freezer:
@@ -810,13 +859,14 @@ bool shows_contents( kind shape )
 bool chair_table( const std::optional<model> &furniture )
 {
     return furniture && ( furniture->shape == kind::table || furniture->shape == kind::desk ||
-                         furniture->shape == kind::coffee_table );
+                         furniture->shape == kind::coffee_table ||
+                         furniture->shape == kind::tourist_table );
 }
 
 unsigned facing( kind shape, const std::array<bool, 4> &walls,
                  const std::array<bool, 4> &tables )
 {
-    if( shape == kind::chair ) {
+    if( shape == kind::chair || shape == kind::camp_chair ) {
         for( unsigned front = 0; front < tables.size(); ++front ) {
             if( tables[front] ) {
                 return ( front + 2 ) % 4;

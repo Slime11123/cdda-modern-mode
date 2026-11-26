@@ -169,23 +169,16 @@ inline float plant_width( float height )
     return std::max( .9f, height <= 1.2f ? height : height * .7f );
 }
 
-template<typename UV>
-UV treetop_uv( const UV &source )
-{
-    const float height = source.bottom - source.top;
-    return { source.left, source.top + height * .04f,
-             source.right, source.top + height * .66f };
-}
-
 template<typename Sink, typename UV>
-void crossed_plant( Sink &sink, float x, float z, float height, bool grass, const UV &uv, float surface_y = 0.f )
+void crossed_plant( Sink &sink, float x, float z, float height, bool grass, const UV &uv,
+                    float surface_y = 0.f, float width_override = 0.f )
 {
     // Two fixed, perpendicular diagonal planes; both sides remain visible.
     // Ground-cover textures are opaque, so cut blade silhouettes in geometry.
     for( const float diagonal : {
              -1.0f, 1.0f
          } ) {
-        const float width = plant_width( height );
+        const float width = width_override > 0.f ? width_override : plant_width( height );
         const auto vertex = [&]( float u, float v ) {
             sink.texcoord( uv.left + ( uv.right - uv.left ) * u,
                           uv.bottom + ( uv.top - uv.bottom ) * v );
@@ -413,5 +406,173 @@ void furniture_hollow_ring( Sink &sink, const Part &p, const Faces &material )
         }
     }
 }
+// Non-box furniture surfaces use the same local bounds as their picking parts.
+template<typename Part>
+void shaped_furniture_part( primitive_mesh_sink &sink, const Part &part )
+{
+    using form = decltype( part.form );
+    using point = std::array<float, 3>;
+    const auto local = [&]( float x, float y, float z ) -> point {
+        return { part.x + x * part.width * .5f, part.bottom + y * ( part.top - part.bottom ),
+                 part.z + z * part.depth * .5f };
+    };
+    const auto triangle = [&]( const point &a, const point &b, const point &c ) {
+        const point u{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        const point v{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+        const point n{ u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+                       u[0] * v[1] - u[1] * v[0] };
+        const float length = std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
+        if( length <= 1.e-8f ) {
+            return;
+        }
+        sink.normal( n[0] / length, n[1] / length, n[2] / length );
+        sink.point( a[0], a[1], a[2] );
+        sink.point( b[0], b[1], b[2] );
+        sink.point( c[0], c[1], c[2] );
+    };
+    const auto quad = [&]( const point &a, const point &b, const point &c, const point &d ) {
+        triangle( a, b, c );
+        triangle( a, c, d );
+    };
+
+    constexpr float pi = 3.14159265f;
+    sink.textured( false );
+    sink.begin( primitive::triangles );
+    switch( part.form ) {
+        case form::arch: {
+            constexpr int spans = 12;
+            for( int i = 0; i < spans; ++i ) {
+                const float a = pi * i / spans;
+                const float b = pi * ( i + 1 ) / spans;
+                const auto roof = [&]( float angle, float z ) {
+                    return local( std::cos( angle ), std::sin( angle ), z );
+                };
+                quad( roof( a, 1 ), roof( a, -1 ), roof( b, -1 ), roof( b, 1 ) );
+                triangle( local( 0, 0, 1 ), roof( a, 1 ), roof( b, 1 ) );
+                triangle( local( 0, 0, -1 ), roof( b, -1 ), roof( a, -1 ) );
+            }
+            break;
+        }
+        case form::sling: {
+            constexpr int length_steps = 20;
+            constexpr int width_steps = 8;
+            const auto fabric = [&]( int l, int w ) {
+                const float x = 2.f * l / length_steps - 1.f;
+                const float cross = 2.f * w / width_steps - 1.f;
+                const float span = std::max( .025f, 1.f - x * x );
+                return local( x, x * x + .32f * span * cross * cross,
+                              cross * std::sqrt( span ) );
+            };
+            for( int l = 0; l < length_steps; ++l ) {
+                for( int w = 0; w < width_steps; ++w ) {
+                    const point a = fabric( l, w );
+                    const point b = fabric( l, w + 1 );
+                    const point c = fabric( l + 1, w + 1 );
+                    const point d = fabric( l + 1, w );
+                    quad( a, b, c, d );
+                    quad( d, c, b, a );
+                }
+            }
+            break;
+        }
+        case form::rock:
+        case form::sandbag:
+        case form::basin: {
+            struct ring {
+                float height;
+                float radius;
+                float offset;
+            };
+            constexpr std::array<ring, 7> rock{ {
+                    { 0, 0, 0 }, { 0, .65f, -.11f }, { .31f, .98f, -.12f },
+                    { .59f, .85f, .04f }, { .81f, .66f, .16f }, { .96f, .37f, .24f },
+                    { 1, 0, .18f }
+                } };
+            constexpr std::array<ring, 7> basin{ {
+                    { 0, 0, 0 }, { 0, .59f, 0 }, { .52f, .90f, 0 }, { 1, 1, 0 },
+                    { 1, .83f, 0 }, { .25f, .50f, 0 }, { .25f, 0, 0 }
+                } };
+            constexpr std::array<ring, 7> sandbag{ {
+                    { 0, 0, 0 }, { .01f, .69f, 0 }, { .23f, .95f, 0 }, { .52f, 1, 0 },
+                    { .82f, .91f, 0 }, { .98f, .63f, 0 }, { 1, 0, 0 }
+                } };
+            const bool stone = part.form == form::rock;
+            const bool bag = part.form == form::sandbag;
+            const auto &profile = stone ? rock : bag ? sandbag : basin;
+            const int sides = stone ? 9 : 24;
+            const auto vertex = [&]( size_t level, int side ) {
+                const auto [height, radius, offset] = profile[level];
+                const float angle = 2 * pi * ( side % sides ) / sides +
+                                    ( stone ? .18f * ( level % 2 ) + part.x * 2.f : 0.f );
+                const float variation = stone ? .84f + .15f *
+                                        std::sin( 3.f * angle + 1.4f * level ) : 1.f;
+                const float y = stone && level > 1 && level < 6 ?
+                                height + .044f * std::sin( 2.f * angle + level ) : height;
+                const auto cross_section = [bag]( float coordinate ) {
+                    return bag ? std::copysign( std::sqrt( std::abs( coordinate ) ), coordinate ) :
+                           coordinate;
+                };
+                return local( offset + radius * variation * cross_section( std::cos( angle ) ), y,
+                              radius * variation * cross_section( std::sin( angle ) ) );
+            };
+            for( size_t level = 0; level + 1 < profile.size(); ++level ) {
+                for( int side = 0; side < sides; ++side ) {
+                    quad( vertex( level, side ), vertex( level + 1, side ),
+                          vertex( level + 1, side + 1 ), vertex( level, side + 1 ) );
+                }
+            }
+            break;
+        }
+        case form::bellows_board: {
+            const auto board = [&]( bool wide, bool top, float side ) {
+                const float thickness = std::min( .86f, .043f / ( part.top - part.bottom ) );
+                return local( wide ? 1.f : -1.f, ( wide ? 1.f - thickness : 0.f ) +
+                              ( top ? thickness : 0.f ), side * ( wide ? 1.f : .17f ) );
+            };
+            const point a = board( false, false, 1 );
+            const point b = board( true, false, 1 );
+            const point c = board( true, false, -1 );
+            const point d = board( false, false, -1 );
+            const point e = board( false, true, 1 );
+            const point f = board( true, true, 1 );
+            const point g = board( true, true, -1 );
+            const point h = board( false, true, -1 );
+            quad( e, f, g, h );
+            quad( d, c, b, a );
+            quad( a, b, f, e );
+            quad( c, d, h, g );
+            quad( b, c, g, f );
+            quad( d, a, e, h );
+            break;
+        }
+        case form::bellows: {
+            constexpr int folds = 12;
+            const auto edge = [&]( int step, bool top, float side ) {
+                const float fraction = static_cast<float>( step ) / folds;
+                const float bulge = ( step % 2 == 0 ? 1.f : .88f ) * ( .17f + .83f * fraction );
+                return local( 2.f * fraction - 1.f, top ? .26f + .74f * fraction : 0.f,
+                              side * bulge );
+            };
+            for( int i = 0; i < folds; ++i ) {
+                const int next = i + 1;
+                quad( edge( i, false, 1 ), edge( next, false, 1 ), edge( next, true, 1 ),
+                      edge( i, true, 1 ) );
+                quad( edge( next, false, -1 ), edge( i, false, -1 ), edge( i, true, -1 ),
+                      edge( next, true, -1 ) );
+                quad( edge( i, true, 1 ), edge( next, true, 1 ), edge( next, true, -1 ),
+                      edge( i, true, -1 ) );
+            }
+            quad( edge( 0, false, -1 ), edge( 0, false, 1 ), edge( 0, true, 1 ),
+                  edge( 0, true, -1 ) );
+            quad( edge( folds, false, 1 ), edge( folds, false, -1 ), edge( folds, true, -1 ),
+                  edge( folds, true, 1 ) );
+            break;
+        }
+        case form::standard:
+            break;
+    }
+    sink.end();
+}
+
 } // namespace fp3d_geometry
 #endif // CATA_SRC_FP3D_GEOMETRY_CURVED_H

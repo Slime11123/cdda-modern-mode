@@ -480,6 +480,28 @@ TEST_CASE( "fp3d_overhead_pointer_ray_shares_the_rendered_camera",
     REQUIRE( downstairs );
     CHECK( downstairs->position == scene.origin );
     CHECK( downstairs->position.z() == scene.origin.z() );
+
+    auto support = std::find_if( scene.cells.begin(), scene.cells.end(), [&]( const cell &tile ) {
+        return tile.position == scene.origin;
+    } );
+    REQUIRE( support != scene.cells.end() );
+    support->furniture = fp3d_furniture::describe( "f_tourist_table" );
+    REQUIRE( support->furniture );
+    sprite item;
+    item.position = support->position;
+    item.kind = sprite_kind::item;
+    item.id = "apple";
+    item.elevation = fp3d_furniture::item_surface( support->furniture->shape );
+    item.height = .44f;
+    scene.sprites.push_back( item );
+    float nx = 0;
+    float ny = 0;
+    project( .2f * sp * sy, -.2f * sp * cy, item.elevation + .04f + .2f * cp, nx, ny );
+    const auto hovered = fp3d_targeting::ray( scene, pose.yaw, pose.pitch, pose.eye,
+                         reach, nx, ny, aspect, true );
+    REQUIRE( hovered );
+    CHECK( hovered->type == fp3d_targeting::kind::item );
+    CHECK( hovered->id == "apple" );
 }
 
 TEST_CASE( "fp3d_reticle_attack_selects_native_melee_or_targeted_smash",
