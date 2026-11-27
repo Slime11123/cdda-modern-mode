@@ -285,7 +285,7 @@
       "sound_fail": "clink!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_vitrified_floor",
+      "ter_set": "t_broken_glass_wall_vitrified_floor",
       "items": [ { "item": "black_glass_shard", "count": [ 40, 80 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 2, 8 ], "no_laser_destroy": true }
@@ -618,5 +618,6 @@
     "flags": [ "BLOCKSDOOR" ],
     "rotates_to": "INDOORFLOOR",
     "emissions": [ "emit_glimmer" ]
-  }
+  },
+  {"type": "terrain", "id": "t_broken_glass_wall_vitrified_floor", "copy-from": "t_vitrified_floor", "looks_like": "t_vitrified_floor", "name": "broken glass wall frame", "description": "A passable frame with a few remaining shards of glass."}
 ]

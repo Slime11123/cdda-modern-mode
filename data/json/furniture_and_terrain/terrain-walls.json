@@ -1495,7 +1495,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_floor",
+      "ter_set": "t_broken_glass_wall_floor",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 2, 8 ], "no_laser_destroy": true }
@@ -1519,7 +1519,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_strconc_floor",
+      "ter_set": "t_broken_glass_wall_strconc_floor",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -2136,5 +2136,7 @@
     "roof": "t_foam_roof",
     "description": "A mass of expansive foam that has hardened like a rock, tough enough to stop most zombies from breaking through.  It's big enough to walk ontop of.",
     "bash": { "str_min": 38, "str_max": 120, "sound": "crunch!", "sound_fail": "whump!", "ter_set": "t_null" }
-  }
+  },
+  {"type": "terrain", "id": "t_broken_glass_wall_floor", "copy-from": "t_floor", "looks_like": "t_floor", "name": "broken glass wall frame", "description": "A passable frame with a few remaining shards of glass."},
+  {"type": "terrain", "id": "t_broken_glass_wall_strconc_floor", "copy-from": "t_strconc_floor", "looks_like": "t_strconc_floor", "name": "broken glass wall frame", "description": "A passable frame with a few remaining shards of glass."}
 ]

@@ -7,6 +7,7 @@
 namespace fp3d_furniture
 {
 #include "fp3d_furniture_catalog.inc"
+#include "fp3d_world_props.inc"
 
 std::optional<model> describe( const std::string &id )
 {
@@ -25,9 +26,11 @@ std::optional<model> describe( const std::string &id )
         if( !definition.is_valid() ) {
             break;
         }
-        if( appearance == "f_midden" || appearance == "f_alien_anemone" ||
-            appearance == "f_sea_anemone" || appearance == "f_sea_sponge" ) {
-            return std::nullopt; // Organic silhouettes are native crossed sprites.
+        if( const auto *prop = world_prop( appearance ) ) {
+            return model{ id, prop->shape };
+        }
+        if( appearance == "f_midden" ) {
+            return std::nullopt;
         }
         if( appearance == "f_counter_gate_c" ) {
             return model{ id, kind::udp_gate }; // A separate swinging leaf, never the counter body.
@@ -746,7 +749,77 @@ const std::vector<part> &parts( kind shape )
     if( const auto *extra = catalog_parts( shape ) ) {
         return *extra;
     }
+    if( const auto *prop = world_prop_parts( shape ) ) {
+        return *prop;
+    }
     return table;
+}
+
+bool connects_as_bed( const model &furniture )
+{
+    return furniture.id == "f_bed" || furniture.id == "f_bed_down" ||
+           furniture.id == "f_bed_frame" || furniture.id == "f_makeshift_bed";
+}
+
+std::optional<part> bed_segment_part( kind shape, unsigned index, unsigned links )
+{
+    part result = parts( shape )[index];
+    if( !links ) {
+        return result;
+    }
+    const bool north = links & 1;
+    const bool east = links & 2;
+    const bool south = links & 4;
+    const bool west = links & 8;
+    const auto span_width = [&] {
+        const float left = west ? -.5f : result.x - result.width * .5f;
+        const float right = east ? .5f : result.x + result.width * .5f;
+        result.width = right - left;
+        result.x = ( left + right ) * .5f;
+    };
+    const auto span_depth = [&] {
+        const float back = north ? -.5f : result.z - result.depth * .5f;
+        const float front = south ? .5f : result.z + result.depth * .5f;
+        result.depth = front - back;
+        result.z = ( back + front ) * .5f;
+    };
+    if( shape == kind::bed ) {
+        if( index < 2 ) {
+            // Full-size bedding cells meet regardless of how each cell joins the row.
+            result.width = result.depth = 1.f;
+        } else if( ( index == 2 && south ) || ( index == 3 && north ) ||
+                   ( index == 4 && north ) || ( index == 5 && south ) ||
+                   ( index == 6 && west ) || ( index == 7 && east ) ) {
+            return std::nullopt;
+        } else if( index == 2 || index == 4 || index == 5 ) {
+            span_width();
+        } else if( index == 6 || index == 7 ) {
+            span_depth();
+        } else if( index >= 8 && ( result.x < 0 ? west : east ) ) {
+            return std::nullopt;
+        } else if( index >= 8 && ( result.z < 0 ? north : south ) ) {
+            return std::nullopt;
+        }
+    } else if( shape == kind::bed_frame ) {
+        if( ( index == 0 && north ) || ( index == 1 && south ) ||
+            ( index == 2 && west ) || ( index == 3 && east ) ) {
+            return std::nullopt;
+        }
+        if( index == 2 || index == 3 ) {
+            span_depth();
+        } else {
+            span_width();
+        }
+    } else if( shape == kind::udp_mattress ) {
+        if( index == 0 ) {
+            result.width = result.depth = 1.f;
+        } else if( ( index == 1 && north ) || ( index == 2 && south ) ) {
+            return std::nullopt;
+        } else if( index == 2 ) {
+            span_width();
+        }
+    }
+    return result;
 }
 
 float item_surface( kind shape )

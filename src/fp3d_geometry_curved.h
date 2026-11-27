@@ -301,6 +301,54 @@ void round_furniture_part( Sink &sink, const Part &part, const Faces &surfaces, 
     sink.end();
 }
 
+template<typename Sink, typename Part>
+void satellite_reflector( Sink &sink, const Part &part )
+{
+    constexpr float sin_tilt = .42f;
+    constexpr float cos_tilt = .9075f;
+    constexpr float depth = .14f;
+    constexpr int segments = 24;
+    constexpr int rings = 4;
+    const float center = ( part.bottom + part.top ) * .5f;
+    const float width = part.width * .5f;
+    const float height = ( part.top - part.bottom ) * .5f;
+    const auto vertex = [&]( int ring, int segment, bool back ) {
+        const float radius = ring / static_cast<float>( rings );
+        const float angle = segment * 6.2831853f / segments;
+        const float x = radius * std::cos( angle );
+        const float y = radius * std::sin( angle );
+        const float d = depth * radius * radius - ( back ? .019f : 0.f );
+        const float nx = -2 * depth * x / width;
+        const float ny = -2 * depth * y / height;
+        const float sign = back ? -1.f : 1.f;
+        const float length = std::hypot( nx, ny, 1.f );
+        sink.normal( sign * nx / length, sign * ( ny * cos_tilt + sin_tilt ) / length,
+                     sign * ( cos_tilt - ny * sin_tilt ) / length );
+        sink.point( part.x + width * x, center + height * y * cos_tilt + d * sin_tilt,
+                    part.z - height * y * sin_tilt + d * cos_tilt );
+    };
+    sink.textured( false );
+    sink.begin( primitive::quads );
+    for( const bool back : { false, true } ) {
+        sink.color( back ? .66f : .89f, back ? .68f : .90f, back ? .71f : .92f );
+        for( int ring = 0; ring < rings; ++ring ) {
+            for( int segment = 0; segment < segments; ++segment ) {
+                vertex( ring, segment, back );
+                vertex( ring + 1, segment, back );
+                vertex( ring + 1, segment + 1, back );
+                vertex( ring, segment + 1, back );
+            }
+        }
+    }
+    for( int segment = 0; segment < segments; ++segment ) {
+        vertex( rings, segment, false );
+        vertex( rings, segment + 1, false );
+        vertex( rings, segment + 1, true );
+        vertex( rings, segment, true );
+    }
+    sink.end();
+}
+
 template<typename Sink, typename Part, typename Faces>
 void furniture_ellipsoid( Sink &sink, const Part &p, const Faces &surfaces )
 {

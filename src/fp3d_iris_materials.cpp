@@ -16,7 +16,7 @@ virtual_material terrain_material( const fp3d_snapshot::cell &tile )
         return material;
     }
     material.native_id = "cdda:" + tile.terrain;
-    if( tile.water || fp3d_scene::water_surface_offset( tile.terrain ) < 0.f ) {
+    if( tile.water || fp3d_scene::water_surface_offset( tile ) < 0.f ) {
         material.shader_id = "minecraft:water";
         material.surface = material_surface::water;
         if( tile.water ) {
@@ -25,12 +25,19 @@ virtual_material terrain_material( const fp3d_snapshot::cell &tile )
             material.salt_water = tile.water->salt;
             material.sewage = tile.water->sewage;
             material.submerged_water = tile.water->submerged;
-            return material;
+        } else {
+            material.deep_water = tile.terrain.find( "_dp" ) != std::string::npos;
+            material.flowing_water = tile.terrain.find( "_moving_" ) != std::string::npos;
+            material.salt_water = tile.terrain.compare( 0, 9, "t_swater_" ) == 0;
+            material.sewage = tile.terrain == "t_sewage";
         }
-        material.deep_water = tile.terrain.find( "_dp" ) != std::string::npos;
-        material.flowing_water = tile.terrain.find( "_moving_" ) != std::string::npos;
-        material.salt_water = tile.terrain.compare( 0, 9, "t_swater_" ) == 0;
-        material.sewage = tile.terrain == "t_sewage";
+        material.states["depth"] = material.deep_water ? "deep" :
+                                   tile.water && tile.water->depth == fp3d_snapshot::water_depth::unspecified ?
+                                   "unspecified" : "shallow";
+        material.states["flowing"] = material.flowing_water ? "true" : "false";
+        material.states["salt"] = material.salt_water ? "true" : "false";
+        material.states["sewage"] = material.sewage ? "true" : "false";
+        material.states["submerged"] = material.submerged_water ? "true" : "false";
         return material;
     }
     using kind = fp3d_snapshot::terrain_kind;

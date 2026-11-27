@@ -53,10 +53,12 @@ bool matches( const std::string &actual, const std::string &relative, bool mc )
 }
 bool unpack( const std::vector<byte> &zip, size_t offset, uint16_t method,
              uint32_t packed, uint32_t unpacked, uint32_t checksum,
-             std::string &source )
+             std::string &source, bool binary )
 {
+    const size_t limit = 16 * 1024 * 1024;
     if( !range( offset, packed, zip.size() ) ||
-        unpacked > max_source_size || packed > max_compressed_size ) {
+        unpacked > ( binary ? limit : max_source_size ) ||
+        packed > ( binary ? limit : max_compressed_size ) ) {
         return false;
     }
     std::vector<byte> result( std::max( 1u, unpacked ) );
@@ -83,7 +85,7 @@ bool unpack( const std::vector<byte> &zip, size_t offset, uint16_t method,
         return false;
     }
     source.assign( reinterpret_cast<const char *>( result.data() ), unpacked );
-    return source.find( '\0' ) == std::string::npos;
+    return binary || source.find( '\0' ) == std::string::npos;
 }
 
 template<typename Visitor>
@@ -139,7 +141,7 @@ bool visit_entries( const std::filesystem::path &file, Visitor visit )
     return cursor == directory_offset + directory_size;
 }
 
-bool unpack_entry( const std::vector<byte> &zip, size_t cursor, std::string &source )
+bool unpack_entry( const std::vector<byte> &zip, size_t cursor, std::string &source, bool binary = false )
 {
     const auto flags = u16( zip, cursor + 8 );
     const auto method = u16( zip, cursor + 10 );
@@ -155,11 +157,11 @@ bool unpack_entry( const std::vector<byte> &zip, size_t cursor, std::string &sou
     }
     const size_t data_offset = local_offset + 30 +
                                u16( zip, local_offset + 26 ) + u16( zip, local_offset + 28 );
-    return unpack( zip, data_offset, method, packed, unpacked, checksum, source );
+    return unpack( zip, data_offset, method, packed, unpacked, checksum, source, binary );
 }
 
 bool read_entry( const std::filesystem::path &file, const std::string &relative,
-                 std::string &source, bool mc )
+                 std::string &source, bool mc, bool binary = false )
 {
     source.clear();
     if( !safe_name( relative ) ) { return false; }
@@ -168,7 +170,7 @@ bool read_entry( const std::filesystem::path &file, const std::string &relative,
     const std::string &name ) -> std::optional<bool> {
         if( !matches( name, relative, mc ) ) { return std::nullopt; }
         found = true;
-        return unpack_entry( zip, cursor, source ) && !source.empty();
+        return unpack_entry( zip, cursor, source, binary ) && !source.empty();
     } );
     return valid && found;
 }
@@ -185,6 +187,12 @@ bool read_mc_entry( const std::filesystem::path &file,
 {
     if( entry.find( "shaders/" ) != 0 || !safe_name( entry ) ) { return false; }
     return read_entry( file, entry, source, true );
+}
+
+bool read_binary_entry( const std::filesystem::path &file, const std::string &entry,
+                        std::string &data )
+{
+    return read_entry( file, entry, data, false, true );
 }
 
 bool list_entries( const std::filesystem::path &file, std::vector<std::string> &entries )

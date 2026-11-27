@@ -229,6 +229,37 @@ pack_text load_pack_text( const fs::path &path, const pack_inventory &inventory 
     return result;
 }
 
+bool read_pack_asset( const pack_source &pack, const std::string &name, std::string &data )
+{
+    if( !std::binary_search( pack.inventory.files.begin(), pack.inventory.files.end(), name ) ) {
+        return false;
+    }
+    std::error_code error;
+    if( !fs::is_directory( pack.path, error ) ) {
+        return !error && fp3d_shader_archive::read_binary_entry( pack.path,
+                pack.inventory.shader_root + name, data );
+    }
+    const auto package = fs::canonical( pack.path, error );
+    if( error ) {
+        return false;
+    }
+    const auto root = fs::canonical( package / fs::u8path( pack.inventory.shader_root ), error );
+    if( error || !within_root( root.lexically_relative( package ) ) ) {
+        return false;
+    }
+    const auto file = fs::canonical( root / fs::u8path( name ), error );
+    if( error || !within_root( file.lexically_relative( root ) ) ) {
+        return false;
+    }
+    const auto size = fs::file_size( file, error );
+    if( error || !size || size > 16 * 1024 * 1024 ) {
+        return false;
+    }
+    data.resize( size );
+    std::ifstream input( file, std::ios::binary );
+    return static_cast<bool>( input.read( data.data(), data.size() ) );
+}
+
 expanded_shader expand_includes( const pack_text &pack, const std::string &entry )
 {
     if( !pack.error.empty() ) {

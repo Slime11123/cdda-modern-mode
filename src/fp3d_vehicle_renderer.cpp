@@ -1354,9 +1354,28 @@ bool is_motorcycle( const vehicle_view &v )
     } );
 }
 
+std::optional<int> reverse_trike_centerline( const vehicle_view &v )
+{
+    const auto saddle = std::find_if( v.parts.begin(), v.parts.end(), []( const part_view &part ) {
+        return part.id == "saddle" && part.variant == "motor";
+    } );
+    if( saddle == v.parts.end() || std::any_of( v.parts.begin(), v.parts.end(),
+        []( const part_view &part ) { return part.kind == role::roof; } ) ) {
+        return std::nullopt;
+    }
+    const auto has_mount = [&]( int y ) {
+        return std::any_of( v.parts.begin(), v.parts.end(), [&]( const part_view &part ) {
+            return part.id == "wheel_mount_medium_steerable" &&
+                   part.mount_x > saddle->mount_x && part.mount_y == y;
+        } );
+    };
+    return has_mount( saddle->mount_y - 1 ) && has_mount( saddle->mount_y + 1 ) ?
+           std::optional<int>( saddle->mount_y ) : std::nullopt;
+}
+
 template<typename Beam, typename Box>
 bool emit_motorcycle_part( const vehicle_view &v, const part_view &part,
-                           const Beam &beam, const Box &box )
+                           const Beam &beam, const Box &box, const std::optional<int> trike )
 {
     const float x = float( part.mount_x - v.pivot_x );
     const float z = float( part.mount_y - v.pivot_y );
@@ -1365,8 +1384,29 @@ bool emit_motorcycle_part( const vehicle_view &v, const part_view &part,
     const color3 steel{ .53f * condition, .55f * condition, .57f * condition };
     const color3 frame{ .17f * condition, .18f * condition, .19f * condition };
     const color3 rubber{ .075f, .08f, .09f };
-    if( part.kind == role::frame ) {
+    if( trike && part.kind == role::frame && part.mount_y != *trike ) {
+        const float inner = z + ( part.mount_y > *trike ? -.58f : .58f );
+        beam( { x - .25f, .48f, inner }, { x, .37f, z }, .09f, steel );
+        beam( { x + .25f, .48f, inner }, { x, .37f, z }, .09f, steel );
+    } else if( trike && part.kind == role::frame && part.variant == "cover" ) {
+        box( x, z, 1.f, .84f, .35f, .58f, frame );
+        box( x + .05f, z, .90f, .84f, .58f, .80f, red );
+        box( x - .04f, z, .66f, .62f, .80f, .92f, red );
+    } else if( part.kind == role::frame ) {
         box( x, z, 1.f, .12f, .36f, .44f, frame );
+    } else if( trike && part.id == "wheel_mount_medium_steerable" ) {
+        box( x, z, .22f, .25f, .29f, .45f, steel );
+        box( x, z, .76f, .46f, .70f, .76f, red );
+    } else if( trike && part.id == "wheel_mount_medium" ) {
+        beam( { x, .37f, z }, { x + .52f, .48f, z }, .102f, steel );
+        beam( { x + .13f, .42f, z }, { x + .48f, .83f, z }, .08f, frame );
+        box( x, z, .71f, .43f, .72f, .79f, red );
+    } else if( trike && part.id == "controls" ) {
+        beam( { x + .45f, .79f, z }, { x + .62f, 1.15f, z }, .055f, steel );
+        beam( { x + .62f, 1.15f, z - .32f }, { x + .62f, 1.15f, z + .32f }, .045f, steel );
+        for( float side : { -.30f, .30f } ) {
+            box( x + .62f, z + side, .064f, .13f, 1.12f, 1.18f, rubber );
+        }
     } else if( part.id == "wheel_mount_light_steerable" ) {
         for( float side : { -.135f, .135f } ) {
             beam( {x, .35f, z + side}, {x - .43f, 1.02f, z + side}, .055f, steel );
@@ -1391,7 +1431,7 @@ bool emit_motorcycle_part( const vehicle_view &v, const part_view &part,
         for( float side : { -.24f, .24f } ) {
             box( x - .13f, z + side, .14f, .19f, .42f, .47f, steel );
         }
-    } else if( part.id == "tank_small" ) {
+    } else if( part.id == "tank_small" || ( trike && part.id == "tank_medium" ) ) {
         box( x + .38f, z, .53f, .35f, .69f, .96f, red );
         box( x + .40f, z, .40f, .29f, .95f, 1.02f, red );
         box( x + .46f, z, .105f, .105f, 1.02f, 1.045f, steel );
@@ -1408,7 +1448,7 @@ bool emit_motorcycle_part( const vehicle_view &v, const part_view &part,
         const bool on_fork = std::any_of( v.parts.begin(), v.parts.end(), [&]( const part_view &p ) {
             return p.mount_x == part.mount_x && p.id == "wheel_mount_light_steerable";
         } );
-        const float lens_x = x + ( on_fork ? -.27f : .73f );
+        const float lens_x = x + ( trike ? 1.38f : on_fork ? -.27f : .73f );
         box( lens_x, z, .19f, .24f, .91f, 1.09f, frame );
         box( lens_x + .10f, z, .035f, .19f, .94f, 1.06f,
              part.broken ? frame : color3{ .93f, .87f, .67f } );
@@ -1780,7 +1820,8 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
         const auto profile = build_shell( v );
         const silhouette shape = build_silhouette( v, profile );
         const bool connected_shell = shape.usable;
-        const bool motorcycle = !connected_shell && is_motorcycle( v );
+        const auto trike = connected_shell ? std::nullopt : reverse_trike_centerline( v );
+        const bool motorcycle = !connected_shell && ( trike || is_motorcycle( v ) );
         shell_profile modular = profile;
         modular.enclosed = false;
         modular.centerline_motorcycle_cabin = false;
@@ -1830,7 +1871,7 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
                 continue;
             }
             const auto before = mesh.vertices.size();
-            if( motorcycle && emit_motorcycle_part( v, part, bike_beam, emit ) ) {
+            if( motorcycle && emit_motorcycle_part( v, part, bike_beam, emit, trike ) ) {
                 counts.modular_parts += mesh.vertices.size() != before;
                 continue;
             }
@@ -1899,7 +1940,7 @@ gpu_vehicle_counts append_gpu_vehicle_geometry( const fp3d_snapshot::scene_snaps
             const auto uv = fp3d_materials::lookup_gpu( fp3d_materials::vehicle_key( part ) );
             fp3d_geometry::vehicle_wheel( sink, part.mount_x - v.pivot_x,
                                           part.mount_y - v.pivot_y + ( motorcycle ? 0.f : spec.lateral_offset ),
-                                          part.broken, spec.narrow, uv );
+                                          part.broken, spec.narrow || trike.has_value(), uv );
             ++counts.wheels;
         }
         const auto rel = v.origin - scene.origin;

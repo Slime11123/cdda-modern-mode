@@ -655,15 +655,11 @@ const std::vector<part> *catalog_parts( kind shape )
         }
         case kind::udp_dish: {
             static const std::vector<part> geometry{
-                { 0.f, 0.f, 0.13f, 0.13f, 0.f, 1.63f, true },
-                { 0.f, 0.f, 0.48f, 0.48f, 0.f, 0.11f },
-                { 0.f, 0.23f, 0.65f, 0.16f, 1.48f, 1.64f },
-                { 0.f, 0.22f, 0.73f, 0.1f, 1.58f, 1.69f },
-                { -0.32f, 0.13f, 0.1f, 0.26f, 1.55f, 1.91f },
-                { 0.32f, 0.13f, 0.1f, 0.26f, 1.55f, 1.91f },
-                { 0.f, -0.03f, 0.62f, 0.24f, 1.56f, 1.7f },
-                { 0.f, 0.37f, 0.07f, 0.34f, 1.7f, 2.12f },
-                { 0.f, 0.5f, 0.14f, 0.12f, 2.06f, 2.14f, true },
+                { 0.f, 0.f, .10f, .10f, .07f, 1.50f, true },
+                { 0.f, 0.f, .34f, .34f, 0.f, .07f },
+                { 0.f, .075f, .86f, .48f, 1.21f, 2.04f }, // tilted reflector envelope
+                { 0.f, -.03f, .16f, .18f, 1.42f, 1.67f },
+                { 0.f, .40f, .077f, .103f, 1.70f, 1.777f, true, false, true },
             };
             return &geometry;
         }

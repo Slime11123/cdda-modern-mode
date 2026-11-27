@@ -47,11 +47,40 @@ enum class kind {
     udp_anesthetic, udp_archery_bale, udp_archery_box, udp_ash_decal, udp_bollard, udp_chimney, udp_dialysis, udp_hay_bale, udp_leaf_litter, udp_midden, udp_punching_bag, udp_rubble, udp_target_board, udp_turbine_vent, udp_vent_pipe, udp_ventilator, udp_water_purifier, udp_waterwheel, udp_windmill_real, udp_heavy_lathe,
     udp_coal_forge, udp_vertical_bandsaw, udp_sandbag_low, udp_stone_statue, udp_diesel_unit,
     udp_terminal,
+    prop_card, prop_elev, prop_intercom, prop_switch,
+    prop_winch, prop_lever, prop_fuel, prop_fuel_broken,
+    prop_crossbuck, prop_crossing, prop_hatch, prop_halfwall,
+    prop_ruinedwall, prop_overheadbars, prop_slide, prop_manual_pump,
+    prop_bottle_cooler, prop_terminal, prop_kiosk, prop_recycler,
+    prop_pipe, prop_motor, prop_pulley, prop_pedestal,
+    prop_boom, prop_buffer, prop_forge, prop_rack,
+    prop_cage, prop_cartilage, prop_column_machine, prop_scrap,
+    prop_basin, prop_hive, prop_barrier, prop_memorial,
+    prop_log, prop_dam, prop_cushion, prop_bike,
+    prop_medical_chair, prop_antenna, prop_lantern, prop_anemone,
+    prop_sponge, prop_bucket, prop_press, prop_mound_short,
+    prop_mound_mid, prop_mound_tall, prop_vent_grate, prop_glassgate,
+    prop_wire, prop_barbed, prop_ropefence, prop_railfence,
+    prop_portcullis, prop_shelter, prop_mortar,     prop_detector,
+    prop_lean_to, prop_chainmesh,
 };
 struct model {
     std::string id;
     kind shape;
 };
+struct world_prop_definition {
+    kind shape;
+    const char *art;
+    std::array<int, 4> shell;
+    std::array<int, 4> panel;
+    int panel_part;
+    bool linear;
+    bool wall_fixture;
+    bool black_glass;
+};
+const world_prop_definition *world_prop( const std::string &id );
+std::array<int, 4> world_prop_shell( const world_prop_definition &prop, unsigned part );
+
 enum class part_form { standard, arch, sling, rock, basin, sandbag, bellows, bellows_board };
 struct part {
     float x, z, width, depth, bottom, top;
@@ -67,6 +96,9 @@ struct part {
 // Owned, read-only presentation shared by built furniture, ghosts and picking.
 std::optional<model> describe( const std::string &id );
 const std::vector<part> &parts( kind shape );
+bool connects_as_bed( const model &furniture );
+// Links are north, east, south and west in bits 0–3.
+std::optional<part> bed_segment_part( kind shape, unsigned index, unsigned links );
 float item_surface( kind shape );
 // Only already-captured accessible contents receive the storage display pass.
 bool shows_contents( kind shape );

@@ -72,7 +72,8 @@ std::optional<float> intersect( const vector3 &eye, const vector3 &direction,
 
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                            fp3d_camera::offset offset, float max_reach,
-                           float screen_x, float screen_y, float aspect, bool camera_facing_sprites )
+                           float screen_x, float screen_y, float aspect, bool camera_facing_sprites,
+                           bool current_storey_only )
 {
     if( !std::isfinite( yaw ) || !std::isfinite( pitch ) ||
         !std::isfinite( offset.x ) || !std::isfinite( offset.y ) ||
@@ -132,7 +133,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     const float low_z = std::min( eye[2], far[2] ) - fp3d_camera::floor_height;
     const float high_z = std::max( eye[2], far[2] ) + fp3d_camera::floor_height;
     for( const auto &tile : scene.cells ) {
-        if( fp3d_snapshot::hidden_by_cutaway( scene, tile ) ) { continue; }
+        if( ( current_storey_only && tile.position.z() != scene.origin.z() ) ||
+            fp3d_snapshot::hidden_by_cutaway( scene, tile ) ) { continue; }
         const auto p = tile.position - scene.origin;
         const float height = p.z() * fp3d_camera::floor_height;
         if( p.x() >= low_x && p.x() <= high_x && p.y() >= low_y && p.y() <= high_y &&
@@ -221,7 +223,8 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         };
         if( tile->furniture ) {
             const auto shape = tile->furniture->shape;
-            const unsigned facing = shape == fp3d_furniture::kind::chair ||
+            const unsigned links = fp3d_scene::bed_links( *tile, cell_at );
+            const unsigned facing = links ? 0 : shape == fp3d_furniture::kind::chair ||
                                     shape == fp3d_furniture::kind::camp_chair ?
                                     fp3d_furniture::facing( shape, {},
             { table_at( tile->position + tripoint_rel_ms::north ),
@@ -234,8 +237,15 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 wall_at( tile->position + tripoint_rel_ms::south ),
                 wall_at( tile->position + tripoint_rel_ms::west )
             } );
-            for( const auto &original : fp3d_furniture::parts( tile->furniture->shape ) ) {
-                const auto part = fp3d_furniture::rotated( original, facing );
+            unsigned index = 0;
+            for( const auto &original : fp3d_furniture::parts( shape ) ) {
+                const auto segment = links ? fp3d_furniture::bed_segment_part( shape, index, links ) :
+                                     std::optional<fp3d_furniture::part>( original );
+                ++index;
+                if( !segment ) {
+                    continue;
+                }
+                const auto part = fp3d_furniture::rotated( *segment, facing );
                 box( part.x, part.z, part.width, part.depth, part.bottom, part.top,
                      tile->appliance.empty() ? kind::furniture : kind::appliance, false, part.round );
             }
@@ -255,7 +265,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         }
         if( tile->vegetation_height > 0 ) {
             const float height = tile->vegetation_height;
-            const float base = z + fp3d_scene::water_surface_offset( tile->terrain ) + .015f;
+            const float base = z + fp3d_scene::water_surface_offset( *tile ) + .015f;
             const float width = std::max( .9f, height <= 1.2f ? height : height * .7f );
             for( const float diagonal : {
                      -1.0f, 1.0f
@@ -305,7 +315,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
             }
         }
         const bool upper_floor_surface = above && ( above->floor_present || above->is_ramp );
-        if( tile->ceiling_present && !slope_guardrail && !upper_floor_surface &&
+        if( !current_storey_only && tile->ceiling_present && !slope_guardrail && !upper_floor_surface &&
             !( tile->terrain == "t_radio_tower" && above && above->terrain == "t_radio_tower" ) ) {
             box( 0, 0, 1, 1, fp3d_camera::floor_height - .08f, fp3d_camera::floor_height - .08f );
         }
@@ -335,20 +345,32 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                 const auto *other = cell_at( tile->position + direction );
                 return other && fp3d_snapshot::fence_connects( tile->terrain, other->terrain );
             };
-            const std::array<bool, 4> links{
-                adjacent( tripoint_rel_ms::north ), adjacent( tripoint_rel_ms::east ),
-                adjacent( tripoint_rel_ms::south ), adjacent( tripoint_rel_ms::west )
-            };
+            const auto links = fp3d_snapshot::is_prison_barrier( tile->terrain ) ?
+                               fp3d_scene::prison_barrier_links( *tile, cell_at ) :
+                               std::array<bool, 4>{ adjacent( tripoint_rel_ms::north ),
+                                   adjacent( tripoint_rel_ms::east ), adjacent( tripoint_rel_ms::south ),
+                                   adjacent( tripoint_rel_ms::west ) };
+            const bool along_x = fp3d_snapshot::chain_gate_along_x( links );
+            const bool open = tile->terrain.size() >= 2 &&
+                              tile->terrain.compare( tile->terrain.size() - 2, 2, "_o" ) == 0;
+            const float inward = open ? fp3d_scene::door_inward( *tile, along_x, false, cell_at ) : 0.f;
             if( fp3d_snapshot::is_chain_gate( tile->terrain ) ) {
-                return fp3d_snapshot::chain_gate_parts( tile->terrain,
-                           fp3d_snapshot::chain_gate_along_x( links ) );
+                return fp3d_snapshot::chain_gate_parts( tile->terrain, along_x, inward );
             }
-            return fp3d_snapshot::terrain_model_parts( tile->terrain, links );
+            return fp3d_snapshot::terrain_model_parts( tile->terrain, links, inward );
         }();
-        if( fp3d_scene::glass_wall( *tile ) || tile->terrain == "t_glass_railing" ) {
+        if( const auto *prop = fp3d_furniture::world_prop( tile->terrain ) ) {
+            const unsigned turn = fp3d_scene::world_prop_turn( *tile, *prop, cell_at );
+            for( const auto &original : fp3d_furniture::parts( prop->shape ) ) {
+                const auto part = fp3d_furniture::rotated( original, ( 4 - turn ) % 4 );
+                box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+            }
+        } else if( fp3d_scene::glass_wall( *tile ) || tile->terrain == "t_glass_railing" ) {
             for( const auto &part : fp3d_snapshot::glass_barrier_parts(
                      tile->terrain == "t_glass_railing", fp3d_scene::glass_barrier_links( *tile, cell_at ) ) ) {
-                box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+                if( !part.glass || !fp3d_snapshot::broken_glass_wall( tile->terrain ) ) {
+                    box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+                }
             }
         } else if( !model_parts.empty() ) {
             for( const auto &part : model_parts ) {
@@ -386,13 +408,21 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
                      along_x ? .22f : .08f, .9f, 2.1f );
                 box( along_x ? .46f : 0, along_x ? 0 : .46f, along_x ? .08f : .22f,
                      along_x ? .22f : .08f, .9f, 2.1f );
-                if( tile->pane != fp3d_snapshot::window_pane::opening ) {
+                if( tile->pane != fp3d_snapshot::window_pane::opening &&
+                    !fp3d_snapshot::broken_window_glass( tile->terrain ) ) {
                     box( 0, 0, along_x ? .84f : 0, along_x ? 0 : .84f, .9f, 2.1f );
                 }
             } else {
                 for( const auto &original : fp3d_snapshot::door_parts( tile->kind ) ) {
                     const auto part = fp3d_furniture::rotated( original, along_x ? 0 : 3 );
                     box( part.x, part.z, part.width, part.depth, part.bottom, part.top );
+                }
+                if( tile->kind == terrain::open_door &&
+                    !fp3d_snapshot::closed_door_id( tile->terrain ).empty() ) {
+                    const float inward = fp3d_scene::door_inward( *tile, along_x, true, cell_at );
+                    const auto leaf = fp3d_furniture::rotated( fp3d_snapshot::swing_door_part(
+                        { 0, 0, .88f, .075f, .035f, 2.09f }, inward ), along_x ? 0 : 3 );
+                    box( leaf.x, leaf.z, leaf.width, leaf.depth, leaf.bottom, leaf.top );
                 }
                 if( tile->kind == terrain::glass ) {
                     box( 0, 0, along_x ? .88f : 0, along_x ? 0 : .88f,
@@ -407,6 +437,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
     // The target carries the exact native occupancy tile plus part index:
     // the game thread MUST revalidate that identity before any action.
     for( const fp3d_vehicle::vehicle_view &car : scene.vehicles ) {
+        if( current_storey_only && car.origin.z() != scene.origin.z() ) { continue; }
         const tripoint_rel_ms rel = car.origin - scene.origin;
         const float cx = static_cast<float>( rel.x() );
         const float cz = static_cast<float>( rel.y() );
@@ -527,7 +558,7 @@ std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw
         }
         // The overhead avatar sprite is the pointer target's own tile, never a
         // creature to attack or examine through itself.
-        if( image.is_avatar ) {
+        if( image.is_avatar || ( current_storey_only && image.position.z() != scene.origin.z() ) ) {
             continue;
         }
         const auto p = image.position - scene.origin;

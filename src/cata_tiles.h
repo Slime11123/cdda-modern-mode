@@ -146,6 +146,14 @@ class texture
             if( alpha ) { alpha->edges( srcrect.x, srcrect.y, srcrect.w, srcrect.h, emit ); }
         }
         texture() = default;
+        bool preserves_opaque_destination() const {
+            SDL_BlendMode mode = SDL_BLENDMODE_NONE;
+            Uint8 alpha = 0;
+            return sdl_texture_ptr && SDL_GetTextureBlendMode( sdl_texture_ptr.get(), &mode ) &&
+                   ( mode == SDL_BLENDMODE_BLEND ||
+                     ( mode == SDL_BLENDMODE_NONE && !SDL_ISPIXELFORMAT_ALPHA( sdl_texture_ptr->format ) &&
+                       SDL_GetTextureAlphaMod( sdl_texture_ptr.get(), &alpha ) && alpha == 255 ) );
+        }
 
         /// Returns the width (first) and height (second) of the stored texture.
         std::pair<int, int> dimension() const {

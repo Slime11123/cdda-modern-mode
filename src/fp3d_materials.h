@@ -101,6 +101,7 @@ bool bind();
 // until GPU fences retire; never use the handle after a revision/reset.
 SDL_Texture *gpu_colour_atlas( SDL_Renderer *renderer );
 std::optional<uv_rect> lookup_gpu( const std::string &id );
+bool gpu_rect_is_opaque( const uv_rect &uv );
 std::optional<uv_rect> picket_wood_gpu();
 void unbind();
 std::optional<uv_rect> lookup( const std::string &id );

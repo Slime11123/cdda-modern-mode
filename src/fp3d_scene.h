@@ -37,6 +37,16 @@ inline float water_surface_offset( const std::string &terrain )
                        terrain == "t_pool" || terrain == "t_tidepool";
     return water ? -.18f : 0.0f;
 }
+// Loaded terrain traits also cover modded IDs. Submerged cells represent
+// the volume below the surface and must not create a second surface.
+inline float water_surface_offset( const fp3d_snapshot::cell &tile )
+{
+    if( tile.water ) {
+        return tile.water->submerged ? 0.f : -.18f;
+    }
+    return water_surface_offset( tile.terrain );
+}
+
 enum class pavement_surface { none, asphalt, concrete };
 inline pavement_surface classify_pavement( const std::string &id )
 {
@@ -53,7 +63,7 @@ inline pavement_surface classify_pavement( const std::string &id )
 inline bool upper_floor_owns_cap( const fp3d_snapshot::cell *above )
 {
     return above && ( above->floor_present || above->is_ramp ||
-                      water_surface_offset( above->terrain ) < 0 );
+                      water_surface_offset( *above ) < 0 );
 }
 inline constexpr float wall_width = .98f;
 inline bool wall_neighbour( const fp3d_snapshot::cell *tile )
@@ -62,6 +72,49 @@ inline bool wall_neighbour( const fp3d_snapshot::cell *tile )
     return tile && ( tile->kind == kind::wall || tile->kind == kind::glass ||
                      tile->kind == kind::window );
 }
+template<typename Lookup>
+float door_inward( const fp3d_snapshot::cell &tile, bool along_x, bool positive_faces_east,
+                   const Lookup &cell_at )
+{
+    const auto direction = along_x ? tripoint_rel_ms::south :
+                           positive_faces_east ? tripoint_rel_ms::east : tripoint_rel_ms::west;
+    const auto indoor_score = []( const fp3d_snapshot::cell *cell ) {
+        return cell && cell->floor_present && !cell->open_air && !wall_neighbour( cell ) ?
+               int( cell->ceiling_present || cell->glass_ceiling || cell->cutaway_ceiling ) * 2 + 1 : 0;
+    };
+    const int positive = indoor_score( cell_at( tile.position + direction ) );
+    const int negative = indoor_score( cell_at( tile.position - direction ) );
+    return positive >= negative ? 1.f : -1.f;
+}
+
+template<typename Lookup>
+unsigned world_prop_turn( const fp3d_snapshot::cell &tile,
+                          const fp3d_furniture::world_prop_definition &prop, const Lookup &cell_at )
+{
+    if( !prop.linear && !prop.wall_fixture ) {
+        return 0;
+    }
+    const auto link = [&]( const tripoint_rel_ms &direction ) {
+        const auto *other = cell_at( tile.position + direction );
+        if( prop.wall_fixture ) {
+            return int( wall_neighbour( other ) );
+        }
+        const auto *linked = other ? fp3d_furniture::world_prop( other->terrain ) : nullptr;
+        return linked && linked->linear ? 2 : int( wall_neighbour( other ) );
+    };
+    const int e = link( tripoint_rel_ms::east );
+    const int w = link( tripoint_rel_ms::west );
+    const int s = link( tripoint_rel_ms::south );
+    const int n = link( tripoint_rel_ms::north );
+    if( prop.wall_fixture ) {
+        if( e + w > s + n ) {
+            return e > w ? 3 : 1;
+        }
+        return s > n ? 2 : 0;
+    }
+    return n + s > e + w ? 1 : 0;
+}
+
 inline bool glass_wall( const fp3d_snapshot::cell &tile )
 {
     return tile.kind == fp3d_snapshot::terrain_kind::glass &&
@@ -84,6 +137,30 @@ std::array<bool, 4> glass_barrier_links( const fp3d_snapshot::cell &tile, const 
     }
     return links;
 }
+template<typename Lookup>
+std::array<bool, 4> prison_barrier_links( const fp3d_snapshot::cell &tile, const Lookup &cell_at )
+{
+    std::array<bool, 4> bars{};
+    std::array<bool, 4> walls{};
+    const std::array<tripoint_rel_ms, 4> directions{
+        tripoint_rel_ms::north, tripoint_rel_ms::east, tripoint_rel_ms::south, tripoint_rel_ms::west
+    };
+    for( size_t i = 0; i < directions.size(); ++i ) {
+        const auto *other = cell_at( tile.position + directions[i] );
+        bars[i] = other && fp3d_snapshot::is_prison_barrier( other->terrain );
+        walls[i] = wall_neighbour( other );
+    }
+    const bool east_west = bars[1] || bars[3];
+    const bool north_south = bars[0] || bars[2];
+    if( east_west != north_south ) {
+        return bars;
+    }
+    for( size_t i = 0; i < bars.size(); ++i ) {
+        bars[i] = bars[i] || walls[i];
+    }
+    return bars;
+}
+
 inline constexpr float cutaway_wall_height = .45f;
 
 template<typename Lookup>
@@ -125,6 +202,24 @@ std::unordered_set<tripoint_abs_ms> monster_cutaway_walls(
     }
     return walls;
 }
+template<typename Lookup>
+unsigned bed_links( const fp3d_snapshot::cell &tile, const Lookup &known_cell )
+{
+    if( !tile.furniture || !fp3d_furniture::connects_as_bed( *tile.furniture ) ) {
+        return 0;
+    }
+    const std::array<tripoint_rel_ms, 4> directions{ tripoint_rel_ms::north,
+        tripoint_rel_ms::east, tripoint_rel_ms::south, tripoint_rel_ms::west };
+    unsigned result = 0;
+    for( unsigned i = 0; i < directions.size(); ++i ) {
+        const auto *other = known_cell( tile.position + directions[i] );
+        if( other && other->furniture && other->furniture->id == tile.furniture->id ) {
+            result |= 1u << i;
+        }
+    }
+    return result;
+}
+
 template<typename Lookup>
 unsigned furniture_facing( const fp3d_snapshot::cell &tile, const Lookup &known_cell )
 {

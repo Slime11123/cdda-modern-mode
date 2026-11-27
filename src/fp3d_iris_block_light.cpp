@@ -124,6 +124,20 @@ block_light_topology scene_topology( const fp3d_snapshot::scene_snapshot &scene 
 }
 } // namespace
 
+int light_level_at( const block_light_levels &levels, const tripoint_abs_ms &position )
+{
+    const auto entry = levels.find( position );
+    return entry == levels.end() ? 0 : std::min<int>( entry->second, max_block_light );
+}
+
+std::array<int, 2> eye_brightness_at( const tripoint_abs_ms &position,
+                                     const block_light_levels &block, const block_light_levels &sky )
+{
+    // The pack sees the lightmap coordinates for the avatar. Each level
+    // is 16 units, and full block light and full skylight both map to 240.
+    return { 16 * light_level_at( block, position ), 16 * light_level_at( sky, position ) };
+}
+
 block_light_levels propagate_block_light( const block_light_topology &topology,
         const std::vector<block_light_source> &sources )
 {

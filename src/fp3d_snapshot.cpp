@@ -49,6 +49,7 @@
 #include "vehicle.h"
 #include "vpart_position.h"
 #include "weather.h"
+#include "weather_gen.h"
 
 namespace fp3d_snapshot
 {
@@ -77,7 +78,7 @@ void connect_ground_terrain( scene_snapshot &scene )
     std::unordered_map<tripoint_abs_ms, const cell *> ground;
     for( auto &tile : scene.cells ) {
         tile.ground_connections = -1;
-        if( fp3d_scene::water_surface_offset( tile.terrain ) < 0.f && !tile.exterior_only ) {
+        if( fp3d_scene::water_surface_offset( tile ) < 0.f && !tile.exterior_only ) {
             ground.emplace( tile.position, &tile );
             tile.ground_connections = 0;
             continue;
@@ -95,11 +96,11 @@ void connect_ground_terrain( scene_snapshot &scene )
         tripoint_rel_ms::east, tripoint_rel_ms::west, tripoint_rel_ms::north };
     for( auto &tile : scene.cells ) {
         if( tile.ground_connections < 0 ) { continue; }
-        const bool water = fp3d_scene::water_surface_offset( tile.terrain ) < 0.f;
+        const bool water = fp3d_scene::water_surface_offset( tile ) < 0.f;
         for( unsigned i = 0; i < dirs.size(); ++i ) {
             const auto neighbour = ground.find( tile.position + dirs[i] );
             if( neighbour != ground.end() && ( neighbour->second->terrain == tile.terrain ||
-                ( water && fp3d_scene::water_surface_offset( neighbour->second->terrain ) < 0.f ) ) ) {
+                ( water && fp3d_scene::water_surface_offset( *neighbour->second ) < 0.f ) ) ) {
                 tile.ground_connections |= 1 << i;
             }
         }
@@ -473,8 +474,7 @@ float plant_height( const std::string &id )
     }
     // UndeadPeople f_midden is a tangled triffid organic bush. Never create
     // a fake solid cylindrical machine from its vegetation-style sprite.
-    if( id == "f_midden" || id == "f_alien_anemone" ||
-        id == "f_sea_anemone" || id == "f_sea_sponge" ) {
+    if( id == "f_midden" ) {
         return .95f;
     }
     if( id == "t_grass" || id == "t_grass_dead" ) {
@@ -522,9 +522,15 @@ terrain_kind classify( const std::string &id )
         id == "t_fence_post" || id == "t_screened_porch_wall" ||
         id == "t_concrete_railing" || id == "t_railing" ||
         id == "t_metal_railing" || id == "t_fence_metal" ||
-        id == "t_glass_railing" || id == "t_guardrail" ||
+        is_prison_barrier( id ) || id == "t_glass_railing" || id == "t_guardrail" ||
         id == "t_guardrail_bg_dp" || id == "t_guardrail_hw_air" ) {
         return terrain_kind::fence;
+    }
+    if( broken_glass_wall( id ) ) {
+        return terrain_kind::glass;
+    }
+    if( broken_glass_door( id ) ) {
+        return terrain_kind::open_door;
     }
     const bool door_id = id.find( "door" ) != std::string::npos;
     if( definition.has_flag( ter_furn_flag::TFLAG_BARRICADABLE_DOOR_DAMAGED ) ||
@@ -546,7 +552,8 @@ terrain_kind classify( const std::string &id )
         return terrain_kind::closed_door;
     }
     if( !definition.close.is_null() && definition.close.is_valid() &&
-        definition.close->has_flag( ter_furn_flag::TFLAG_DOOR ) ) {
+        ( door_id || definition.close->has_flag( ter_furn_flag::TFLAG_DOOR ) ) &&
+        id.compare( 0, 9, "t_window_" ) != 0 ) {
         return terrain_kind::open_door;
     }
     if( definition.movecost > 0 && door_id &&
@@ -941,7 +948,7 @@ bool chain_gate_along_x( const std::array<bool, 4> &neighbours )
            int( neighbours[0] ) + int( neighbours[2] );
 }
 
-std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x )
+std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x, float inward )
 {
     if( !is_chain_gate( id ) ) {
         return {};
@@ -981,6 +988,11 @@ std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool 
             frame.push_back( { .365f, .095f, .095f, .07f, .84f, .94f } ); // padlock
         }
     }
+    if( opened && inward > 0.f ) {
+        for( part &p : frame ) {
+            p.z = -p.z;
+        }
+    }
     if( !along_x ) {
         for( part &p : frame ) {
             p = fp3d_furniture::rotated( p, 1 );
@@ -990,9 +1002,47 @@ std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool 
 }
 
 std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
-        const std::array<bool, 4> &neighbours )
+        const std::array<bool, 4> &neighbours, float inward )
 {
     using part = fp3d_furniture::part;
+    if( is_prison_barrier( id ) ) {
+        constexpr float height = fp3d_camera::floor_height;
+        const bool door = id != "t_bars";
+        const bool open = id == "t_door_bar_o";
+        std::vector<part> geometry;
+        for( const float x : { -.47f, .47f } ) {
+            geometry.push_back( { x, 0.f, .06f, .11f, 0.f, height } );
+        }
+        // The sprite has a continuous perimeter and a horizontal centre rail.
+        for( const float y : { 0.f, height - .07f } ) {
+            geometry.push_back( { 0.f, 0.f, .94f, .09f, y, y + .07f } );
+        }
+        for( const float y : { .075f, height * .5f, height - .145f } ) {
+            geometry.push_back( { open ? -.43f : 0.f, open ? -.24f : 0.f,
+                                  open ? .065f : door ? .86f : .94f,
+                                  open ? .48f : .07f, y, y + .055f } );
+        }
+        for( int i = 1; i <= 3; ++i ) {
+            const float offset = -.42f + .21f * i;
+            geometry.push_back( { open ? -.43f : offset, open ? ( offset - .42f ) * .54f : 0.f,
+                                  .047f, .047f, .095f, height - .09f } );
+        }
+        if( door ) {
+            geometry.push_back( { open ? -.43f : .33f, open ? -.428f : 0.f,
+                                  open ? .085f : .16f, open ? .095f : .088f, .88f, 1.15f } );
+        }
+        if( open && inward > 0.f ) {
+            for( auto &piece : geometry ) {
+                piece.z = -piece.z;
+            }
+        }
+        if( !chain_gate_along_x( neighbours ) ) {
+            for( auto &piece : geometry ) {
+                piece = fp3d_furniture::rotated( piece, 1 );
+            }
+        }
+        return geometry;
+    }
     if( is_picket_gate( id ) ) {
         const bool open = id == "t_fencegate_o";
         std::vector<part> parts{
@@ -1008,6 +1058,11 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
             const float z = open ? offset - .39f : 0.f;
             parts.push_back( { x, z, open ? .05f : .105f, open ? .105f : .05f, .06f, 1.02f } );
             parts.push_back( { x, z, open ? .05f : .064f, open ? .064f : .05f, 1.02f, 1.08f } );
+        }
+        if( open && inward > 0.f ) {
+            for( auto &piece : parts ) {
+                piece.z = -piece.z;
+            }
         }
         if( !chain_gate_along_x( neighbours ) ) {
             for( auto &piece : parts ) {
@@ -1032,6 +1087,11 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
             const float offset = .14f * bar;
             parts.push_back( { open ? -.42f : offset - .42f, open ? -offset : 0.f,
                                .028f, .028f, .15f, height - .04f } );
+        }
+        if( open && inward > 0.f ) {
+            for( auto &piece : parts ) {
+                piece.z = -piece.z;
+            }
         }
         if( !along_x ) {
             for( auto &piece : parts ) {
@@ -1099,27 +1159,29 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
     const bool wood = id == "t_railing";
     const bool metal_fence = id == "t_fence_metal";
     const bool steel = id == "t_metal_railing" || metal_fence;
-    const bool road = id.compare( 0, 11, "t_guardrail" ) == 0;
+    const bool road = guardrail_ground( id ) != nullptr;
     if( !picket && !privacy && !concrete && !wood && !steel && !road ) {
         return {};
     }
     // The UndeadPeople t_fence is a simple low white picket fence, not a
     // wrought-iron railing.  Leave space between the individual uprights.
     const float height = privacy ? 2.16f : picket ? 1.16f :
-                         concrete ? 1.06f : road ? .92f : metal_fence ? 1.68f : 1.11f;
+                         concrete ? 1.06f : road ? .76f : metal_fence ? 1.68f : 1.11f;
     const float thickness = concrete ? .14f : road ? .11f : picket ? .073f :
                             steel ? .043f : .095f;
     std::vector<part> out;
     out.reserve( privacy || picket ? 36 : 14 );
     // Each tile contributes one central post and half-rails connecting to
     // neighbours. A standalone segment is a full E-W tile, not one point.
-    const float post = picket ? .105f : thickness + ( steel ? .023f : .09f );
+    const float post = picket || road ? .105f : thickness + ( steel ? .023f : .09f );
     out.push_back( { 0, 0, post, post, 0, height } );
     const float cap = picket ? .067f : post + ( steel ? .022f : .06f );
     if( picket ) {
         out.back().top -= .08f;
     }
-    out.push_back( { 0, 0, cap, cap, height - .08f, height } );
+    if( !road ) {
+        out.push_back( { 0, 0, cap, cap, height - .08f, height } );
+    }
     auto links = neighbours;
     if( std::none_of( links.begin(), links.end(), []( bool linked ) { return linked; } ) ) {
         links[1] = links[3] = true;
@@ -1165,7 +1227,12 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
             out.push_back( { x, z, along_x, along_z, .40f, .56f } );
             out.push_back( { x, z, along_x, along_z, .79f, .97f } );
         } else if( road ) {
-            out.push_back( { x, z, along_x, along_z, .56f, .76f } );
+            // Two shallow ribs run along the beam and meet at tile edges.
+            out.push_back( { x, z, along_x, along_z, .52f, .76f } );
+            const float rib_x = east_west ? .50f : .15f;
+            const float rib_z = east_west ? .15f : .50f;
+            out.push_back( { x, z, rib_x, rib_z, .53f, .58f } );
+            out.push_back( { x, z, rib_x, rib_z, .70f, .75f } );
         } else if( steel ) {
             out.push_back( { x, z, along_x, along_z, height - .045f, height } );
             out.push_back( { x, z, along_x, along_z, .14f, .175f } );
@@ -1182,6 +1249,25 @@ std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
         }
     }
     return out;
+}
+
+std::string closed_door_id( const std::string &id )
+{
+    const ter_str_id type( id );
+    if( !type.is_valid() || type->close.is_null() || !type->close.is_valid() ) {
+        return {};
+    }
+    return type->close.str();
+}
+
+fp3d_furniture::part swing_door_part( fp3d_furniture::part part, float inward )
+{
+    constexpr float hinge = -.45f;
+    const float x = part.x;
+    part.x = hinge - inward * part.z;
+    part.z = inward * ( x - hinge + .04f );
+    std::swap( part.width, part.depth );
+    return part;
 }
 
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind )
@@ -1502,6 +1588,21 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     result.origin = you.pos_abs();
     result.player_crouching = you.is_crouching();
     result.player_underwater = you.is_underwater();
+    result.player_blind = blind;
+    const auto &vision = you.get_vision_modes();
+    result.player_darkness = vision[DARKNESS];
+    if( !blind ) {
+        if( vision[DEBUG_NIGHTVISION] || vision[NV_GOGGLES] || vision[NIGHTVISION_3] ||
+            vision[FULL_ELFA_VISION] || vision[CEPH_VISION] ||
+            you.has_flag( json_character_flag( "NIGHT_VISION" ) ) ) {
+            result.player_night_vision = 1.f;
+        } else if( vision[NIGHTVISION_2] || vision[ELFA_VISION] || vision[FELINE_VISION] ||
+                   vision[URSINE_VISION] ) {
+            result.player_night_vision = .45f;
+        } else if( vision[NIGHTVISION_1] ) {
+            result.player_night_vision = .2f;
+        }
+    }
     // The player's discrete map cell is for CDDA collision/interactions,
     // not necessarily the centre of a rotating 3D passenger seat. Publish
     // the exact native mount transformed by the same rigid vehicle root
@@ -1536,6 +1637,8 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
         if( const auto wielded = you.get_wielded_item() ) {
             result.held_item = describe_item( *wielded, result.origin );
             result.held_item->kind = sprite_kind::held_item;
+            result.held_item_type = wielded->typeId().str();
+            result.held_light = wielded->getlight_emit();
         }
     }    const tripoint_bub_ms player = you.pos_bub( here );
     if( !here.inbounds( player ) ) {
@@ -1544,6 +1647,34 @@ static scene_snapshot capture_impl( avatar &you, const map &here, int above, int
     result.sky = fp3d_sky::sample( calendar::turn,
                                    player.z() >= 0 && here.is_outside( player ) && !blind );
     const auto &weather = get_weather_const();
+    const auto &climate = weather.get_cur_weather_gen();
+    result.biome.mean_temperature_c = static_cast<float>( climate.base_temperature );
+    result.biome.mean_humidity = static_cast<float>( climate.base_humidity );
+    if( player.z() < 0 ) {
+        result.biome.landscape = landscape_climate::underground;
+    } else {
+        auto location = project_to<coords::omt>( result.origin );
+        location.z() = 0;
+        const oter_id &overmap_terrain = overmap_buffer.ter_existing( location );
+        if( overmap_terrain != oter_id() ) {
+            const auto &terrain = overmap_terrain.obj();
+            const auto land = terrain.get_land_use_code();
+            if( terrain.is_ocean() ) {
+                result.biome.landscape = landscape_climate::ocean;
+            } else if( terrain.is_ocean_shore() || terrain.is_lake_shore() ) {
+                result.biome.landscape = landscape_climate::beach;
+            } else if( terrain.is_river() ) {
+                result.biome.landscape = landscape_climate::river;
+            } else if( terrain.is_lake() ) {
+                result.biome.landscape = landscape_climate::lake;
+            } else if( land == land_use_code_wetland || land == land_use_code_wetland_forest ||
+                       land == land_use_code_wetland_saltwater ) {
+                result.biome.landscape = landscape_climate::wetland;
+            } else if( terrain.is_wooded() ) {
+                result.biome.landscape = landscape_climate::forest;
+            }
+        }
+    }
     if( !blind && player.z() >= 0 && weather.weather_id.is_valid() ) {
         result.weather = fp3d_weather::sample( *weather.weather_id, weather.windspeed,
                                               weather.winddirection, weather.lightning_active, here.is_outside( player ) );

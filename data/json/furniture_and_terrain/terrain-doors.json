@@ -21,7 +21,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_mdoor_frame",
+      "ter_set": "t_broken_glass_door_mdoor_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] }, { "item": "scrap", "count": [ 3, 5 ] } ]
     },
     "shoot": { "reduce_damage": [ 2, 12 ], "reduce_damage_laser": [ 0, 7 ], "destroy_damage": [ 40, 120 ], "no_laser_destroy": true }
@@ -47,7 +47,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_mdoor_frame",
+      "ter_set": "t_broken_glass_door_mdoor_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] }, { "item": "scrap", "count": [ 3, 5 ] } ]
     }
   },
@@ -73,7 +73,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_mdoor_frame",
+      "ter_set": "t_broken_glass_door_mdoor_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] }, { "item": "scrap", "count": [ 3, 5 ] } ]
     },
     "shoot": {
@@ -104,7 +104,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_mdoor_frame",
+      "ter_set": "t_broken_glass_door_mdoor_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] }, { "item": "scrap", "count": [ 3, 5 ] } ]
     }
   },
@@ -130,7 +130,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_mdoor_frame",
+      "ter_set": "t_broken_glass_door_mdoor_frame",
       "items": [
         { "item": "glass_shard", "count": [ 42, 84 ] },
         { "item": "mc_wire", "prob": 20 },
@@ -166,7 +166,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_thconc_floor",
+      "ter_set": "t_broken_glass_door_thconc_floor",
       "items": [
         { "item": "glass_shard", "count": [ 42, 84 ] },
         { "item": "mc_wire", "prob": 20 },
@@ -201,7 +201,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_mdoor_frame",
+      "ter_set": "t_broken_glass_door_mdoor_frame",
       "items": [
         { "item": "glass_shard", "count": [ 42, 84 ] },
         { "item": "mc_wire", "prob": 20 },
@@ -230,7 +230,7 @@
       "sound_fail": "whack!",
       "sound_vol": 20,
       "sound_fail_vol": 14,
-      "ter_set": "t_thconc_floor",
+      "ter_set": "t_broken_glass_door_thconc_floor",
       "items": [
         { "item": "glass_shard", "count": [ 42, 84 ] },
         { "item": "mc_wire", "prob": 20 },
@@ -1070,7 +1070,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_red_frame",
+      "ter_set": "t_broken_glass_door_door_red_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 4, 16 ], "no_laser_destroy": true }
@@ -1098,7 +1098,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_green_frame",
+      "ter_set": "t_broken_glass_door_door_green_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 4, 16 ], "no_laser_destroy": true }
@@ -1126,7 +1126,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_white_frame",
+      "ter_set": "t_broken_glass_door_door_white_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 4, 16 ], "no_laser_destroy": true }
@@ -1154,7 +1154,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_gray_frame",
+      "ter_set": "t_broken_glass_door_door_gray_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 4, 16 ], "no_laser_destroy": true }
@@ -1181,7 +1181,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_red_frame",
+      "ter_set": "t_broken_glass_door_door_red_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     },
     "shoot": { "reduce_damage": [ 1, 8 ], "reduce_damage_laser": [ 0, 5 ], "destroy_damage": [ 4, 16 ], "no_laser_destroy": true }
@@ -1208,7 +1208,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_green_frame",
+      "ter_set": "t_broken_glass_door_door_green_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -1234,7 +1234,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_white_frame",
+      "ter_set": "t_broken_glass_door_door_white_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -1260,7 +1260,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_gray_frame",
+      "ter_set": "t_broken_glass_door_door_gray_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3082,7 +3082,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_frame",
+      "ter_set": "t_broken_glass_door_door_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3109,7 +3109,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_strconc_floor",
+      "ter_set": "t_broken_glass_door_strconc_floor",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3135,7 +3135,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_door_frame",
+      "ter_set": "t_broken_glass_door_door_frame",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3161,7 +3161,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_strconc_floor",
+      "ter_set": "t_broken_glass_door_strconc_floor",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3201,7 +3201,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_strconc_floor",
+      "ter_set": "t_broken_glass_door_strconc_floor",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3225,7 +3225,7 @@
       "sound_fail": "whack!",
       "sound_vol": 16,
       "sound_fail_vol": 10,
-      "ter_set": "t_floor",
+      "ter_set": "t_broken_glass_door_floor",
       "items": [ { "item": "glass_shard", "count": [ 42, 84 ] } ]
     }
   },
@@ -3291,5 +3291,11 @@
       "ter_set": "t_mdoor_frame",
       "items": [ { "item": "scrap", "count": [ 12, 24 ] }, { "item": "steel_plate", "prob": 75 } ]
     }
-  }
+  },
+  {"type": "terrain", "id": "t_broken_glass_door_mdoor_frame", "copy-from": "t_mdoor_frame", "looks_like": "t_mdoor_frame", "name": "broken glass door frame", "description": "A passable frame with a few remaining shards of glass."},
+  {"type": "terrain", "id": "t_broken_glass_door_door_red_frame", "copy-from": "t_door_red_frame", "looks_like": "t_door_red_frame", "name": "broken glass door frame", "description": "A passable frame with a few remaining shards of glass."},
+  {"type": "terrain", "id": "t_broken_glass_door_door_green_frame", "copy-from": "t_door_green_frame", "looks_like": "t_door_green_frame", "name": "broken glass door frame", "description": "A passable frame with a few remaining shards of glass."},
+  {"type": "terrain", "id": "t_broken_glass_door_door_white_frame", "copy-from": "t_door_white_frame", "looks_like": "t_door_white_frame", "name": "broken glass door frame", "description": "A passable frame with a few remaining shards of glass."},
+  {"type": "terrain", "id": "t_broken_glass_door_door_gray_frame", "copy-from": "t_door_gray_frame", "looks_like": "t_door_gray_frame", "name": "broken glass door frame", "description": "A passable frame with a few remaining shards of glass."},
+  {"type": "terrain", "id": "t_broken_glass_door_door_frame", "copy-from": "t_door_frame", "looks_like": "t_door_frame", "name": "broken glass door frame", "description": "A passable frame with a few remaining shards of glass."}
 ]

@@ -35,6 +35,13 @@ struct material_rule {
     bool conditional = false;
 };
 
+struct custom_uniform_expression {
+    std::string type;
+    std::string expression;
+    size_t line;
+    bool variable;
+};
+
 struct pack_properties {
     std::string error;
     // Keep directive and property order for later macro preprocessing.
@@ -45,7 +52,11 @@ struct pack_properties {
     // Present when inspected with resolved shader options. An absent program
     // is enabled by default.
     std::map<std::string, bool> program_enabled;
+    std::map<std::string, custom_uniform_expression> uniform_expressions;
     pack_buffer_flips buffer_flips;
+    std::string noise_texture;
+    // Stage family, sampler, and sampler dimension -> declaration tokens.
+    std::map<std::array<std::string, 3>, std::vector<std::string>> custom_textures;
     std::map<std::string, graph_viewport> viewports;
     std::map<std::string, std::array<buffer_dimension, 2>> buffer_sizes;
     std::map<std::string, std::vector<material_rule>> materials;

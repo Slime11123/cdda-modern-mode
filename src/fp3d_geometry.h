@@ -103,7 +103,7 @@ void ramp_face( Sink &sink, float x, float z, const UV &uv, const Plane &ramp )
 template<typename Sink, typename UV, typename Faces>
 void box_faces( Sink &sink, float x, float z, float width, float depth,
                 float bottom, float top, const std::optional<UV> &material,
-                bool tile_sides, const Faces *faces, bool draw_top )
+                bool tile_sides, const Faces *faces, bool draw_top, unsigned hidden_sides = 0 )
 {
     const float l = x - width / 2;
     const float r = x + width / 2;
@@ -144,14 +144,22 @@ void box_faces( Sink &sink, float x, float z, float width, float depth,
             sink.point( x0, y1, z0 );
         }
     };
-    sink.normal( 0, 0, -1 );
-    side( faces ? r : l, n, faces ? l : r, n, false, true );
-    sink.normal( 0, 0, 1 );
-    side( faces ? l : r, s, faces ? r : l, s, true );
-    sink.normal( -1, 0, 0 );
-    side( l, faces ? n : s, l, faces ? s : n );
-    sink.normal( 1, 0, 0 );
-    side( r, faces ? s : n, r, faces ? n : s );
+    if( !( hidden_sides & 1 ) ) {
+        sink.normal( 0, 0, -1 );
+        side( faces ? r : l, n, faces ? l : r, n, false, true );
+    }
+    if( !( hidden_sides & 4 ) ) {
+        sink.normal( 0, 0, 1 );
+        side( faces ? l : r, s, faces ? r : l, s, true );
+    }
+    if( !( hidden_sides & 8 ) ) {
+        sink.normal( -1, 0, 0 );
+        side( l, faces ? n : s, l, faces ? s : n );
+    }
+    if( !( hidden_sides & 2 ) ) {
+        sink.normal( 1, 0, 0 );
+        side( r, faces ? s : n, r, faces ? n : s );
+    }
 }
 template<typename Faces, typename Sink, typename UV>
 void window_frame( Sink &sink, const std::optional<UV> &material, float floor_height,

@@ -215,7 +215,13 @@ TEST_CASE( "fp3d_materials_atlas_preserves_renderer_without_native_gpu_interop",
     CHECK( blend == SDL_BLENDMODE_ADD );
     // Atlas coordinates remain available on the software renderer, but
     // the texture cannot be borrowed as a native GPU sampler.
-    CHECK( fp3d_materials::lookup_gpu( unknown.terrain ) );
+    const auto terrain_uv = fp3d_materials::lookup_gpu( unknown.terrain );
+    const auto sprite_uv = fp3d_materials::lookup_gpu( fp3d_materials::sprite_key( absent_sprite ) );
+    REQUIRE( terrain_uv );
+    REQUIRE( sprite_uv );
+    CHECK( fp3d_materials::gpu_rect_is_opaque( *terrain_uv ) );
+    CHECK_FALSE( fp3d_materials::gpu_rect_is_opaque( *sprite_uv ) );
+    CHECK_FALSE( fp3d_materials::gpu_rect_is_opaque( { 0.f, 0.f, .5f, .5f } ) );
     CHECK( fp3d_materials::gpu_colour_atlas( renderer.get() ) == nullptr );
     fp3d_materials::set_tileset( std::make_shared<tileset>(), renderer );
     CHECK_FALSE( fp3d_materials::ready() );

@@ -31,6 +31,13 @@
 #include "fp3d_structure_geometry.h"
 #include "fp3d_vehicle_roof_visibility.h"
 #include "fp3d_local_lights.h"
+#include "fp3d_iris_frame.h"
+#include "fp3d_iris_gpu_graph.h"
+#include "fp3d_iris_gpu_images.h"
+#include "fp3d_iris_layout.h"
+#include "fp3d_iris_materials.h"
+#include "fp3d_iris_block_light.h"
+#include "fp3d_iris_scene_post.h"
 #include "fp3d_gpu_base_shaders.inc"
 #include "debug.h"
 #include <chrono>
@@ -45,6 +52,7 @@
 namespace fp3d_gpu_world_qa
 {
 using kind = fp3d_snapshot::terrain_kind;
+using iris_caster = fp3d_shaderpacks::iris_shadow_caster;
 enum class shape {
     floor, capped_wall, open_wall, ramp, door, window, curtain, stairs, pad,
     landscape_ground, landscape_facade, landscape_facade_tiled, plant, grass, furniture,
@@ -70,23 +78,32 @@ struct model_key {
     bool open_structure = false;
     std::string terrain_id{};
     unsigned fence_links = 0;
+    unsigned bed_links = 0;
     bool glass_door = false;
+    float door_swing = 0.f;
     bool blueprint = false;
     bool metal_deck = false;
+    std::optional<int> iris_terrain_material{};
+    bool iris_terrain_solid = false;
+    std::optional<int> iris_water_material{};
 
     bool operator<( const model_key &other ) const {
         return std::tie( type, param_x, param_y, building_height, door_kind, upper_floor, quarter_turns,
                          stair_rows, stair_south, furniture_id, furniture_shape, surface, water_sky, open_structure,
-                         terrain_id, fence_links, glass_door, blueprint, metal_deck ) <
+                         terrain_id, fence_links, bed_links, glass_door, door_swing, blueprint, metal_deck,
+                         iris_terrain_material, iris_terrain_solid, iris_water_material ) <
                std::tie( other.type, other.param_x, other.param_y, other.building_height,
                          other.door_kind, other.upper_floor,
                          other.quarter_turns, other.stair_rows, other.stair_south, other.furniture_id,
                          other.furniture_shape, other.surface, other.water_sky, other.open_structure,
-                         other.terrain_id, other.fence_links, other.glass_door, other.blueprint, other.metal_deck );
+                         other.terrain_id, other.fence_links, other.bed_links, other.glass_door, other.door_swing,
+                         other.blueprint, other.metal_deck, other.iris_terrain_material,
+                         other.iris_terrain_solid, other.iris_water_material );
     }
 };
 
-enum class pane_shape : unsigned { window, turned_window, full_glass, turned_glass, slid_glass, turned_slid_glass, skylight };
+enum class pane_shape : unsigned { window, turned_window, full_glass, turned_glass, open_glass_in, open_glass_out,
+                                   turned_open_glass_in, turned_open_glass_out, skylight };
 
 struct sorted_pane {
     pane_shape type;
@@ -101,11 +118,20 @@ struct batch {
     Uint32 instance_count;
     bool resident = false;
     bool paged_instances = false;
+    bool iris_water = false;
+    std::optional<int> iris_terrain_material{};
+    bool iris_terrain_solid = false;
+    iris_caster shadow_caster = iris_caster::unclassified;
+    std::optional<int> iris_model_id{};
+    int iris_item_id = -1;
+    bool iris_basic = false;
 };
 struct reflective_batch {
     batch draws;
     std::array<float, 4> material;
     reflective_surface surface;
+    std::vector<std::uint8_t> iris_lights{};
+    std::optional<int> iris_water_material{};
 };
 
 inline constexpr Uint32 resident_instance_buffer_limit = 16 * 1024 * 1024;
@@ -119,6 +145,8 @@ struct prepared_world {
     std::shared_ptr<const std::vector<fp3d_gpu::mesh_instance>> resident_pages;
     std::shared_ptr<const fp3d_gpu::instance_page_revision> resident_page_revision;
     size_t resident_instance_count = 0;
+    // Indexed like the corresponding dynamic and resident GPU instance streams.
+    std::array<std::vector<Uint32>, 2> iris_terrain_lights;
     std::vector<batch> batches;
     std::optional<batch> unknown_background;
     std::vector<reflective_batch> reflective_batches;
@@ -146,8 +174,11 @@ struct prepared_world {
     unsigned ground_layer_count = 0;
     unsigned animated_field_count = 0;
     fp3d_gpu_camera_math::matrix4 camera;
+    std::array<float, 3> iris_sun{ 0.f, 1.f, 0.f };
+    std::array<double, 3> iris_shadow_anchor{};
     fp3d_gpu::directional_light base_light;
     fp3d_gpu::atmosphere_uniforms atmosphere;
+    float lightning_flash = 0.f;
     fp3d_gpu::halo_uniforms halos;
     Uint32 halo_count = 0;
     std::optional<fp3d_gpu::photon_uniforms> photon;
@@ -168,17 +199,16 @@ inline bool can_cache_terrain( const fp3d_snapshot::cell &tile,
         tile.goes_up || tile.goes_down || tile.is_ramp || tile.exterior_only ||
         tile.ceiling_present || tile.cutaway_ceiling || tile.glass_ceiling ||
         tile.open_structure_above || tile.metal_deck_railing || tile.furniture ||
-        !tile.ground_fields.empty() || !tile.vegetation.empty() ) {
+        !tile.ground_fields.empty() || !tile.vegetation.empty() || fp3d_scene::water_surface_offset( tile ) < 0.f ) {
         return false;
     }
     const auto [entry, inserted] = types.try_emplace( tile.terrain, false );
     if( inserted ) {
         const std::string &id = tile.terrain;
-        entry->second = !id.empty() && id != "t_radio_tower" && id != "t_wood_stairs_up_half" &&
+        entry->second = !id.empty() && !fp3d_furniture::world_prop( id ) && id != "t_radio_tower" && id != "t_wood_stairs_up_half" &&
                         id != "t_metal_floor_no_roof" && id != "t_floor_metal_gangway" &&
                         id.compare( 0, 11, "t_guardrail" ) != 0 && id.compare( 0, 9, "t_treetop" ) != 0 &&
                         id.find( "door" ) == std::string::npos &&
-                        fp3d_scene::water_surface_offset( id ) == 0.f &&
                         !fp3d_snapshot::is_glass_roof( id ) && !fp3d_snapshot::is_chain_gate( id ) &&
                         !fp3d_snapshot::is_metal_gate( id ) &&
                         !fp3d_snapshot::is_picket_gate( id ) &&
@@ -311,7 +341,7 @@ class terrain_index
             plain_cells.clear();
             shore_cache::blocks water;
             for( const auto &tile : scene.cells ) {
-                if( fp3d_scene::water_surface_offset( tile.terrain ) < 0.f &&
+                if( fp3d_scene::water_surface_offset( tile ) < 0.f && !tile.exterior_only &&
                     cells.get( tile.position ) == &tile ) {
                     water[shore_cache::block_of( tile.position )] |= shore_cache::cell_bit( tile.position );
                 }
@@ -382,6 +412,10 @@ inline std::optional<std::array<float, 3>> solid_furniture_color( fp3d_furniture
     // These meshes use solid part colors because the sprites already have
     // painted holes, shadows and perspective that would double the 3D detail.
     switch( shape ) {
+        case kind::udp_dish: {
+            constexpr std::array<rgb, 5> parts{ silver, steel, enamel, steel, enamel };
+            return parts[index];
+        }
         case kind::udp_ct: {
             constexpr std::array<rgb, 6> parts{ steel, enamel, dark_steel, silver, steel, silver };
             return parts[index];
@@ -501,6 +535,32 @@ inline std::optional<std::array<float, 3>> solid_furniture_color( fp3d_furniture
     }
 }
 
+inline void emit_glass_shards( fp3d_geometry::mesh &mesh, float x, float z, float y,
+                               float width, bool turned )
+{
+    std::vector<fp3d_geometry::draw_range> ranges;
+    fp3d_geometry::primitive_mesh_sink glass( mesh, ranges );
+    glass.begin( fp3d_geometry::primitive::triangles );
+    glass.color( .59f, .82f, .89f );
+    for( float side : { -1.f, 1.f } ) {
+        glass.normal( turned ? side : 0.f, 0.f, turned ? 0.f : side );
+        for( const auto &shard : std::array<std::array<float, 4>, 3>{ {
+                 { -.48f, -.28f, -.44f, .27f }, { -.20f, .04f, -.07f, .11f },
+                 { .24f, .48f, .42f, .36f }
+             } } ) {
+            const auto point = [&]( float along, float up ) {
+                const float d = width * along;
+                glass.point( x + ( turned ? 0.f : d ), y + up, z + ( turned ? d : 0.f ) );
+            };
+            const bool forward = turned ? side < 0.f : side > 0.f;
+            point( shard[forward ? 0 : 1], 0.f );
+            point( shard[forward ? 1 : 0], 0.f );
+            point( shard[2], shard[3] );
+        }
+    }
+    glass.end();
+}
+
 inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
 {
     using furniture_kind = fp3d_furniture::kind;
@@ -570,13 +630,24 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
                     sink.point( part.x + dx, part.bottom, part.z + dz );
                     sink.point( part.x + dx, part.top, part.z + dz );
                     sink.point( part.x - dx, part.top, part.z - dz );
-                } else if( !part.glass && model.type == shape::glass_barrier ) {
+                } else if( model.type == shape::glass_barrier && !part.glass ) {
                     box( part );
+                } else if( model.type == shape::glass_barrier &&
+                           fp3d_snapshot::broken_glass_wall( model.terrain_id ) ) {
+                    emit_glass_shards( mesh, part.x, part.z, part.bottom,
+                                       std::max( part.width, part.depth ), part.depth > part.width );
                 }
             }
         } else if( model.type == shape::built_terrain ) {
-            for( const auto &part : fp3d_snapshot::terrain_model_parts( model.terrain_id, links ) ) {
-                box( part );
+            if( const auto *prop = fp3d_furniture::world_prop( model.terrain_id ) ) {
+                model_key geometry{ shape::furniture };
+                geometry.furniture_id = model.terrain_id;
+                geometry.furniture_shape = prop->shape;
+                emit_model( geometry, mesh );
+            } else {
+                for( const auto &part : fp3d_snapshot::terrain_model_parts( model.terrain_id, links, model.door_swing ) ) {
+                    box( part );
+                }
             }
         } else if( model.type == shape::fence ) {
             const bool posts_only = model.terrain_id == "t_chainfence_posts" ||
@@ -601,13 +672,13 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
             }
         } else {
             const bool along_x = fp3d_snapshot::chain_gate_along_x( links );
-            for( const auto &part : fp3d_snapshot::chain_gate_parts( model.terrain_id, true ) ) {
+            for( const auto &part : fp3d_snapshot::chain_gate_parts( model.terrain_id, true, model.door_swing ) ) {
                 box( along_x ? part : fp3d_furniture::rotated( part, 1 ) );
             }
             const bool open = model.terrain_id == "t_chaingate_o" || model.terrain_id == "t_chickenwire_gate_o";
             const auto orient = [&]( float u, float y ) -> fp3d_geometry::structure_point {
                 const float x = open ? -.425f : -.425f + u;
-                const float z = open ? -u : 0.f;
+                const float z = open ? model.door_swing * u : 0.f;
                 return along_x ? fp3d_geometry::structure_point{ x, y, z } :
                        fp3d_geometry::structure_point{ -z, y, x };
             };
@@ -628,23 +699,36 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
                                       fp3d_scene::door_part_owns_cap( part.top, model.upper_floor ) );
         }
         if( model.glass_door ) {
-            const float shift = model.door_kind == kind::open_door ? -.88f : 0.f;
-            if( shift < 0 ) {
+            const auto leaf_box = [&]( fp3d_furniture::part part ) {
+                box( model.door_swing ? fp3d_snapshot::swing_door_part( part, model.door_swing ) : part );
+            };
+            if( model.door_swing ) {
                 for( auto part : fp3d_snapshot::door_parts( kind::glass ) ) {
-                    part.x += shift;
-                    box( part );
+                    part.width *= .88f;
+                    part.x *= .88f;
+                    part.bottom = std::max( .045f, part.bottom );
+                    part.top = std::min( 2.09f, part.top );
+                    leaf_box( part );
                 }
             }
             for( float side : { -1.f, 1.f } ) {
-                box( { .30f + shift, side * .105f, .055f, .055f, 1.f, 1.36f } );
+                leaf_box( { .30f, side * .105f, .055f, .055f, 1.f, 1.36f } );
                 for( float y : { 1.015f, 1.315f } ) {
-                    box( { .30f + shift, side * .07f, .065f, .10f, y, y + .03f } );
+                    leaf_box( { .30f, side * .07f, .065f, .10f, y, y + .03f } );
                 }
             }
+        } else if( model.door_swing ) {
+            box( fp3d_snapshot::swing_door_part( { 0, 0, .88f, .075f, .035f, 2.09f },
+                                                 model.door_swing ) );
+        } else if( fp3d_snapshot::broken_glass_door( model.terrain_id ) ) {
+            emit_glass_shards( mesh, 0, 0, .025f, .84f, false );
         }
     } else if( model.type == shape::window ) {
         fp3d_geometry::window_frame<fp3d_materials::furniture_uv>( sink, unit_uv,
                 fp3d_camera::floor_height, model.upper_floor );
+        if( fp3d_snapshot::broken_window_glass( model.terrain_id ) ) {
+            emit_glass_shards( mesh, 0, 0, .899f, .82f, false );
+        }
     } else if( model.type == shape::curtain ) {
         std::vector<fp3d_geometry::draw_range> ranges;
         fp3d_geometry::primitive_mesh_sink curtain( mesh, ranges );
@@ -697,8 +781,15 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
         std::vector<fp3d_geometry::draw_range> ranges;
         fp3d_geometry::primitive_mesh_sink furniture( mesh, ranges );
         unsigned part_index = 0;
-        for( const auto &part : fp3d_furniture::parts( model.furniture_shape ) ) {
+        for( const auto &original : fp3d_furniture::parts( model.furniture_shape ) ) {
             const unsigned index = part_index++;
+            const auto segment = model.bed_links ?
+                                 fp3d_furniture::bed_segment_part( model.furniture_shape, index, model.bed_links ) :
+                                 std::optional<fp3d_furniture::part>( original );
+            if( !segment ) {
+                continue;
+            }
+            const auto &part = *segment;
             if( part.glass != ( model.type == shape::furniture_glass ) ) {
                 continue;
             }
@@ -715,11 +806,26 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
                                  red ? .045f : post ? .65f : .94f,
                                  red ? .035f : post ? .68f : .90f );
             }
-            const auto solid = solid_furniture_color( model.furniture_shape, index );
+            if( model.furniture_shape == furniture_kind::udp_dish && index == 2 ) {
+                fp3d_geometry::satellite_reflector( furniture, part );
+                furniture.color( .60f, .62f, .65f );
+                furniture.begin( fp3d_geometry::primitive::quads );
+                    fp3d_geometry::structural_beam( furniture, { 0.f, 1.31f, .375f },
+                                               { 0.f, 1.74f, .42f }, .043f );
+                furniture.end();
+                continue;
+            }
+            const auto *prop = fp3d_furniture::world_prop( model.furniture_id );
+            const auto solid = prop ? std::nullopt : solid_furniture_color( model.furniture_shape, index );
             const auto faces = solid ? fp3d_materials::furniture_uv{} :
                                fp3d_materials::lookup_furniture_gpu( model.furniture_id, index );
             if( solid ) {
                 furniture.color( ( *solid )[0], ( *solid )[1], ( *solid )[2] );
+            }
+            if( prop && prop->black_glass ) {
+                furniture.color( .27f, .30f, .38f );
+            } else if( !faces.side && prop ) {
+                furniture.color( .55f, .57f, .58f );
             }
             if( !faces.side && model.furniture_shape == furniture_kind::udp_terminal ) {
                 furniture.color( .19f, .20f, .21f );
@@ -744,6 +850,10 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
                 }
             }
             if( part.form != fp3d_furniture::part_form::standard ) {
+                if( faces.side ) {
+                    furniture.texcoord( ( faces.side->left + faces.side->right ) * .5f,
+                                        ( faces.side->top + faces.side->bottom ) * .5f );
+                }
                 fp3d_geometry::shaped_furniture_part( furniture, part );
                 continue;
             }
@@ -785,8 +895,9 @@ inline void emit_model( const model_key &model, fp3d_geometry::mesh &mesh )
             }
             const size_t first = mesh.vertices.size();
             furniture.begin( fp3d_geometry::primitive::quads );
+            const unsigned hidden_sides = p.width == 1.f && p.depth == 1.f ? model.bed_links : 0;
             fp3d_geometry::box_faces( furniture, p.x, p.z, p.width, p.depth, p.bottom, p.top,
-                                      faces.side, false, &faces, true );
+                                      faces.side, false, &faces, true, hidden_sides );
             const auto uv = faces.side.value_or( *unit_uv );
             const float left = p.x - p.width / 2;
             const float right = p.x + p.width / 2;
@@ -860,7 +971,12 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         const fp3d_targeting::edge_outline *target_outline = nullptr, terrain_index *cache = nullptr,
         bool reuse_material_slots = false,
         const fp3d_compositor::pickup_highlight *pickup = nullptr,
-        const tripoint_abs_ms *peek_window = nullptr, float open_structure_opacity = 1.f )
+        const tripoint_abs_ms *peek_window = nullptr, float open_structure_opacity = 1.f,
+        const fp3d_iris::material_id_map *iris_materials = nullptr,
+        const fp3d_iris::material_id_map *iris_entities = nullptr,
+        const fp3d_iris::material_id_map *iris_items = nullptr,
+        const fp3d_iris::material_id_map *iris_water_materials = nullptr,
+        bool iris_basic = false )
 {
     if( !width || !height || width > 4096 || height > 4096 ) {
         return std::nullopt;
@@ -885,6 +1001,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     result.width = width;
     result.height = height;
     result.overhead = overhead;
+    result.iris_sun = { scene.sky.sun_x, scene.sky.sun_y, scene.sky.sun_z };
+    result.iris_shadow_anchor = { static_cast<double>( scene.origin.x() ),
+                                  static_cast<double>( scene.origin.z() ) * fp3d_camera::floor_height,
+                                  static_cast<double>( scene.origin.y() ) };
     result.material_revision = fp3d_materials::revision();
     fp3d_gpu_camera_math::camera view;
     view.yaw_degrees = pose.yaw;
@@ -902,6 +1022,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                          std::chrono::steady_clock::now().time_since_epoch() ).count();
     const float lightning = fp3d_weather::flash( scene.weather, now );
+    result.lightning_flash = lightning;
     const float clouds = std::clamp( scene.weather.clouds, 0.f, 1.f );
     const float daylight = std::clamp( scene.sky.daylight, 0.f, 1.f );
     const float wetness = scene.weather.particles == fp3d_weather::precipitation::rain ?
@@ -1152,18 +1273,24 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 pickup->tile == tile.position && model.type == shape::furniture ) {
                 instance.offset[3] = fp3d_gpu::white_model_material;
             }
-            // Generic furniture stays opaque. The flag covers terrain models
-            // and slabs, while panes retain their native material alpha.
-            model.open_structure = overhead && tile.open_structure_above && !preview &&
-                                   model.type != shape::furniture && model.type != shape::furniture_glass &&
-                                   model.type != shape::furniture_light_head && model.type != shape::kiln_fire &&
-                                   model.type != shape::plant && model.type != shape::grass;
+            model.open_structure = overhead && tile.open_structure_above && !preview;
             if( preview ) {
                 model.blueprint = true;
                 model.surface = reflective_surface::none;
                 instance.offset[3] = uv ? fp3d_gpu::unlit_cutout( .01f ) : 2.f;
                 instance.tint = preview_color;
                 prepared_blueprint = true;
+            }
+            if( iris_materials && !preview && ( model.type == shape::floor ||
+                 model.type == shape::open_wall || model.type == shape::capped_wall ||
+                 model.type == shape::ramp ) ) {
+                const auto material = fp3d_iris::terrain_material( tile );
+                if( material.surface == fp3d_iris::material_surface::solid ) {
+                    model.iris_terrain_material = iris_materials->resolve( material ).value_or( -1 );
+                    model.iris_terrain_solid = uv && instance.tint[3] == 1.f &&
+                                               fp3d_materials::gpu_rect_is_opaque( *uv );
+                    destination = nullptr;
+                }
             }
             ( destination ? *destination : groups[model] ).push_back( instance );
         };
@@ -1207,7 +1334,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 const auto *above = known_cell( tile.position + tripoint_rel_ms::above );
                 if( fp3d_scene::upper_floor_owns_cap( above ) ) {
                     wall.type = shape::open_wall;
-                    wall.param_x = fp3d_scene::water_surface_offset( above->terrain );
+                    wall.param_x = fp3d_scene::water_surface_offset( *above );
                     ++result.uncapped_walls;
                 }
                 if( near_room_wall() ) {
@@ -1222,7 +1349,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             }
             return;
         }
-        const float water_height = fp3d_scene::water_surface_offset( tile.terrain );
+        const float water_height = fp3d_scene::water_surface_offset( tile );
         const auto tile_pane = [&]( pane_shape type, float height,
                                     const std::optional<fp3d_materials::uv_rect> &uv, float opacity = .32f ) {
             if( overhead && tile.open_structure_above && !preview ) {
@@ -1258,13 +1385,15 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 model_key furniture_model{ shape::furniture };
                 furniture_model.furniture_id = furniture.id;
                 furniture_model.furniture_shape = furniture.shape;
-                furniture_model.quarter_turns =
+                furniture_model.bed_links = fp3d_scene::bed_links( tile, known_cell );
+                furniture_model.quarter_turns = furniture_model.bed_links ? 0 :
                     ( 4 - fp3d_scene::furniture_facing( tile, known_cell ) ) % 4;
-                const bool per_face_material = furniture.shape == furniture_kind::rack ||
+                const auto *prop = fp3d_furniture::world_prop( furniture.id );
+                const bool per_face_material = prop || furniture.shape == furniture_kind::rack ||
                                                furniture.shape == furniture_kind::udp_terminal ||
                                                furniture.shape == furniture_kind::udp_air_conditioner ||
                                                furniture.shape == furniture_kind::udp_water_purifier;
-                const bool textured = !solid_furniture_color( furniture.shape, 0 ) &&
+                const bool textured = ( prop || !solid_furniture_color( furniture.shape, 0 ) ) &&
                                       ( per_face_material ?
                                       fp3d_materials::lookup_furniture_gpu( furniture.id, 0 ).side.has_value() :
                                       furniture.shape != furniture_kind::udp_stop_sign &&
@@ -1350,6 +1479,9 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                           fp3d_materials::lookup_gpu( fp3d_materials::terrain_key( tile ) ), storey );
         }
         model_key model{ shape::floor };
+        const char *guardrail_ground = fp3d_snapshot::guardrail_ground( tile.terrain );
+        const bool prison_barrier = fp3d_snapshot::is_prison_barrier( tile.terrain );
+        const auto *world_prop = fp3d_furniture::world_prop( tile.terrain );
         const bool picket_barrier = tile.terrain == "t_fence" ||
                                     fp3d_snapshot::is_picket_gate( tile.terrain );
         const bool metal_barrier = tile.terrain == "t_metal_railing" || tile.terrain == "t_fence_metal" ||
@@ -1395,6 +1527,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             model.param_x = plane.dx;
             model.param_y = plane.dy;
             base_height += plane.center;
+        } else if( include_landscape && world_prop ) {
+            model.type = shape::built_terrain;
+            model.terrain_id = tile.terrain;
+            model.quarter_turns = fp3d_scene::world_prop_turn( tile, *world_prop, known_cell );
         } else if( include_landscape && ( fp3d_scene::glass_wall( tile ) ||
                                           tile.terrain == "t_glass_railing" ) ) {
             model.type = shape::glass_barrier;
@@ -1403,21 +1539,29 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             for( size_t i = 0; i < links.size(); ++i ) {
                 model.fence_links |= static_cast<unsigned>( links[i] ) << i;
             }
-            auto pane = model;
-            pane.type = shape::barrier_pane;
-            const float opacity = tile.terrain.find( "frosted" ) != std::string::npos ? .60f : .30f;
-            add_instance( pane, std::nullopt, storey,
-                          std::array<float, 4>{ .56f * tint, .84f * tint, .94f * tint, opacity }, true );
+            if( !fp3d_snapshot::broken_glass_wall( tile.terrain ) ) {
+                auto pane = model;
+                pane.type = shape::barrier_pane;
+                const float opacity = tile.terrain.find( "frosted" ) != std::string::npos ? .60f : .30f;
+                add_instance( pane, std::nullopt, storey,
+                              std::array<float, 4>{ .56f * tint, .84f * tint, .94f * tint, opacity }, true );
+            }
         } else if( include_landscape && ( tile.kind == kind::fence ||
                    fp3d_snapshot::is_chain_gate( tile.terrain ) ||
                    fp3d_snapshot::is_metal_gate( tile.terrain ) ||
                    fp3d_snapshot::is_picket_gate( tile.terrain ) ||
                    tile.terrain == "t_column" || tile.terrain == "t_pillar" ||
                    tile.terrain == "t_little_column" || tile.terrain == "t_column_halfway" ) ) {
-            const auto links = fence_neighbours();
+            const auto links = prison_barrier ? fp3d_scene::prison_barrier_links( tile, known_cell ) :
+                               fence_neighbours();
             model.terrain_id = tile.terrain;
             for( size_t i = 0; i < links.size(); ++i ) {
                 model.fence_links |= static_cast<unsigned>( links[i] ) << i;
+            }
+            if( tile.terrain.size() >= 2 &&
+                tile.terrain.compare( tile.terrain.size() - 2, 2, "_o" ) == 0 ) {
+                model.door_swing = fp3d_scene::door_inward( tile,
+                                   fp3d_snapshot::chain_gate_along_x( links ), false, known_cell );
             }
             model.type = fp3d_snapshot::is_chain_gate( tile.terrain ) ? shape::chain_gate :
                          fp3d_snapshot::terrain_model_parts( tile.terrain, links ).empty() ?
@@ -1428,7 +1572,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             model.type = shape::capped_wall;
             if( !preview && fp3d_scene::upper_floor_owns_cap( above ) ) {
                 model.type = shape::open_wall;
-                model.param_x = fp3d_scene::water_surface_offset( above->terrain );
+                model.param_x = fp3d_scene::water_surface_offset( *above );
             }
             if( near_room_wall() ) {
                 model.type = shape::capped_wall;
@@ -1439,20 +1583,31 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             if( !include_landscape && glass_door ) { return; }
             model.type = shape::door;
             model.door_kind = tile.kind;
-            model.glass_door = glass_door;
+            model.terrain_id = tile.terrain;
+            const auto closed = tile.kind == kind::open_door ?
+                                fp3d_snapshot::closed_door_id( tile.terrain ) : std::string{};
+            model.glass_door = glass_door && !fp3d_snapshot::broken_glass_door( tile.terrain );
             orient_opening();
-            if( tile.kind == kind::glass || ( glass_door && tile.kind == kind::open_door ) ) {
-                const bool sliding = tile.kind == kind::open_door;
-                const pane_shape pane = sliding ? ( model.quarter_turns ? pane_shape::turned_slid_glass :
-                                                    pane_shape::slid_glass ) :
-                                        ( model.quarter_turns ? pane_shape::turned_glass : pane_shape::full_glass );
+            if( !closed.empty() ) {
+                model.door_swing = fp3d_scene::door_inward( tile, !model.quarter_turns, true, known_cell );
+            }
+            if( tile.kind == kind::glass || ( model.glass_door && model.door_swing ) ) {
+                const pane_shape pane = !model.door_swing ?
+                                        ( model.quarter_turns ? pane_shape::turned_glass : pane_shape::full_glass ) :
+                                        model.quarter_turns ?
+                                        ( model.door_swing > 0 ? pane_shape::turned_open_glass_in :
+                                          pane_shape::turned_open_glass_out ) :
+                                        ( model.door_swing > 0 ? pane_shape::open_glass_in :
+                                          pane_shape::open_glass_out );
                 tile_pane( pane, storey, std::nullopt,
                            tile.terrain.find( "frosted" ) != std::string::npos ? .60f : .32f );
             }
         } else if( tile.kind == kind::window ) {
             model.type = shape::window;
+            model.terrain_id = tile.terrain;
             orient_opening();
-            if( tile.pane == fp3d_snapshot::window_pane::glazed ) {
+            if( tile.pane == fp3d_snapshot::window_pane::glazed &&
+                !fp3d_snapshot::broken_window_glass( tile.terrain ) ) {
                 tile_pane( model.quarter_turns ? pane_shape::turned_window : pane_shape::window,
                            storey, fp3d_materials::lookup_gpu( "$window:" + tile.terrain ) );
             }
@@ -1479,6 +1634,9 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                                   tile.terrain.find( "_dp" ) != std::string::npos;
                 model.surface = deep ?
                                 reflective_surface::water_deep : reflective_surface::water_shallow;
+                if( iris_water_materials && !preview ) {
+                    model.iris_water_material = iris_water_materials->resolve( fp3d_iris::terrain_material( tile ) );
+                }
             }
             model.water_sky = clear_overhead && tile.position.z() >= 0;
             base_height += water_height;
@@ -1543,15 +1701,30 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                                 tile.terrain == "t_screened_porch_wall" || tile.terrain == "t_fence_post";
             fallback = timber ? std::array<float, 4>{ .49f * tint, .34f * tint, .19f * tint, 1.f } :
                        std::array<float, 4>{ .54f * tint, .58f * tint, .60f * tint, 1.f };
+        } else if( guardrail_ground ) {
+            fallback = std::array<float, 4>{ .53f * tint, .57f * tint, .60f * tint, 1.f };
         } else if( picket_barrier ) {
             uv = fp3d_materials::picket_wood_gpu();
             if( !uv ) {
                 fallback = std::array<float, 4>{ .76f * tint, .74f * tint, .68f * tint, 1.f };
             }
+        } else if( prison_barrier ) {
+            fallback = std::array<float, 4>{ .68f * tint, .69f * tint, .70f * tint, 1.f };
         } else if( metal_barrier ) {
             fallback = std::array<float, 4>{ .49f * tint, .54f * tint, .56f * tint, 1.f };
+        } else if( world_prop && model.type == shape::built_terrain ) {
+            uv = fp3d_materials::lookup_furniture_gpu( tile.terrain, 0 ).side ?
+                 unit_uv : std::nullopt;
+            if( !uv ) {
+                fallback = std::array<float, 4>{ tint, tint, tint, 1.f };
+            }
         } else if( model.type == shape::built_terrain ) {
             uv = fp3d_materials::lookup_gpu( tile.kind == kind::fence ? "$fence:" + tile.terrain : "t_concrete" );
+        } else if( fp3d_snapshot::broken_glass_door( tile.terrain ) ||
+                   fp3d_snapshot::broken_window_glass( tile.terrain ) ) {
+            fallback = std::array<float, 4>{ .71f * tint, .69f * tint, .66f * tint, 1.f };
+        } else if( model.type == shape::door && model.door_swing ) {
+            uv = fp3d_materials::lookup_gpu( fp3d_snapshot::closed_door_id( tile.terrain ) );
         } else if( model.type == shape::window ) {
             uv = fp3d_materials::lookup_gpu( fp3d_scene::window_surround( tile, known_cell ) );
         } else {
@@ -1564,9 +1737,15 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             model.type != shape::floor && model.type != shape::ramp && model.type != shape::water ) {
             const auto floor = floor_profile();
             auto floor_uv = fp3d_materials::lookup_gpu(
+                                      world_prop && model.type == shape::built_terrain ?
+                                      ( tile.ceiling_present || tile.glass_ceiling || tile.cutaway_ceiling ?
+                                        "t_floor" : "t_dirt" ) :
+                                      guardrail_ground ? guardrail_ground :
                                       tile.metal_deck_railing ? floor_material_key() :
+                                      fp3d_snapshot::broken_glass_door( tile.terrain ) ||
+                                      fp3d_snapshot::broken_glass_wall( tile.terrain ) ? floor_material_key() :
                                       model.type == shape::door || model.type == shape::glass_barrier ||
-                                      metal_barrier ? "t_floor" :
+                                      metal_barrier || prison_barrier ? "t_floor" :
                                       model.type == shape::fence || model.type == shape::chain_gate ?
                                       "t_dirt" : floor_material_key() );
             if( picket_barrier ) {
@@ -1576,17 +1755,27 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                     const auto *ground = known_cell( tile.position + direction );
                     if( ground && ground->floor_present && ground->kind == kind::floor &&
                         ground->ground_connections >= 0 &&
-                        fp3d_scene::water_surface_offset( ground->terrain ) == 0.f ) {
+                        fp3d_scene::water_surface_offset( *ground ) == 0.f ) {
                         floor_uv = fp3d_materials::lookup_gpu( fp3d_materials::terrain_key( *ground ) );
                         if( floor_uv ) { break; }
                     }
                 }
                 if( !floor_uv ) { floor_uv = fp3d_materials::lookup_gpu( "t_dirt" ); }
             }
-            const auto soil = picket_barrier && !floor_uv ?
-                              std::optional<std::array<float, 4>>( { .43f * tint, .35f * tint,
-                                      .24f * tint, 1.f } ) : std::nullopt;
-            add_instance( floor, floor_uv, storey + grade.center, soil );
+            std::optional<std::array<float, 4>> floor_fallback;
+            if( !floor_uv && guardrail_ground ) {
+                floor_uv = fp3d_materials::lookup_gpu( "t_pavement" );
+                if( !floor_uv ) {
+                    floor_fallback = std::array<float, 4>{ .24f * tint, .23f * tint, .22f * tint, 1.f };
+                }
+            } else if( !floor_uv && world_prop && model.type == shape::built_terrain ) {
+                floor_fallback = std::array<float, 4>{ .33f * tint, .31f * tint, .27f * tint, 1.f };
+            } else if( !floor_uv && prison_barrier ) {
+                floor_fallback = std::array<float, 4>{ .35f * tint, .38f * tint, .41f * tint, 1.f };
+            } else if( !floor_uv && picket_barrier ) {
+                floor_fallback = std::array<float, 4>{ .43f * tint, .35f * tint, .24f * tint, 1.f };
+            }
+            add_instance( floor, floor_uv, storey + grade.center, floor_fallback );
             if( floor_metal ) {
                 add_instance( { shape::ceiling }, floor_uv, storey + grade.center + floor.building_height,
                               under_tint, true );
@@ -1804,6 +1993,9 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     for( const auto &[model, group] : groups ) {
         auto geometry_model = model;
         geometry_model.open_structure = false;
+        geometry_model.iris_terrain_material.reset();
+        geometry_model.iris_terrain_solid = false;
+        geometry_model.iris_water_material.reset();
         const auto build = [&]( fp3d_geometry::mesh &mesh ) { emit_model( geometry_model, mesh ); };
         const bool fade = model.open_structure && open_structure_opacity < 1.f;
         // Static structure meshes remain resident across both passes.
@@ -1840,7 +2032,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             if( draw.resident ) {
                 result.resident_instance_count += group.size();
             }
-            if( model.type != shape::barrier_pane ) {
+            if( model.type != shape::barrier_pane && model.type != shape::furniture_glass &&
+                model.type != shape::kiln_fire ) {
                 result.open_structure_shadows.push_back( draw );
             }
             const bool slab = model.type == shape::floor || model.type == shape::ceiling;
@@ -1851,7 +2044,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                     blend_depth( instance, slab ? 0.f : fp3d_camera::floor_height * .5f ), draw
                 } );
                 instance.tint[3] *= open_structure_opacity;
-                if( instance.offset[3] == 0.f || instance.offset[3] == 1.f ) {
+                if( instance.offset[3] == 0.f || instance.offset[3] == 1.f ||
+                    instance.offset[3] == fp3d_gpu::white_model_material ) {
                     // Cut out the texture's own holes before applying
                     // the instance opacity. Keep the original lighting.
                     instance.offset[3] = instance.offset[3] == 0.f ?
@@ -1866,6 +2060,27 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                         model.type == shape::kiln_fire ) ? translucent_models : result.batches;
         const auto emit_batch = [&]( const batch &part ) {
             queue.push_back( part );
+            queue.back().iris_water = model.type == shape::water &&
+                                      model.surface != reflective_surface::none && !model.blueprint;
+            queue.back().iris_terrain_material = model.iris_terrain_material;
+            queue.back().iris_terrain_solid = model.iris_terrain_solid;
+            if( iris_basic && model.type == shape::furniture && !model.blueprint ) {
+                queue.back().iris_basic = std::all_of( group.begin(), group.end(), []( const auto &instance ) {
+                    return ( instance.offset[3] == 1.f || instance.offset[3] == 2.f ) && instance.tint[3] == 1.f;
+                } );
+            }
+            if( model.type == shape::furniture || model.type == shape::furniture_glass ||
+                model.type == shape::furniture_light_head || model.type == shape::kiln_fire ) {
+                queue.back().shadow_caster = iris_caster::block;
+                if( iris_materials && model.type == shape::furniture && !model.blueprint &&
+                    std::all_of( group.begin(), group.end(), []( const auto &instance ) {
+                    return instance.offset[3] <= 0.f && instance.offset[3] != fp3d_gpu::white_sprite_material;
+                } ) ) {
+                    fp3d_iris::virtual_material material;
+                    material.native_id = "cdda:" + model.furniture_id;
+                    queue.back().iris_model_id = iris_materials->resolve( material ).value_or( -1 );
+                }
+            }
             if( model.surface != reflective_surface::none ) {
                 const bool water = model.type == shape::water;
                 const float roughness = water ? .13f : model.surface == reflective_surface::concrete ? .69f : .48f;
@@ -1873,7 +2088,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                                             ( model.surface == reflective_surface::water_deep ? .95f : .35f ) : 0.f;
                 result.reflective_batches.push_back( { part,
                     { water ? 1.f : wetness, roughness, model.water_sky ? 1.f : 0.f, optical_depth },
-                    model.surface
+                    model.surface, {}, model.iris_water_material
                 } );
             }
         };
@@ -1973,6 +2188,7 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             result.instances.push_back( material );
         }
         result.batches.push_back( { range.first_index, range.index_count, instance->second, 1 } );
+        result.batches.back().shadow_caster = iris_caster::entity;
     }
     // Keep the snapshot's order for coincident depth-tested cutouts.
     const auto &sprite_view = world_view;
@@ -2022,13 +2238,21 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
     std::vector<sprite_draw> badges;
     std::vector<sprite_draw> overlays;
     const auto append_sprite = [&]( Uint32 index, const fp3d_gpu::mesh_instance &instance,
-                                    size_t first_batch ) {
+                                    size_t first_batch, iris_caster caster = iris_caster::unclassified,
+                                    std::optional<int> model_id = {}, int item_id = -1 ) {
         const auto first_instance = static_cast<Uint32>( result.instances.size() );
         result.instances.push_back( instance );
-        if( result.batches.size() > first_batch && result.batches.back().first_index == index ) {
+        if( result.batches.size() > first_batch && result.batches.back().first_index == index &&
+            result.batches.back().first_instance + result.batches.back().instance_count == first_instance &&
+            result.batches.back().shadow_caster == caster &&
+            result.batches.back().iris_model_id == model_id && result.batches.back().iris_item_id == item_id ) {
             ++result.batches.back().instance_count;
         } else {
             result.batches.push_back( { index, 6, first_instance, 1 } );
+            auto &draw = result.batches.back();
+            draw.shadow_caster = caster;
+            draw.iris_model_id = model_id;
+            draw.iris_item_id = item_id;
         }
     };
     std::unordered_set<tripoint_abs_ms> storage_items;
@@ -2041,6 +2265,8 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         const auto rel = image.position - scene.origin;
         const auto *support = known_cell( image.position );
         const bool item = image.kind == sprite_kind::item;
+        const bool fade = overhead && support && support->open_structure_above &&
+                          open_structure_opacity < 1.f;
         if( item && support && support->furniture &&
             fp3d_furniture::shows_contents( support->furniture->shape ) ) {
             if( support->known != fp3d_snapshot::knowledge::visible || support->exterior_only ||
@@ -2087,10 +2313,36 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         if( highlighted ) {
             sprite.offset[3] = uv ? fp3d_gpu::white_sprite_material : fp3d_gpu::white_model_material;
         }
+        const auto append_faded_sprite = [&]( Uint32 index, fp3d_gpu::mesh_instance instance ) {
+            instance.tint[3] *= open_structure_opacity;
+            const auto first = static_cast<Uint32>( result.instances.size() );
+            result.instances.push_back( instance );
+            sorted_blends.push_back( { blend_depth( instance, 0.f ), { index, 6, first, 1 } } );
+        };
         if( image.is_avatar ) {
             overlays.emplace_back( mesh, sprite );
+        } else if( fade ) {
+            sprite.offset[3] = uv ? fp3d_gpu::faded_texture_material : fp3d_gpu::faded_solid_material;
+            append_faded_sprite( mesh, sprite );
         } else {
-            append_sprite( mesh, sprite, first_sprite_batch );
+            std::optional<int> model_id;
+            int item_id = -1;
+            if( iris_entities && uv && !highlighted ) {
+                fp3d_iris::virtual_material material;
+                if( image.kind == sprite_kind::item ) {
+                    material.shader_id = "minecraft:item";
+                    model_id = iris_entities->resolve( material ).value_or( -1 );
+                    material.shader_id.clear();
+                    material.native_id = "cdda:" + image.id;
+                    if( iris_items ) {
+                        item_id = iris_items->resolve( material ).value_or( -1 );
+                    }
+                } else {
+                    material.native_id = "cdda:" + image.id;
+                    model_id = iris_entities->resolve( material ).value_or( -1 );
+                }
+            }
+            append_sprite( mesh, sprite, first_sprite_batch, iris_caster::entity, model_id, item_id );
         }
         ++result.sprite_count;
         if( bedding ) {
@@ -2113,7 +2365,13 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             badge.offset = { rel.x() + right[0] * side + up[0] * rise, base + up[1] * rise,
                              rel.y() + right[2] * side + up[2] * rise, fp3d_gpu::unlit_cutout( .5f ) };
             badge.uv_rect = { icon->left, icon->top, icon->right, icon->bottom };
-            ( image.is_avatar ? overlays : badges ).emplace_back( sprite_mesh( false, size, true ), badge );
+            const auto index = sprite_mesh( false, size, true );
+            if( fade ) {
+                badge.offset[3] = -2.f;
+                append_faded_sprite( index, badge );
+            } else {
+                ( image.is_avatar ? overlays : badges ).emplace_back( index, badge );
+            }
             ++displayed;
         };
         if( image.revivable ) { add_badge( "zombie_revival_indicator" ); }
@@ -2253,6 +2511,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
         instance.offset = { static_cast<float>( rel.x() ), base, static_cast<float>( rel.y() ), -2.f };
         instance.uv_rect = { uv->left, uv->top, uv->right, uv->bottom };
         instance.tint[3] = image.id == "fd_smoke" ? .40f + .15f * image.field_intensity : 1.f;
+        if( overhead && support && support->open_structure_above && open_structure_opacity < 1.f ) {
+            instance.tint[3] *= open_structure_opacity;
+            fading_open_panes = true;
+        }
         const float dx = rel.x() - pose.eye.x;
         const float dy = base + half - pose.eye.height;
         const float dz = rel.y() - pose.eye.y;
@@ -2280,7 +2542,10 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
             for( Uint32 n = 0; n < draw.instance_count; ++n ) {
                 const auto instance = draw.first_instance + n;
                 const float depth = blend_depth( result.instances[instance], fp3d_camera::floor_height * .5f );
-                sorted_blends.push_back( { depth, { draw.first_index, draw.index_count, instance, 1 } } );
+                auto part = draw;
+                part.first_instance = instance;
+                part.instance_count = 1;
+                sorted_blends.push_back( { depth, part } );
             }
         }
     } else {
@@ -2350,9 +2615,11 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 const float depth = result.camera.transform( ( a[0] + b[0] ) * .5f,
                                     ( a[1] + b[1] ) * .5f, ( a[2] + b[2] ) * .5f )[3];
                 sorted_blends.push_back( { depth, { i, 6, instance->second, 1 } } );
+                sorted_blends.back().draw.shadow_caster = iris_caster::entity;
             }
         } else {
             result.batches.push_back( { range.first_index, range.index_count, instance->second, 1 } );
+            result.batches.back().shadow_caster = iris_caster::entity;
         }
     }
 
@@ -2377,17 +2644,25 @@ inline std::optional<prepared_world> prepare( const fp3d_snapshot::scene_snapsho
                 const bool window = pane.type == pane_shape::window || pane.type == pane_shape::turned_window;
                 const bool turned = pane.type == pane_shape::turned_window ||
                                     pane.type == pane_shape::turned_glass ||
-                                    pane.type == pane_shape::turned_slid_glass;
-                const bool slid = pane.type == pane_shape::slid_glass || pane.type == pane_shape::turned_slid_glass;
+                                    pane.type == pane_shape::turned_open_glass_in ||
+                                    pane.type == pane_shape::turned_open_glass_out;
+                const bool swing_in = pane.type == pane_shape::open_glass_in ||
+                                      pane.type == pane_shape::turned_open_glass_in;
+                const bool swing_out = pane.type == pane_shape::open_glass_out ||
+                                       pane.type == pane_shape::turned_open_glass_out;
                 window_face( pane_sink, unit_uv, window ? .42f : .44f, window ? .9f : .06f,
                              window ? 2.1f : fp3d_camera::floor_height - .08f );
                 for( size_t i = first_vertex; i < result.geometry.vertices.size(); ++i ) {
                     auto &vertex = result.geometry.vertices[i];
-                    if( slid ) {
-                        vertex.position[0] -= .88f;
+                    if( swing_in || swing_out ) {
+                        const float sign = swing_in ? 1.f : -1.f;
+                        vertex.position = { -.45f, vertex.position[1],
+                                            sign * ( .49f + vertex.position[0] * .88f ) };
+                        vertex.normal = { -sign, 0.f, 0.f };
                     }
                     if( turned ) {
                         vertex.position = { vertex.position[2], vertex.position[1], -vertex.position[0] };
+                        vertex.normal = { vertex.normal[2], vertex.normal[1], -vertex.normal[0] };
                     }
                 }
             }
@@ -2535,10 +2810,11 @@ using scene_pipelines = std::array<fp3d_gpu::textured_pipeline,
       static_cast<size_t>( fp3d_gpu::mesh_pass::count )>;
 
 inline bool initialize_scene_pipelines( scene_pipelines &pipelines, SDL_GPUDevice *device,
-                                        SDL_GPUShader *vs, SDL_GPUShader *fs )
+                                        SDL_GPUShader *vs, SDL_GPUShader *fs,
+                                        SDL_GPUTextureFormat format = fp3d_gpu::scene_target::color_format() )
 {
     for( size_t i = 0; i < pipelines.size(); ++i ) {
-        if( !pipelines[i].initialize( device, vs, fs, static_cast<fp3d_gpu::mesh_pass>( i ) ) ) {
+        if( !pipelines[i].initialize( device, vs, fs, static_cast<fp3d_gpu::mesh_pass>( i ), format ) ) {
             return false;
         }
     }
@@ -2818,10 +3094,11 @@ struct world_meshes {
     }
 
     bool draw_opaque( SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *pass, SDL_GPUBuffer *commands,
-                      const prepared_world &world, const compute_draws &compute ) const {
-        Uint32 first = 0;
-        size_t i = 0;
-        while( i < compute.indices.size() ) {
+                      const prepared_world &world, const compute_draws &compute, Uint32 first,
+                      Uint32 end ) const {
+        size_t i = first == 0 ? 0 : std::lower_bound( compute.indices.begin(), compute.indices.end(),
+                   first ) - compute.indices.begin();
+        while( i < compute.indices.size() && compute.indices[i] < end ) {
             const Uint32 start = compute.indices[i];
             if( !draw_indirect( cmd, pass, commands, world.batches, first, start - first,
                                world.camera, world.base_light ) ) {
@@ -2829,7 +3106,7 @@ struct world_meshes {
             }
             const auto begin = i++;
             first = start + 1;
-            while( i < compute.indices.size() && compute.indices[i] == first ) {
+            while( first < end && i < compute.indices.size() && compute.indices[i] == first ) {
                 ++i;
                 ++first;
             }
@@ -2842,7 +3119,7 @@ struct world_meshes {
             }
             vertex_constants( cmd, world.camera, world.base_light, false );
         }
-        return draw_indirect( cmd, pass, commands, world.batches, first, world.opaque_batches - first,
+        return draw_indirect( cmd, pass, commands, world.batches, first, end - first,
                               world.camera, world.base_light );
     }
 };
@@ -2851,7 +3128,99 @@ struct water_geometry_draw {
     fp3d_gpu::indexed_draw draw;
     std::array<float, 3> anchor_to_scene;
     reflective_surface surface;
+    std::optional<std::uint8_t> iris_light;
+    std::optional<int> iris_water_material;
 };
+
+inline bool is_water( reflective_surface surface )
+{
+    return surface == reflective_surface::water_shallow || surface == reflective_surface::water_deep;
+}
+
+inline std::uint8_t iris_light_at( const std::array<float, 4> &point, const std::array<float, 3> &anchor,
+                                   const tripoint_abs_ms &origin,
+                                   const fp3d_iris::block_light_levels &block,
+                                   const fp3d_iris::block_light_levels &sky )
+{
+    const auto position = origin + tripoint_rel_ms(
+                              static_cast<int>( std::floor( point[0] + anchor[0] ) ),
+                              static_cast<int>( std::floor( point[2] + anchor[2] ) ),
+                              static_cast<int>( std::lround( ( point[1] + anchor[1] ) / fp3d_camera::floor_height ) ) );
+    return static_cast<std::uint8_t>( fp3d_iris::light_level_at( block, position ) |
+                                     ( fp3d_iris::light_level_at( sky, position ) << 4 ) );
+}
+
+inline void assign_iris_water_lights( prepared_world &world, const tripoint_abs_ms &origin,
+                                      const fp3d_iris::block_light_levels &block,
+                                      const fp3d_iris::block_light_levels &sky )
+{
+    for( auto &entry : world.reflective_batches ) {
+        if( !is_water( entry.surface ) ) {
+            continue;
+        }
+        const auto &draw = entry.draws;
+        const auto &stream = draw.resident ? world.resident_instances : world.instances;
+        const size_t prefix = draw.resident && world.resident_pages ? world.resident_pages->size() : 0;
+        entry.iris_lights.clear();
+        if( draw.paged_instances || draw.first_instance < prefix ) {
+            continue;
+        }
+        const size_t begin = draw.first_instance - prefix;
+        if( begin > stream.size() || draw.instance_count > stream.size() - begin ) {
+            continue;
+        }
+        const auto anchor = draw.resident ? world.resident_to_scene : std::array<float, 3>{};
+        entry.iris_lights.reserve( draw.instance_count );
+        for( size_t index = begin; index < begin + draw.instance_count; ++index ) {
+            entry.iris_lights.push_back( iris_light_at( stream[index].offset, anchor, origin, block, sky ) );
+        }
+    }
+}
+
+inline void assign_iris_terrain_lights( prepared_world &world, const tripoint_abs_ms &origin,
+        const fp3d_iris::block_light_levels &block, const fp3d_iris::block_light_levels &sky )
+{
+    for( auto &stream : world.iris_terrain_lights ) {
+        stream.clear();
+    }
+    for( size_t index = 0; index < world.opaque_batches; ++index ) {
+        const auto &draw = world.batches[index];
+        if( ( !draw.iris_terrain_material && !draw.iris_model_id && !draw.iris_basic ) ||
+            ( draw.paged_instances && !world.resident_pages ) ) {
+            continue;
+        }
+        const auto &instances = draw.paged_instances ? *world.resident_pages :
+                                draw.resident ? world.resident_instances : world.instances;
+        const size_t prefix = draw.resident && !draw.paged_instances && world.resident_pages ?
+                              world.resident_pages->size() : 0;
+        const size_t first = draw.first_instance;
+        if( first < prefix || first - prefix > instances.size() ||
+            draw.instance_count > instances.size() - ( first - prefix ) ) {
+            continue;
+        }
+        const size_t end = first + draw.instance_count;
+        auto &lights = world.iris_terrain_lights[draw.resident];
+        lights.resize( std::max( lights.size(), end ) );
+        const auto anchor = draw.resident ? world.resident_to_scene : std::array<float, 3>{};
+        for( size_t i = first; i < end; ++i ) {
+            lights[i] = iris_light_at( instances[i - prefix].offset, anchor, origin, block, sky );
+        }
+    }
+}
+
+inline bool stage_iris_terrain_lights( SDL_GPUDevice *device,
+                                      const std::vector<Uint32> &lights, fp3d_gpu::upload_buffer &buffer )
+{
+    if( lights.empty() ) {
+        return true;
+    }
+    if( lights.size() > SDL_MAX_UINT32 / sizeof( Uint32 ) ) {
+        return SDL_SetError( "Iris terrain light stream exceeds the GPU buffer limit" );
+    }
+    const Uint32 bytes = lights.size() * sizeof( Uint32 );
+    return buffer.reserve( device, bytes, SDL_GPU_BUFFERUSAGE_VERTEX ) &&
+           buffer.stage_delta( lights.data(), bytes );
+}
 
 // Borrow only the visible native water batches. Call after the frame's instance
 // offsets have been finalized and consume before the frame's meshes retire.
@@ -2860,14 +3229,311 @@ inline std::vector<water_geometry_draw> collect_water_geometry( const prepared_w
 {
     std::vector<water_geometry_draw> result;
     for( const auto &entry : world.reflective_batches ) {
-        if( entry.surface == reflective_surface::water_shallow ||
-            entry.surface == reflective_surface::water_deep ) {
-            result.push_back( { meshes.indexed_draw_for( entry.draws ),
-                                entry.draws.resident ? meshes.resident_to_scene : std::array<float, 3>{},
-                                entry.surface } );
+        if( !is_water( entry.surface ) ) {
+            continue;
+        }
+        const auto anchor = entry.draws.resident ? meshes.resident_to_scene : std::array<float, 3>{};
+        if( entry.iris_lights.empty() ) {
+            result.push_back( { meshes.indexed_draw_for( entry.draws ), anchor, entry.surface, std::nullopt, entry.iris_water_material } );
+            continue;
+        }
+        // Preserve native instance order and keep equal light levels in a single draw.
+        for( size_t first = 0; first < entry.iris_lights.size(); ) {
+            const auto light = entry.iris_lights[first];
+            size_t end = first + 1;
+            while( end < entry.iris_lights.size() && entry.iris_lights[end] == light ) {
+                ++end;
+            }
+            auto draw = entry.draws;
+            draw.first_instance += first;
+            draw.instance_count = end - first;
+            result.push_back( { meshes.indexed_draw_for( draw ), anchor, entry.surface, light, entry.iris_water_material } );
+            first = end;
         }
     }
     return result;
+}
+
+// Use the pack's water material ID and preserve each native batch's anchor.
+// The caller supplies lightmap coordinates and decides which missing declared
+// frame constants are safe to leave at zero for the selected pack.
+struct water_draw_binding {
+    std::vector<std::string> missing;
+    std::string error;
+};
+
+inline fp3d_iris::uniform_values iris_camera_uniforms(
+    const fp3d_gpu_camera_math::matrix4 &clip_from_world, float near_plane, float far_plane )
+{
+    const auto &clip = clip_from_world.elements;
+    const float x = std::hypot( clip[0], clip[1], clip[2] );
+    const float y = std::hypot( clip[4], clip[5], clip[6] );
+    if( x <= 0.f || y <= 0.f || near_plane <= 0.f || far_plane <= near_plane ) {
+        return {};
+    }
+    // Shader packs use column-packed uniforms and an OpenGL-style clip range.
+    // The GLSL compatibility wrapper converts clip depth back to SDL's range.
+    std::vector<float> view( 16 ), inverse_view( 16 );
+    view[15] = inverse_view[15] = 1.f;
+    for( int col = 0; col < 4; ++col ) {
+        view[col * 4] = clip[col] / x;
+        view[col * 4 + 1] = clip[col + 4] / y;
+        view[col * 4 + 2] = -clip[col + 12];
+    }
+    for( int row = 0; row < 3; ++row ) {
+        for( int col = 0; col < 3; ++col ) {
+            const float rotation = view[row * 4 + col];
+            inverse_view[col * 4 + row] = rotation;
+            inverse_view[12 + row] -= rotation * view[12 + col];
+        }
+    }
+    const float c = -( far_plane + near_plane ) / ( far_plane - near_plane );
+    const float d = -2.f * far_plane * near_plane / ( far_plane - near_plane );
+    return {
+        { "gbufferModelView", std::move( view ) },
+        { "gbufferModelViewInverse", std::move( inverse_view ) },
+        { "gbufferProjection", std::vector<float>{ x, 0, 0, 0, 0, y, 0, 0, 0, 0, c, -1, 0, 0, d, 0 } },
+        { "gbufferProjectionInverse", std::vector<float>{ 1.f / x, 0, 0, 0, 0, 1.f / y, 0, 0,
+                  0, 0, 0, 1.f / d, 0, 0, -1, c / d } },
+        { "near", std::vector<float>{ near_plane } },
+        { "far", std::vector<float>{ far_plane } }
+    };
+}
+
+inline std::array<float, 3> iris_unit_sun( std::array<float, 3> sun )
+{
+    const float length = std::hypot( sun[0], sun[1], sun[2] );
+    if( !std::isfinite( length ) || length <= 0.f ) {
+        return { 0.f, 1.f, 0.f };
+    }
+    for( float &axis : sun ) {
+        axis /= length;
+    }
+    return sun;
+}
+
+inline fp3d_iris::uniform_values iris_scene_uniforms( const fp3d_iris::frame_inputs &frame,
+        float near_plane, float far_plane )
+{
+    auto values = native_frame_uniform_values( frame );
+    values.emplace( "fogEnd", std::vector<float>{
+        frame.fog_distance > frame.fog_start ? frame.fog_distance : far_plane
+    } );
+    auto current = iris_camera_uniforms( frame.current.clip_from_scene, near_plane, far_plane );
+    const auto prior = frame.previous ?
+                       iris_camera_uniforms( frame.previous->clip_from_scene, near_plane, far_plane ) : current;
+    if( !prior.empty() ) {
+        values.emplace( "gbufferPreviousModelView", prior.at( "gbufferModelView" ) );
+        values.emplace( "gbufferPreviousProjection", prior.at( "gbufferProjection" ) );
+    }
+    if( !current.empty() ) {
+        const auto &view = std::get<std::vector<float>>( current.at( "gbufferModelView" ) );
+        const auto sun = iris_unit_sun( frame.sun_direction );
+        std::vector<float> sun_position( 3 ), moon_position( 3 );
+        for( size_t axis = 0; axis < 3; ++axis ) {
+            // Directions use the rotational portion of the column-packed matrix.
+            sun_position[axis] = 100.f * ( view[axis] * sun[0] + view[axis + 4] * sun[1] +
+                                           view[axis + 8] * sun[2] );
+            moon_position[axis] = -sun_position[axis];
+        }
+        values.emplace( "shadowLightPosition", sun[1] < 0.f ? moon_position : sun_position );
+        values.emplace( "upPosition", std::vector<float>{ 100.f * view[4], 100.f * view[5], 100.f * view[6] } );
+        values.emplace( "sunPosition", std::move( sun_position ) );
+        values.emplace( "moonPosition", std::move( moon_position ) );
+    }
+    values.merge( current );
+    return values;
+}
+
+inline fp3d_iris::uniform_values iris_shadow_uniforms(
+    const fp3d_gpu_camera_math::matrix4 &clip_from_world )
+{
+    const auto &clip = clip_from_world.elements;
+    const std::array<float, 3> scale{
+        std::hypot( clip[0], clip[1], clip[2] ),
+        std::hypot( clip[4], clip[5], clip[6] ),
+        -2.f * std::hypot( clip[8], clip[9], clip[10] )
+    };
+    std::vector<float> view( 16 ), inverse_view( 16 ), projection( 16 ), inverse_projection( 16 );
+    view[15] = inverse_view[15] = projection[15] = inverse_projection[15] = 1.f;
+    for( size_t axis = 0; axis < 3; ++axis ) {
+        if( scale[axis] == 0.f ) {
+            return {};
+        }
+        for( size_t i = 0; i < 3; ++i ) {
+            const float rotation = ( axis == 2 ? 2.f : 1.f ) * clip[axis * 4 + i] / scale[axis];
+            view[i * 4 + axis] = inverse_view[axis * 4 + i] = rotation;
+        }
+        projection[axis * 5] = scale[axis];
+        inverse_projection[axis * 5] = 1.f / scale[axis];
+        projection[12 + axis] = axis == 2 ? 2.f * clip[11] - 1.f : clip[axis * 4 + 3];
+        inverse_projection[12 + axis] = -projection[12 + axis] / scale[axis];
+    }
+    return {
+        { "shadowModelView", std::move( view ) },
+        { "shadowModelViewInverse", std::move( inverse_view ) },
+        { "shadowProjection", std::move( projection ) },
+        { "shadowProjectionInverse", std::move( inverse_projection ) }
+    };
+}
+
+inline water_draw_binding bind_iris_shadow_draws( const prepared_world &world,
+        const world_meshes &meshes, const fp3d_iris::shader_layout &vertex,
+        fp3d_iris::uniform_values frame, fp3d_iris::graphics_stage &stage,
+        const fp3d_iris::scene_post &post, std::string_view name, int water_material )
+{
+    const auto append = [&]( const batch &draw ) -> water_draw_binding {
+        const auto anchor = draw.resident ? meshes.resident_to_scene : std::array<float, 3>{};
+        frame["cata_iris_anchor"] = std::vector<float>( anchor.begin(), anchor.end() );
+        frame["cata_iris_material"] = std::vector<float>{
+            static_cast<float>( draw.iris_terrain_material.value_or( -1 ) )
+        };
+        frame["cata_iris_lightmap"] = std::vector<float>{ 0.f, 0.f };
+        auto packed = fp3d_iris::pack_frame_uniforms( vertex, frame );
+        if( !packed.error.empty() || !packed.missing.empty() ) {
+            return { std::move( packed.missing ), std::move( packed.error ) };
+        }
+        stage.draws.push_back( meshes.indexed_draw_for( draw ) );
+        stage.draw_vertex_constants.push_back( std::move( packed.bytes ) );
+        return {};
+    };
+    const bool translucent = post.shadow_is_translucent( name );
+    const size_t first = translucent ? world.badge_end : 0;
+    const size_t end = translucent ? world.blend_end : world.opaque_batches;
+    for( size_t i = first; i < end; ++i ) {
+        const auto &draw = world.batches[i];
+        const auto caster = draw.iris_terrain_material ? iris_caster::terrain : draw.shadow_caster;
+        if( draw.iris_water || post.shadow_program( translucent, caster, draw.iris_terrain_solid ) != name ) {
+            continue;
+        }
+        auto result = append( draw );
+        if( !result.error.empty() || !result.missing.empty() ) {
+            return result;
+        }
+    }
+    if( translucent && post.shadow_program( true, iris_caster::water ) == name ) {
+        for( const auto &entry : world.reflective_batches ) {
+            if( is_water( entry.surface ) ) {
+                auto water = entry.draws;
+                water.iris_terrain_material = entry.iris_water_material.value_or( water_material );
+                auto result = append( water );
+                if( !result.error.empty() || !result.missing.empty() ) {
+                    return result;
+                }
+            }
+        }
+    }
+    return {};
+}
+
+inline water_draw_binding bind_iris_water_draws( const prepared_world &world,
+        const world_meshes &meshes, const fp3d_iris::shader_layout &vertex,
+        const fp3d_iris::material_id_map &materials, fp3d_iris::uniform_values frame,
+        const std::array<float, 2> &lightmap, fp3d_iris::graphics_stage &stage )
+{
+    const auto water = collect_water_geometry( world, meshes );
+    if( water.empty() ) {
+        stage.draws.clear();
+        stage.draw_vertex_constants.clear();
+        return {};
+    }
+    if( !vertex.error.empty() || vertex.stage != "vert" ||
+        !vertex.uniforms.count( "cata_iris_anchor" ) || !vertex.uniforms.count( "cata_iris_lightmap" ) ||
+        !vertex.uniforms.count( "cata_iris_material" ) ) {
+        return { {}, "Missing Iris native water vertex layout" };
+    }
+    fp3d_iris::virtual_material semantic_water;
+    semantic_water.shader_id = "minecraft:water";
+    semantic_water.surface = fp3d_iris::material_surface::water;
+    const auto material = materials.resolve( semantic_water );
+    if( !material ) {
+        return { {}, "Iris shader pack does not map minecraft:water" };
+    }
+    std::vector<fp3d_gpu::indexed_draw> draws;
+    std::vector<std::vector<std::uint8_t>> constants;
+    draws.reserve( water.size() );
+    constants.reserve( water.size() );
+    water_draw_binding result;
+    for( const auto &batch : water ) {
+        frame["cata_iris_material"] = std::vector<float>{
+            static_cast<float>( batch.iris_water_material.value_or( *material ) )
+        };
+        frame["cata_iris_lightmap"] = batch.iris_light ?
+                                     std::vector<float>{ ( *batch.iris_light & 15 ) * 16.f,
+                                         ( *batch.iris_light >> 4 ) * 16.f } :
+                                     std::vector<float>( lightmap.begin(), lightmap.end() );
+        frame["cata_iris_anchor"] = std::vector<float>( batch.anchor_to_scene.begin(), batch.anchor_to_scene.end() );
+        auto packed = fp3d_iris::pack_frame_uniforms( vertex, frame );
+        if( !packed.error.empty() ) {
+            return { {}, std::move( packed.error ) };
+        }
+        result.missing = std::move( packed.missing );
+        constants.push_back( std::move( packed.bytes ) );
+        draws.push_back( batch.draw );
+    }
+    stage.draws = std::move( draws );
+    stage.draw_vertex_constants = std::move( constants );
+    return result;
+}
+
+inline std::string_view iris_opaque_program( const batch &draw, const fp3d_iris::scene_post &post )
+{
+    if( draw.iris_basic && post.uses_basic() ) {
+        return "gbuffers_basic";
+    }
+    if( draw.iris_model_id ) {
+        return post.model_program( draw.shadow_caster );
+    }
+    return draw.iris_terrain_material ? post.terrain_program( draw.iris_terrain_solid ) : std::string_view{};
+}
+
+inline water_draw_binding bind_iris_opaque_draws( const prepared_world &world,
+        const world_meshes &meshes, const fp3d_iris::shader_layout &vertex,
+        const fp3d_iris::shader_layout &fragment, fp3d_iris::uniform_values frame,
+        fp3d_iris::graphics_stage &stage, const std::array<SDL_GPUBuffer *, 2> &lights, const fp3d_iris::scene_post &post,
+        std::string_view name )
+{
+    const bool model = fp3d_shaderpacks::is_iris_model_program( name );
+    for( size_t index = 0; index < world.opaque_batches; ++index ) {
+        const auto &draw = world.batches[index];
+        if( iris_opaque_program( draw, post ) != name ) {
+            continue;
+        }
+        const auto anchor = draw.resident ? meshes.resident_to_scene : std::array<float, 3>{};
+        const int material = model ? draw.iris_model_id.value_or( -1 ) : *draw.iris_terrain_material;
+        frame["cata_iris_material"] = std::vector<float>{ static_cast<float>( material ) };
+        if( model ) {
+            if( name == "gbuffers_basic" ) {
+                frame["renderStage"] = std::vector<std::int32_t>{ 0 };
+            }
+            frame["entityId"] = std::vector<std::int32_t>{ draw.shadow_caster == iris_caster::entity ? material : -1 };
+            frame["blockEntityId"] = std::vector<std::int32_t>{ draw.shadow_caster == iris_caster::block ? material : -1 };
+            frame["currentRenderedItemId"] = std::vector<std::int32_t>{ draw.iris_item_id };
+            frame["entityColor"] = std::vector<float>{ 0.f, 0.f, 0.f, 0.f };
+        }
+        frame["cata_iris_anchor"] = std::vector<float>( anchor.begin(), anchor.end() );
+        if( !lights[draw.resident] ) {
+            return { {}, "Missing Iris opaque geometry instance light buffer" };
+        }
+        auto packed = fp3d_iris::pack_frame_uniforms( vertex, frame );
+        if( !packed.error.empty() || !packed.missing.empty() ) {
+            return { std::move( packed.missing ), std::move( packed.error ) };
+        }
+        auto gpu_draw = meshes.indexed_draw_for( draw );
+        gpu_draw.instance_light = lights[draw.resident];
+        stage.draws.push_back( gpu_draw );
+        stage.draw_vertex_constants.push_back( std::move( packed.bytes ) );
+        if( model ) {
+            auto constants = fp3d_iris::pack_frame_uniforms( fragment, frame );
+            if( !constants.error.empty() || !constants.missing.empty() ) {
+                return { std::move( constants.missing ), std::move( constants.error ) };
+            }
+            if( !constants.bytes.empty() ) {
+                stage.draw_fragment_constants.push_back( std::move( constants.bytes ) );
+            }
+        }
+    }
+    return {};
 }
 
 inline bool record_shadow( SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *depth_texture,
@@ -2912,6 +3578,32 @@ inline bool record_shadow( SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *depth_text
     return drawn;
 }
 
+struct world_pass_targets {
+    SDL_GPUTexture *color = nullptr;
+    SDL_GPUTexture *depth = nullptr;
+    SDL_GPUTexture *water_depth = nullptr;
+    const fp3d_gpu::textured_pipeline *behind_water = nullptr;
+};
+
+inline bool initialize_behind_water( SDL_GPUDevice *device, fp3d_gpu::textured_pipeline &pipeline,
+                                     SDL_GPUTextureFormat format = fp3d_gpu::scene_target::color_format() )
+{
+    if( pipeline.ready() ) {
+        return true;
+    }
+    auto *vs = shader( device, fp3d_gpu_shader_bytes::base_vertex,
+                       sizeof( fp3d_gpu_shader_bytes::base_vertex ), true, 1, 0 );
+    auto *fs = shader( device, fp3d_gpu_shader_bytes::behind_water_fragment,
+                       sizeof( fp3d_gpu_shader_bytes::behind_water_fragment ), false, 1, 7 );
+    const bool initialized = pipeline.initialize( device, vs, fs, fp3d_gpu::mesh_pass::blend, format );
+    for( auto *stage : { vs, fs } ) {
+        if( stage ) {
+            SDL_ReleaseGPUShader( device, stage );
+        }
+    }
+    return initialized;
+}
+
 inline bool record_world( SDL_GPUCommandBuffer *cmd, fp3d_gpu::scene_target &target,
                           const prepared_world &world, SDL_GPUTexture *atlas,
                           const scene_pipelines &pipelines,
@@ -2920,8 +3612,14 @@ inline bool record_world( SDL_GPUCommandBuffer *cmd, fp3d_gpu::scene_target &tar
                           const fp3d_gpu::sky_pipeline *sky = nullptr, bool retain_depth = false,
                           SDL_GPUTexture *pbr_atlas = nullptr,
                           const fp3d_gpu::textured_pipeline *background = nullptr,
-                          const compute_draws *compute = nullptr )
+                          const compute_draws *compute = nullptr,
+                          fp3d_iris::borrowed_scene_images *iris_scene = nullptr,
+                          bool opaque_only = false, world_pass_targets resume = {},
+                          const fp3d_iris::scene_post *iris_terrain = nullptr )
 {
+    if( iris_scene && !target.sampleable_depth() ) {
+        return SDL_SetError( "Iris world input requires sampleable scene depth" );
+    }
     auto atmosphere = world.atmosphere;
     if( !pbr_atlas ) {
         atmosphere.pbr_eye_strength[3] = 0;
@@ -2939,15 +3637,16 @@ inline bool record_world( SDL_GPUCommandBuffer *cmd, fp3d_gpu::scene_target &tar
         atmosphere.sun_texel_sizes[1] = 0;
     }
     SDL_GPUColorTargetInfo color{};
-    color.texture = target.native_color();
+    color.texture = resume.color ? resume.color : target.native_color();
     color.clear_color = sky ? SDL_FColor{ 0, 0, 0, 1 } : SDL_FColor{ .04f, .05f, .06f, 1 };
-    color.load_op = SDL_GPU_LOADOP_CLEAR;
+    color.load_op = resume.color ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
     color.store_op = SDL_GPU_STOREOP_STORE;
     SDL_GPUDepthStencilTargetInfo depth{};
-    depth.texture = target.depth();
+    depth.texture = resume.depth ? resume.depth : target.depth();
     depth.clear_depth = 1;
-    depth.load_op = SDL_GPU_LOADOP_CLEAR;
-    depth.store_op = retain_depth ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE;
+    depth.load_op = resume.depth ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
+    depth.store_op = retain_depth || iris_scene || resume.depth ?
+                     SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE;
     depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
     depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     auto *pass = SDL_BeginGPURenderPass( cmd, &color, 1, &depth );
@@ -2956,16 +3655,43 @@ inline bool record_world( SDL_GPUCommandBuffer *cmd, fp3d_gpu::scene_target &tar
         world.blend_end, static_cast<Uint32>( world.batches.size() )
     };
     bool drawn = true;
-    for( size_t i = 0; i < pipelines.size() && drawn; ++i ) {
+    constexpr size_t blend_pass = static_cast<size_t>( fp3d_gpu::mesh_pass::blend );
+    const size_t first_pass = resume.behind_water ? blend_pass : ( resume.color ? 1 : 0 );
+    const size_t end_pass = resume.behind_water ? blend_pass + 1 : ( opaque_only ? 1 : pipelines.size() );
+    for( size_t i = first_pass; i < end_pass && drawn; ++i ) {
         const Uint32 first = boundaries[i];
         const Uint32 count = boundaries[i + 1] - first;
         if( count ) {
-            drawn = pipelines[i].bind( cmd, pass, atlas, world.camera, instances,
-                                       world.base_light, atmosphere, maps, pbr_atlas ) &&
-                    ( compute && i == static_cast<size_t>( fp3d_gpu::mesh_pass::opaque ) ?
-                      meshes.draw_opaque( cmd, pass, commands, world, *compute ) :
-                      meshes.draw_indirect( cmd, pass, commands, world.batches, first, count,
-                                            world.camera, world.base_light ) );
+            const bool opaque = i == static_cast<size_t>( fp3d_gpu::mesh_pass::opaque );
+            const auto draw_range = [&]( Uint32 begin, Uint32 end ) {
+                return compute && opaque ?
+                       meshes.draw_opaque( cmd, pass, commands, world, *compute, begin, end ) :
+                       meshes.draw_indirect( cmd, pass, commands, world.batches, begin, end - begin,
+                                             world.camera, world.base_light );
+            };
+            const auto &pipeline = resume.behind_water ? *resume.behind_water : pipelines[i];
+            drawn = pipeline.bind( cmd, pass, atlas, world.camera, instances,
+                                   world.base_light, atmosphere, maps, pbr_atlas, resume.water_depth );
+            if( drawn && ( iris_scene || iris_terrain ) && opaque ) {
+                const auto end = world.batches.begin() + boundaries[i + 1];
+                auto begin = world.batches.begin() + first;
+                const auto replaced = [&]( const batch &entry ) {
+                    return ( iris_scene && entry.iris_water ) ||
+                           ( iris_terrain && !iris_opaque_program( entry, *iris_terrain ).empty() );
+                };
+                while( drawn && begin != end ) {
+                    begin = std::find_if_not( begin, end, replaced );
+                    if( begin == end ) {
+                        break;
+                    }
+                    const auto next = std::find_if( begin, end, replaced );
+                    meshes.vertex_constants( cmd, world.camera, world.base_light, false );
+                    drawn = draw_range( begin - world.batches.begin(), next - world.batches.begin() );
+                    begin = next;
+                }
+            } else if( drawn ) {
+                drawn = draw_range( first, boundaries[i + 1] );
+            }
         }
         // Opaque depth rejects the sky. Translucent geometry still blends over it.
         if( drawn && i == static_cast<size_t>( fp3d_gpu::mesh_pass::opaque ) ) {
@@ -2986,7 +3712,97 @@ inline bool record_world( SDL_GPUCommandBuffer *cmd, fp3d_gpu::scene_target &tar
         }
     }
     SDL_EndGPURenderPass( pass );
+    if( drawn && iris_scene ) {
+        *iris_scene = fp3d_iris::borrow_scene_images( target );
+    }
     return drawn;
+}
+
+// The world capture writes opaque depth only. Both logical views initially
+// borrow it; later Iris geometry writes a new version of depthtex0.
+// Colortex and shadow inputs are supplied by the pack's own graph setup.
+inline bool add_iris_world_images( SDL_Renderer *renderer, SDL_Texture *atlas,
+                                  const fp3d_iris::borrowed_scene_images &scene,
+                                  std::map<std::string, fp3d_iris::borrowed_graph_image> &images )
+{
+    if( !atlas || atlas->format != SDL_PIXELFORMAT_RGBA32 || atlas->w <= 0 || atlas->h <= 0 ) {
+        return SDL_SetError( "Iris requires the native RGBA32 material atlas" );
+    }
+    auto *texture = fp3d_gpu::native_atlas( renderer, atlas );
+    if( !texture || !scene.color.texture || !scene.depth.texture ) {
+        return SDL_SetError( "Missing native Iris world textures" );
+    }
+    for( const char *name : { "worldColor:0", "depthtex0:0", "depthtex1:0", "worldAtlas:0" } ) {
+        if( images.count( name ) ) {
+            return SDL_SetError( "Conflicting Iris world texture: %s", name );
+        }
+    }
+    images.emplace( "worldColor:0", scene.color );
+    images.emplace( "depthtex0:0", scene.depth );
+    images.emplace( "depthtex1:0", scene.depth );
+    images.emplace( "worldAtlas:0", fp3d_iris::borrowed_graph_image{
+        texture, { fp3d_gpu::scene_target::color_format(),
+                   static_cast<Uint32>( atlas->w ), static_cast<Uint32>( atlas->h ) }
+    } );
+    return true;
+}
+
+// Prepared by the selected pack. GPU pipelines, samplers and imports remain
+// live until the submit fence has retired.
+struct iris_water_frame {
+    const fp3d_iris::pack_fullscreen_graph &graph;
+    const fp3d_iris::pack_properties &properties;
+    const std::map<std::string, fp3d_iris::graph_image_spec> &output_specs;
+    const std::map<std::string, fp3d_iris::borrowed_graph_image> &imports;
+    const std::map<std::string, fp3d_iris::graphics_stage> &stages;
+    const std::map<std::string, fp3d_iris::compute_stage> &compute;
+    const fp3d_iris::shader_layout &water_vertex;
+    const fp3d_iris::uniform_values &water_values;
+    const fp3d_iris::material_id_map &materials;
+    std::array<float, 2> water_lightmap;
+};
+
+template<typename Capture>
+bool record_iris_water_frame( SDL_GPUCommandBuffer *cmd, const fp3d_gpu::scene_target &target,
+                              SDL_Renderer *renderer, SDL_Texture *atlas, const prepared_world &world,
+                              const world_meshes &meshes, const iris_water_frame &pack,
+                              std::unique_ptr<fp3d_iris::pack_graph_images> &images, Capture capture )
+{
+    if( !fp3d_iris::has_pack_display_output( pack.graph ) ) {
+        return false;
+    }
+    auto stages = pack.stages;
+    const auto water = stages.find( "gbuffers_water" );
+    const auto water_pass = std::find_if( pack.graph.passes.begin(), pack.graph.passes.end(),
+    []( const fp3d_iris::graph_pass &pass ) {
+        return pass.program == "gbuffers_water" && pass.kind == fp3d_iris::pass_kind::geometry;
+    } );
+    if( water == stages.end() || water_pass == pack.graph.passes.end() ) {
+        return SDL_SetError( "Iris frame is missing gbuffers_water" );
+    }
+    const auto draws = bind_iris_water_draws( world, meshes, pack.water_vertex, pack.materials,
+                       pack.water_values, pack.water_lightmap, water->second );
+    if( !draws.error.empty() ) {
+        return SDL_SetError( "%s", draws.error.c_str() );
+    }
+    if( !draws.missing.empty() ) {
+        return SDL_SetError( "Unbound Iris water constant: %s", draws.missing.front().c_str() );
+    }
+    water->second.allow_empty_geometry = true;
+
+    auto scene = fp3d_iris::borrow_scene_images( target );
+    auto imports = pack.imports;
+    if( !add_iris_world_images( renderer, atlas, scene, imports ) ) {
+        return false;
+    }
+    images = fp3d_iris::prepare_pack_graph_images( target.device(), pack.graph, pack.properties,
+             pack.output_specs, imports );
+    if( !images || !capture( &scene ) ) {
+        return false;
+    }
+    return fp3d_iris::record_gpu_graph( cmd, pack.graph.external, pack.graph.passes, pack.graph.output,
+                                       images->textures.images(), stages, pack.compute, images->specs ) &&
+           fp3d_iris::record_pack_display( cmd, pack.graph, *images, target );
 }
 
 class terrain_compute_pass
@@ -3327,6 +4143,7 @@ class live_world
 
         void hide() {
             visible_ = false;
+            iris_history_.reset();
         }
 
         SDL_Texture *texture() const {
@@ -3339,14 +4156,23 @@ class live_world
 
         // Called only after SDL_RenderPresent submitted SDL's atlas writes and
         // composition. Downloads recorded here are consumed on a later frame.
-        fp3d_gpu::submission_result submit( const prepared_world &world ) {
+        struct iris_frame_source {
+            const fp3d_snapshot::scene_snapshot &scene;
+            const fp3d_camera::pose &camera;
+            fp3d_iris::world_clock clock;
+            std::array<int, 2> eye_brightness{};
+        };
+
+        fp3d_gpu::submission_result submit( const prepared_world &world, const iris_water_frame *iris = nullptr,
+                                            const fp3d_shaderpacks::iris_compile_state *compiled = nullptr,
+                                            const iris_frame_source *source = nullptr ) {
             using result = fp3d_gpu::submission_result;
             fp3d_regression::turn_probe timing( "gpu_submit_preflight" );
             if( !ready() || world.material_revision != fp3d_materials::revision() ) {
                 return result::skipped;
             }
-            auto *atlas = fp3d_gpu::native_atlas( renderer_,
-                          fp3d_materials::gpu_colour_atlas( renderer_ ) );
+            auto *material_atlas = fp3d_materials::gpu_colour_atlas( renderer_ );
+            auto *atlas = fp3d_gpu::native_atlas( renderer_, material_atlas );
             if( !atlas ) {
                 return result::failed;
             }
@@ -3358,7 +4184,9 @@ class live_world
 
             const unsigned next = 1 - current_;
             auto &slot = slots_[next];
+            slot.iris_images.reset();
             if( slot.width != world.width || slot.height != world.height ) {
+                slot.iris_post.images.reset();
                 slot.target.reset();
                 slot.photon_output.reset();
                 slot.reflectivity_mask.reset();
@@ -3368,6 +4196,14 @@ class live_world
                 }
                 slot.width = world.width;
                 slot.height = world.height;
+            }
+            bool iris_post_ready = false;
+            if( compiled && !iris ) {
+                SDL_ClearError();
+                iris_post_ready = iris_post_.update( device_, *compiled );
+                if( !iris_post_ready && *SDL_GetError() ) {
+                    SDL_LogWarn( SDL_LOG_CATEGORY_RENDER, "Iris native fallback: %s", SDL_GetError() );
+                }
             }
             timing.stage( "gpu_submit_stage_mesh" );
             const bool has_dynamic = !world.geometry.indices.empty();
@@ -3386,6 +4222,9 @@ class live_world
                 !stage_draws( device_, world, slot.commands, &slot.retained_draws, occlusion_enabled_ ) ) {
                 return result::failed;
             }
+            const bool stage_terrain_lights = iris_post_ready && iris_post_.uses_opaque_geometry() &&
+                    stage_iris_terrain_lights( device_, world.iris_terrain_lights[0], slot.terrain_lights[0] ) &&
+                    stage_iris_terrain_lights( device_, world.iris_terrain_lights[1], slot.terrain_lights[1] );
             const bool pbr_staged = world.atmosphere.pbr_eye_strength[3] > 0 &&
                                     pbr_.stage( device_, world.material_revision, fp3d_materials::auxiliary_tiles() );
             const bool queue_auxiliary = auxiliary_readback_.prepare( world.auxiliary_slots );
@@ -3423,6 +4262,14 @@ class live_world
                                   ( !dynamic_instances || slot.instances.record_delta( copy ) ) &&
                                   ( !static_instances || resident_instances_.record_delta( copy ) ) &&
                                   slot.commands.record_delta( copy );
+            std::array<SDL_GPUBuffer *, 2> terrain_lights{};
+            if( uploaded && stage_terrain_lights ) {
+                for( size_t i = 0; i < terrain_lights.size(); ++i ) {
+                    if( !world.iris_terrain_lights[i].empty() && slot.terrain_lights[i].record_delta( copy ) ) {
+                        terrain_lights[i] = slot.terrain_lights[i].get();
+                    }
+                }
+            }
             if( uploaded && pbr_ready ) {
                 pbr_.record( copy );
             }
@@ -3450,7 +4297,7 @@ class live_world
             const bool draw_halos = world.halo_count && slot.target.sampleable_depth() &&
                                     initialize_halos();
             SDL_GPUTexture *photon_target = nullptr;
-            if( world.photon && initialize_photon() ) {
+            if( !iris && !iris_post_ready && world.photon && initialize_photon() ) {
                 if( !slot.photon_output ) {
                     slot.photon_output.reset( SDL_CreateTexture( renderer_, SDL_PIXELFORMAT_RGBA32,
                                               SDL_TEXTUREACCESS_TARGET, world.width, world.height ) );
@@ -3471,7 +4318,8 @@ class live_world
                     photon_settings.far_sun_matrix = world.atmosphere.far_sun_clip_from_world.elements;
                 }
             }
-            const bool retain_depth = draw_halos || ( photon_target && slot.target.sampleable_depth() );
+            const bool retain_depth = draw_halos || ( photon_target && slot.target.sampleable_depth() ) ||
+                                      ( iris_post_ready && iris_post_.needs_depth() );
             SDL_GPUTexture *reflectivity_mask = nullptr;
             if( photon_target && photon_settings.depth_and_ao[3] == 0.f &&
                 slot.target.sampleable_depth() && !world.reflective_batches.empty() &&
@@ -3488,11 +4336,147 @@ class live_world
                 !record_map( maps.beam, world.atmosphere.beam_clip_from_world ) ||
                 !record_map( maps.point, world.point_faces[0], true ) ||
                 !record_map( maps.sun, sun_matrix ) ||
-                !record_map( maps.far_sun, world.atmosphere.far_sun_clip_from_world ) ||
-                !record_world( cmd, slot.target, world, atlas, pipelines_, meshes,
-                               initial_instances, filtered ? filtered : slot.commands.get(), maps, &sky_, retain_depth,
-                               pbr_ready ? pbr_.texture() : nullptr, &unknown_background_,
-                               compute_ready ? &compute : nullptr ) ||
+                !record_map( maps.far_sun, world.atmosphere.far_sun_clip_from_world ) ) {
+                SDL_CancelGPUCommandBuffer( cmd );
+                return result::failed;
+            }
+            const auto capture = [&]( fp3d_iris::borrowed_scene_images *scene, bool opaque_only = false,
+                                      world_pass_targets resume = {}, const fp3d_iris::scene_post *terrain = nullptr,
+                                      const scene_pipelines *pipelines = nullptr ) {
+                return record_world( cmd, slot.target, world, atlas, pipelines ? *pipelines : pipelines_, meshes,
+                                     initial_instances, filtered ? filtered : slot.commands.get(), maps, &sky_,
+                                     retain_depth, pbr_ready ? pbr_.texture() : nullptr, &unknown_background_,
+                                     compute_ready ? &compute : nullptr, scene, opaque_only, resume, terrain );
+            };
+            bool iris_drawn = false;
+            if( iris ) {
+                SDL_ClearError();
+                iris_drawn = record_iris_water_frame( cmd, slot.target, renderer_, material_atlas, world,
+                                                     meshes, *iris, slot.iris_images, capture );
+                const std::string error = iris_drawn ? "" : SDL_GetError();
+                if( iris_error_ != error && !error.empty() ) {
+                    SDL_LogWarn( SDL_LOG_CATEGORY_RENDER, "Iris native fallback: %s", error.c_str() );
+                }
+                iris_error_ = error;
+            } else {
+                iris_error_.clear();
+            }
+            const auto report_iris_post = [&]( bool shown ) {
+                const std::string error = shown ? "" : SDL_GetError();
+                if( iris_post_error_ != error && !error.empty() ) {
+                    SDL_LogWarn( SDL_LOG_CATEGORY_RENDER, "Iris native fallback: %s", error.c_str() );
+                }
+                iris_post_error_ = error;
+                return shown;
+            };
+            const float shader_time = static_cast<float>( SDL_GetTicks() / 1000.0 );
+            const auto iris_frame = iris_post_ready && source ?
+                                    iris_history_.prepare( source->scene, source->camera, world.camera,
+                                            world.width, world.height, world.overhead, source->clock,
+                                            compiled->revision, source->eye_brightness, world.lightning_flash ) :
+                                    std::nullopt;
+            const auto *previous_iris = iris_frame ? &slots_[current_].iris_post : nullptr;
+            const bool retain_render_history = iris_frame && iris_frame->previous.has_value();
+            const auto scene_uniforms = [&]() {
+                if( iris_frame ) {
+                    auto values = iris_scene_uniforms( *iris_frame, fp3d_camera::near_clip, fp3d_camera::far_clip );
+                    values.emplace( "heldItemId", std::vector<std::int32_t>{
+                        iris_post_.held_item_id( source->scene.held_item_type )
+                    } );
+                    return values;
+                }
+                return iris_camera_uniforms( world.camera, fp3d_camera::near_clip, fp3d_camera::far_clip );
+            };
+            const bool iris_water = iris_post_ready && iris_post_.uses_water();
+            const bool iris_terrain = iris_post_ready && iris_post_.uses_opaque_geometry();
+            const bool iris_shadow = iris_post_ready && iris_post_.uses_shadow();
+            if( iris_water || iris_terrain || iris_shadow ) {
+                SDL_ClearError();
+                const auto &rules = iris_post_.properties().materials;
+                const auto block = rules.find( "block.properties" );
+                const fp3d_iris::material_id_map materials( block == rules.end() ?
+                        std::vector<fp3d_iris::material_rule>{} : block->second );
+                const auto bind_water = [&]( const fp3d_iris::shader_layout &layout,
+                const fp3d_iris::uniform_values &values, fp3d_iris::graphics_stage &stage ) {
+                    const auto bound = bind_iris_water_draws( world, meshes, layout, materials, values,
+                                       {}, stage );
+                    if( !bound.error.empty() ) {
+                        return SDL_SetError( "%s", bound.error.c_str() );
+                    }
+                    if( !bound.missing.empty() ) {
+                        return SDL_SetError( "Unbound Iris water constant: %s", bound.missing.front().c_str() );
+                    }
+                    return true;
+                };
+                const auto bind_opaque = [&]( std::string_view name, const fp3d_iris::shader_layout &layout,
+                const fp3d_iris::shader_layout &fragment, const fp3d_iris::uniform_values &values,
+                fp3d_iris::graphics_stage &stage ) {
+                    const auto bound = bind_iris_opaque_draws( world, meshes, layout, fragment, values, stage,
+                                       terrain_lights, iris_post_, name );
+                    if( !bound.error.empty() ) {
+                        return SDL_SetError( "%s", bound.error.c_str() );
+                    }
+                    if( !bound.missing.empty() ) {
+                        return SDL_SetError( "Unbound Iris opaque geometry constant: %s", bound.missing.front().c_str() );
+                    }
+                    return true;
+                };
+                const auto bind_shadow = [&]( std::string_view name, const fp3d_iris::shader_layout &layout,
+                const fp3d_iris::uniform_values &values, fp3d_iris::graphics_stage &stage ) {
+                    fp3d_iris::virtual_material water;
+                    water.shader_id = "minecraft:water";
+                    water.surface = fp3d_iris::material_surface::water;
+                    const auto bound = bind_iris_shadow_draws( world, meshes, layout, values, stage, iris_post_, name,
+                                       materials.resolve( water ).value_or( -1 ) );
+                    if( !bound.error.empty() ) {
+                        return SDL_SetError( "%s", bound.error.c_str() );
+                    }
+                    if( !bound.missing.empty() ) {
+                        return SDL_SetError( "Unbound Iris shadow constant: %s", bound.missing.front().c_str() );
+                    }
+                    return true;
+                };
+                fp3d_iris::borrowed_scene_images scene;
+                const fp3d_iris::borrowed_graph_image world_atlas{ atlas,
+                    { slot.target.color_format(), static_cast<Uint32>( material_atlas->w ),
+                      static_cast<Uint32>( material_atlas->h ) }
+                };
+                const auto overlays = [&]( SDL_GPUTexture *color, SDL_GPUTexture *depth,
+                SDL_GPUTextureFormat format ) {
+                    if( world.opaque_batches == world.batches.size() ) {
+                        return true;
+                    }
+                    const auto *pipelines = iris_overlay_pipelines( format );
+                    return pipelines && capture( nullptr, false, { color, depth }, nullptr, pipelines );
+                };
+                fp3d_iris::scene_post::water_background background;
+                if( world.blend_end > world.badge_end ) {
+                    background = [&]( SDL_GPUTexture *color, SDL_GPUTexture *opaque_depth,
+                    SDL_GPUTexture *water_depth, SDL_GPUTextureFormat format ) {
+                        auto &pipeline = behind_water_[format];
+                        return initialize_behind_water( device_, pipeline, format ) &&
+                               capture( nullptr, false, { color, opaque_depth, water_depth, &pipeline } );
+                    };
+                }
+                auto values = scene_uniforms();
+                if( iris_shadow ) {
+                    auto sun = iris_unit_sun( world.iris_sun );
+                    if( sun[1] < 0.f ) {
+                        for( float &component : sun ) {
+                            component = -component;
+                        }
+                    }
+                    values.merge( iris_shadow_uniforms( fp3d_gpu_camera_math::sun_shadow_clip_from_world(
+                                      sun, world.iris_shadow_anchor, 96.f, iris_post_.shadow_resolution() ) ) );
+                }
+                iris_drawn = capture( iris_water ? &scene : nullptr, iris_water || iris_terrain, {},
+                                      iris_terrain ? &iris_post_ : nullptr ) &&
+                             iris_post_.record( cmd, slot.target, slot.iris_post, shader_time, std::move( values ),
+                                     world_atlas, bind_water, overlays, background, bind_opaque, bind_shadow,
+                                     previous_iris, retain_render_history );
+                report_iris_post( iris_drawn );
+            }
+            if( ( !iris_drawn && !capture( nullptr ) ) ||
                 ( draw_halos && !halo_.draw( cmd, slot.target, world.halos, world.halo_count ) ) ||
                 ( reflectivity_mask && !record_reflectivity_mask( cmd, reflectivity_mask, slot.target.depth(), world,
                                                      atlas, meshes, initial_instances ) ) ||
@@ -3500,6 +4484,15 @@ class live_world
                                                  reflectivity_mask, maps.sun, maps.far_sun ) ) ) {
                 SDL_CancelGPUCommandBuffer( cmd );
                 return result::failed;
+            }
+            if( iris_post_ready && !iris_water && !iris_terrain && !iris_shadow ) {
+                SDL_ClearError();
+                iris_drawn = iris_post_.record( cmd, slot.target, slot.iris_post, shader_time, scene_uniforms(),
+                                               {}, {}, {}, {}, {}, {}, previous_iris, retain_render_history );
+                report_iris_post( iris_drawn );
+            } else if( !iris_post_ready ) {
+                slot.iris_post.images.reset();
+                iris_post_error_.clear();
             }
             timing.stage( "gpu_submit_driver" );
             auto *submitted = SDL_SubmitGPUCommandBufferAndAcquireFence( cmd );
@@ -3513,6 +4506,12 @@ class live_world
                 SDL_ReleaseGPUFence( device_, fence_ );
             }
             fence_ = submitted;
+            if( iris_drawn && iris_frame ) {
+                iris_history_.presented( *iris_frame );
+            } else {
+                iris_history_.reset();
+                slot.iris_post.uniform_time.reset();
+            }
             if( queue_auxiliary ) {
                 auxiliary_readback_.submitted( world.material_revision, world.auxiliary_slots );
             }
@@ -3566,6 +4565,11 @@ class live_world
                 resident_instances_.commit_delta();
             }
             slot.commands.commit_delta();
+            for( size_t i = 0; i < terrain_lights.size(); ++i ) {
+                if( terrain_lights[i] ) {
+                    slot.terrain_lights[i].commit_delta();
+                }
+            }
             if( pbr_ready ) { pbr_.submitted(); }
             if( compute_uploaded ) { terrain_compute_.commit_uploads(); }
             if( compute_ready ) { terrain_compute_.commit_dispatch(); }
@@ -3581,6 +4585,31 @@ class live_world
         }
 
     private:
+        const scene_pipelines *iris_overlay_pipelines( SDL_GPUTextureFormat format ) {
+            if( format == fp3d_gpu::scene_target::color_format() ) {
+                return &pipelines_;
+            }
+            const auto found = iris_overlays_.find( format );
+            if( found != iris_overlays_.end() ) {
+                return found->second.get();
+            }
+            auto pipelines = std::make_unique<scene_pipelines>();
+            auto *vs = shader( device_, fp3d_gpu_shader_bytes::base_vertex,
+                               sizeof( fp3d_gpu_shader_bytes::base_vertex ), true, 1, 0 );
+            auto *fs = shader( device_, fp3d_gpu_shader_bytes::base_fragment,
+                               sizeof( fp3d_gpu_shader_bytes::base_fragment ), false, 1, 6 );
+            const bool ready = initialize_scene_pipelines( *pipelines, device_, vs, fs, format );
+            for( auto *stage : { vs, fs } ) {
+                if( stage ) {
+                    SDL_ReleaseGPUShader( device_, stage );
+                }
+            }
+            if( !ready ) {
+                return nullptr;
+            }
+            return iris_overlays_.emplace( format, std::move( pipelines ) ).first->second.get();
+        }
+
         bool initialize_reflectivity_mask() {
             if( !reflectivity_mask_attempted_ ) {
                 reflectivity_mask_attempted_ = true;
@@ -3745,6 +4774,8 @@ class live_world
 
         struct frame_slot {
             fp3d_gpu::scene_target target;
+            std::unique_ptr<fp3d_iris::pack_graph_images> iris_images;
+            fp3d_iris::scene_post::frame_slot iris_post;
             std::unique_ptr<SDL_Texture, decltype( &SDL_DestroyTexture )> photon_output{
                 nullptr, SDL_DestroyTexture
             };
@@ -3755,6 +4786,7 @@ class live_world
             fp3d_gpu::indexed_mesh mesh;
             fp3d_gpu::upload_buffer instances;
             fp3d_gpu::upload_buffer commands;
+            std::array<fp3d_gpu::upload_buffer, 2> terrain_lights;
             std::vector<SDL_GPUIndexedIndirectDrawCommand> retained_draws;
             Uint32 width = 0;
             Uint32 height = 0;
@@ -3762,6 +4794,10 @@ class live_world
 
         SDL_Renderer *renderer_;
         SDL_GPUDevice *device_;
+        std::string iris_error_;
+        std::string iris_post_error_;
+        fp3d_iris::scene_post iris_post_;
+        fp3d_iris::frame_history iris_history_;
         std::array<frame_slot, 2> slots_;
         fp3d_gpu::indexed_mesh resident_mesh_;
         fp3d_gpu::upload_buffer resident_instances_;
@@ -3769,6 +4805,8 @@ class live_world
         scene_pipelines pipelines_;
         fp3d_gpu::sky_pipeline sky_;
         fp3d_gpu::textured_pipeline unknown_background_;
+        std::map<SDL_GPUTextureFormat, fp3d_gpu::textured_pipeline> behind_water_;
+        std::map<SDL_GPUTextureFormat, std::unique_ptr<scene_pipelines>> iris_overlays_;
         fp3d_gpu::halo_pipeline halo_;
         fp3d_gpu::photon_pipeline photon_;
         fp3d_gpu::pbr_atlas pbr_;

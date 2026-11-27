@@ -13,6 +13,8 @@ namespace fp3d_shader_archive
 bool read_post( const std::filesystem::path &file, std::string &source );
 bool read_mc_entry( const std::filesystem::path &file,
                     const std::string &entry, std::string &source );
+bool read_binary_entry( const std::filesystem::path &file, const std::string &entry,
+                        std::string &data );
 bool list_entries( const std::filesystem::path &file, std::vector<std::string> &entries );
 // Each key is an exact ZIP path. On success all values contain verified text.
 bool read_text_entries( const std::filesystem::path &file, std::map<std::string, std::string> &entries,

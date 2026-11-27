@@ -46,7 +46,7 @@ struct target {
 std::optional<target> ray( const fp3d_snapshot::scene_snapshot &scene, float yaw, float pitch,
                            fp3d_camera::offset offset = {}, float max_reach = 6.0f,
                            float screen_x = 0.0f, float screen_y = 0.0f, float aspect = 1.0f,
-                           bool camera_facing_sprites = false );
+                           bool camera_facing_sprites = false, bool current_storey_only = false );
 
 // First stage: one neighbouring tile in the camera direction, same storey.
 // Looking down selects the player's feet. Memory and facades are excluded.

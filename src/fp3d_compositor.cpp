@@ -337,10 +337,10 @@ std::optional<fp3d_targeting::target> pointing_target( const fp3d_camera::pose &
         previous_pose.eye.x != pose.eye.x || previous_pose.eye.y != pose.eye.y ||
         previous_pose.eye.height != pose.eye.height ||
         pointer_moved || previous_aspect != aspect || previous_reach != reach ) {
-        // Reach covers the whole orbit distance plus the pickable depth behind
-        // the pivot, so a zoomed-out camera can still select what it shows.
+        // Select along the on-screen ray, limited to the avatar's storey.
+        // Roofs and contents on other storeys cannot occlude this pick.
         cached = fp3d_targeting::ray( *latest_scene, pose.yaw, pose.pitch, pose.eye, reach,
-                                      pointer.ndc_x, pointer.ndc_y, aspect, true );
+                                      pointer.ndc_x, pointer.ndc_y, aspect, true, true );
         generation = latest_scene->render_generation;
         previous_pose = pose;
         previous_x = pointer.ndc_x;
@@ -1590,6 +1590,40 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
     const auto legacy_shaders = fp3d_legacy_shader_bridge::current( gpu_live_world != nullptr );
     const bool daylight_shadows = legacy_shaders.active();
     const bool local_lights = daylight_shadows && fp3d_shaderpacks::local_lights_enabled();
+    std::optional<fp3d_iris::material_id_map> iris_terrain_materials, iris_entities, iris_items, iris_water_materials;
+    bool iris_basic = false;
+    if( gpu_live_world ) {
+        const auto &iris = fp3d_shaderpacks::poll_iris_compilation();
+        if( !iris.running && iris.diagnostics.empty() &&
+            !iris.stages.empty() ) {
+            iris_basic = std::any_of( iris.stages.begin(), iris.stages.end(), []( const auto &stage ) {
+                return stage.program == "gbuffers_basic";
+            } );
+            const auto make_material_map = [&]( auto &map, const char *name ) {
+                const auto found = iris.properties.materials.find( name );
+                map.emplace( found == iris.properties.materials.end() ?
+                             std::vector<fp3d_iris::material_rule>{} : found->second );
+            };
+            if( std::any_of( iris.stages.begin(), iris.stages.end(), []( const auto &stage ) {
+                return fp3d_shaderpacks::is_iris_terrain_program( stage.program ) ||
+                       stage.program == "gbuffers_block" || stage.program == "shadow_solid" ||
+                       stage.program == "shadow_cutout";
+            } ) ) {
+                make_material_map( iris_terrain_materials, "block.properties" );
+            }
+            if( std::any_of( iris.stages.begin(), iris.stages.end(), []( const auto &stage ) {
+                return stage.program == "gbuffers_water" || stage.program == "shadow_water";
+            } ) ) {
+                make_material_map( iris_water_materials, "block.properties" );
+            }
+            if( std::any_of( iris.stages.begin(), iris.stages.end(), []( const auto &stage ) {
+                return stage.program == "gbuffers_entities";
+            } ) ) {
+                make_material_map( iris_entities, "entity.properties" );
+                make_material_map( iris_items, "item.properties" );
+            }
+        }
+    }
     gpu_world_qa_pending = fp3d_gpu_world_qa::prepare( scene, view, overhead, width, height,
                            gpu_live_world != nullptr, local_lights,
                            gpu_live_world && fp3d_shaderpacks::local_shadows_enabled(),
@@ -1600,7 +1634,10 @@ static void prepare_gpu_world( const fp3d_snapshot::scene_snapshot &scene,
                            gpu_live_world ? &live_terrain_index() : nullptr, reuse_material_slots,
                            panel_input && pickup_source_highlight ? &*pickup_source_highlight : nullptr,
                            curtain_peek ? &*curtain_peek : nullptr,
-                           overhead ? fp3d_camera::open_structure_opacity( orbit_camera.distance ) : 1.f );
+                           overhead ? fp3d_camera::open_structure_opacity( orbit_camera.distance ) : 1.f,
+                           iris_terrain_materials ? &*iris_terrain_materials : nullptr,
+                           iris_entities ? &*iris_entities : nullptr, iris_items ? &*iris_items : nullptr,
+                           iris_water_materials ? &*iris_water_materials : nullptr, iris_basic );
     if( gpu_world_qa_pending && legacy_shaders.active() ) {
         fp3d_legacy_shader_bridge::configure_frame( legacy_shaders, *gpu_world_qa_pending,
                 scene, view, overhead, width, height );
@@ -1647,6 +1684,7 @@ void gpu_world_qa_after_present( bool presented )
     }
     if( !gpu_world_qa_pending ) return;
     if( gpu_live_world ) {
+        const auto &iris = fp3d_shaderpacks::poll_iris_compilation();
         if( ( active() || ( panel_input && turn_based() ) ) && in_world && latest_scene && pending_gpu_view &&
             pending_gpu_view->render_generation == latest_scene->render_generation &&
             pending_gpu_view->overhead == overhead_view && gpu_live_world->ready() ) {
@@ -1654,7 +1692,46 @@ void gpu_world_qa_after_present( bool presented )
             if( gpu_world_qa_pending->atmosphere.pbr_eye_strength[3] > 0 ) {
                 gpu_world_qa_pending->auxiliary_slots = fp3d_materials::visible_auxiliary_slots( *latest_scene );
             }
-            const auto result = gpu_live_world->submit( *gpu_world_qa_pending );
+            const bool iris_water = !iris.running && iris.diagnostics.empty() &&
+                                    std::any_of( iris.stages.begin(), iris.stages.end(), []( const auto &stage ) {
+                return stage.program == "gbuffers_water";
+            } ) && std::any_of( gpu_world_qa_pending->reflective_batches.begin(),
+                                gpu_world_qa_pending->reflective_batches.end(), []( const auto &entry ) {
+                return fp3d_gpu_world_qa::is_water( entry.surface );
+            } );
+            const bool iris_terrain = !iris.running && iris.diagnostics.empty() &&
+                                       std::any_of( iris.stages.begin(), iris.stages.end(), []( const auto &stage ) {
+                return fp3d_shaderpacks::is_iris_terrain_program( stage.program ) ||
+                       fp3d_shaderpacks::is_iris_model_program( stage.program );
+            } );
+            const bool iris_eye_light = !iris.running && iris.diagnostics.empty() && iris.needs_eye_brightness;
+            std::array<int, 2> eye_brightness{};
+            if( iris_water || iris_terrain || iris_eye_light ) {
+                static std::optional<unsigned> light_generation;
+                static fp3d_iris::block_light_levels block, sky;
+                if( light_generation != latest_scene->render_generation ) {
+                    constexpr float native_emission_at_full_block_light = 15.f;
+                    block = fp3d_iris::scene_block_light( *latest_scene, native_emission_at_full_block_light );
+                    sky = fp3d_iris::scene_sky_light( *latest_scene, get_map() );
+                    light_generation = latest_scene->render_generation;
+                }
+                if( iris_water ) {
+                    fp3d_gpu_world_qa::assign_iris_water_lights( *gpu_world_qa_pending, latest_scene->origin, block, sky );
+                }
+                if( iris_terrain ) {
+                    fp3d_gpu_world_qa::assign_iris_terrain_lights( *gpu_world_qa_pending, latest_scene->origin, block, sky );
+                }
+                if( iris_eye_light ) {
+                    eye_brightness = fp3d_iris::eye_brightness_at( latest_scene->origin, block, sky );
+                }
+            }
+            const bool iris_ready = !iris.running && iris.diagnostics.empty() && !iris.stages.empty();
+            const fp3d_gpu_world_qa::live_world::iris_frame_source iris_source{ *latest_scene,
+                pending_gpu_view->camera,
+                iris_ready ? fp3d_iris::read_world_clock( calendar::turn ) : fp3d_iris::world_clock{},
+                eye_brightness
+            };
+            const auto result = gpu_live_world->submit( *gpu_world_qa_pending, nullptr, &iris, &iris_source );
             if( result == fp3d_gpu::submission_result::submitted ) {
                 gpu_views.submit( *pending_gpu_view );
                 if( ( panel_input || curtain_peek ) && g ) {
@@ -2236,6 +2313,7 @@ void release()
         gpu_world_qa_preview.reset();
     }
     gpu_world_qa_composited = false;
+    fp3d_shaderpacks::stop_iris_compilation();
     gpu_live_world.reset();
     pending_gpu_view.reset();
     gpu_views.clear();

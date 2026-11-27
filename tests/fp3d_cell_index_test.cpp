@@ -2,15 +2,1153 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
+#include "calendar.h"
 #include "cata_catch.h"
 #include "fp3d_gpu_occlusion.h"
 #include "fp3d_gpu_presentation.h"
 #include "fp3d_gpu_terrain_compute.h"
 #include "fp3d_gpu_world_qa.h"
+#include "fp3d_iris_layout.h"
+#include "fp3d_iris_gpu_program.h"
+#include "fp3d_iris_frame.h"
+#include "fp3d_iris_targets.h"
+#include "fp3d_iris_pack.h"
+#include "fp3d_shaderpacks.h"
 #include "fp3d_targeting.h"
+#include "options_helpers.h"
+
+#ifdef _WIN32
+TEST_CASE( "fp3d_iris_resolves_pack_custom_uniform_dependencies", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    pack_text pack;
+    pack.files["shaders.properties"] =
+        "uniform.vec2.pixelSize = vec2(reciprocal, 1 / viewHeight)\n"
+        "variable.float.reciprocal = gain / viewWidth\n"
+        "variable.float.gain = 2 + 3 * 2\n"
+        "uniform.bool.mapped = if(pixelSize.x >= 0.125, !false, false)\n"
+        "uniform.int.count = intInput + 1\n"
+        "uniform.float.broken = missingInput\n"
+        "uniform.float.cycle = cycle + 1\n";
+    const auto properties = inspect_properties( pack );
+    REQUIRE( properties.error.empty() );
+    uniform_values values{ { "viewWidth", std::vector<float>{ 64.f } },
+        { "viewHeight", std::vector<float>{ 32.f } }, { "intInput", std::vector<std::int32_t>{ 3 } } };
+    REQUIRE( apply_custom_uniforms( properties, { "mapped", "pixelSize", "count" }, values ).empty() );
+    CHECK( std::get<std::vector<float>>( values.at( "pixelSize" ) ) == std::vector<float>{ .125f, .03125f } );
+    CHECK( std::get<std::vector<std::uint32_t>>( values.at( "mapped" ) ) == std::vector<std::uint32_t>{ 1 } );
+    CHECK( std::get<std::vector<std::int32_t>>( values.at( "count" ) ) == std::vector<std::int32_t>{ 4 } );
+    CHECK( values.count( "reciprocal" ) == 0 );
+    CHECK( apply_custom_uniforms( properties, { "broken" }, values ).find( "missing input missingInput" ) !=
+           std::string::npos );
+    CHECK( apply_custom_uniforms( properties, { "cycle" }, values ).find( "cyclic" ) != std::string::npos );
+}
+
+TEST_CASE( "fp3d_iris_custom_uniform_smoothing_uses_frame_time", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    pack_text pack;
+    pack.files["shaders.properties"] =
+        "uniform.float.transition = smooth(rainStrength, 2, 4)\n"
+        "uniform.float.snapped = smooth(12, rainStrength, 0, 0)\n"
+        "uniform.float.zinvalid = unknownInput\n";
+    const auto properties = inspect_properties( pack );
+    REQUIRE( properties.error.empty() );
+    uniform_smoothing history;
+    const auto step = [&]( float rain, double elapsed ) {
+        uniform_values values{ { "rainStrength", std::vector<float>{ rain } } };
+        REQUIRE( apply_custom_uniforms( properties, { "transition", "snapped" }, values, &history,
+                                        elapsed ).empty() );
+        CHECK( std::get<std::vector<float>>( values.at( "snapped" ) ).front() == rain );
+        return std::get<std::vector<float>>( values.at( "transition" ) ).front();
+    };
+    CHECK( step( 0.f, 0 ) == 0.f );
+    CHECK( step( 1.f, 0.2 ) == Approx( .5f ) );
+    CHECK( step( 0.f, 0.4 ) == Approx( .25f ) );
+    const auto before_error = history;
+    uniform_values values{ { "rainStrength", std::vector<float>{ 1.f } } };
+    CHECK_FALSE( apply_custom_uniforms( properties, { "transition", "zinvalid" }, values, &history,
+                                       0.2 ).empty() );
+    CHECK( history == before_error );
+    history.clear();
+    CHECK( step( 1.f, 0 ) == 1.f );
+}
+
+TEST_CASE( "fp3d_iris_maps_scene_biome_to_pack_constants", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    using climate = fp3d_snapshot::landscape_climate;
+    const auto dry = map_scene_biome( { climate::plains, 11.f, 20.f } );
+    CHECK( dry.id == biome_constant( "BIOME_DESERT" ).value() );
+    CHECK( dry.category == biome_constant( "CAT_DESERT" ).value() );
+    CHECK( dry.precipitation == biome_constant( "PPT_NONE" ).value() );
+    CHECK( dry.rainfall == Approx( .20f ) );
+    const auto river = map_scene_biome( { climate::river, 11.f, 20.f } );
+    CHECK( river.category == biome_constant( "CAT_RIVER" ).value() );
+    const auto taiga = map_scene_biome( { climate::forest, -5.f, 70.f } );
+    CHECK( taiga.id == biome_constant( "BIOME_TAIGA" ).value() );
+    CHECK( taiga.precipitation == biome_constant( "PPT_SNOW" ).value() );
+    CHECK( map_scene_biome( { climate::underground, 15.f, 80.f } ).category ==
+           biome_constant( "CAT_UNDERGROUND" ).value() );
+    pack_text pack;
+    pack.files["shaders.properties"] =
+        "uniform.float.arid = smooth(if(biome_category == CAT_DESERT, 1.0, 0.0), 30, 30)\n";
+    fp3d_snapshot::scene_snapshot scene;
+    scene.biome = { climate::plains, 11.f, 20.f };
+    const auto frame = frame_history{}.prepare( scene, {}, {}, 64, 64, false, {}, 1 );
+    REQUIRE( frame );
+    auto values = native_frame_uniform_values( *frame );
+    uniform_smoothing smoothing;
+    REQUIRE( apply_custom_uniforms( inspect_properties( pack ), { "arid" }, values, &smoothing ).empty() );
+    CHECK( std::get<std::vector<float>>( values.at( "arid" ) ).front() == 1.f );
+}
+
+TEST_CASE( "fp3d_iris_eye_brightness_samples_avatar_storey", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 12, -2, -1 );
+    const auto upstairs = scene.origin + tripoint_rel_ms::above;
+    const block_light_levels block{ { scene.origin, 10 }, { upstairs, 3 } };
+    const block_light_levels sky{ { upstairs, 18 } };
+    CHECK( eye_brightness_at( scene.origin, block, sky ) == std::array<int, 2>{ 160, 0 } );
+    CHECK( eye_brightness_at( upstairs, block, sky ) == std::array<int, 2>{ 48, 240 } );
+    const auto frame = frame_history{}.prepare( scene, {}, {}, 64, 64, true, {}, 1,
+                       eye_brightness_at( scene.origin, block, sky ) );
+    REQUIRE( frame );
+    auto values = native_frame_uniform_values( *frame );
+    CHECK( std::get<std::vector<std::int32_t>>( values.at( "eyeBrightness" ) ) ==
+           std::vector<std::int32_t>{ 160, 0 } );
+    pack_text pack;
+    pack.files["shaders.properties"] =
+        "uniform.vec2.lightTest = vec2(eyeBrightness.x / 240.0, eyeBrightness.y / 240.0)\n";
+    const auto properties = inspect_properties( pack );
+    INFO( properties.error );
+    REQUIRE( properties.uniform_expressions.count( "lightTest" ) == 1 );
+    const auto error = apply_custom_uniforms( properties, { "lightTest" }, values );
+    INFO( error );
+    REQUIRE( error.empty() );
+    REQUIRE( values.count( "lightTest" ) == 1 );
+    const auto &light = std::get<std::vector<float>>( values.at( "lightTest" ) );
+    CHECK( light[0] == Approx( 2.f / 3.f ) );
+    CHECK( light[1] == 0.f );
+}
+
+TEST_CASE( "fp3d_iris_celestial_uniforms_follow_native_calendar", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    const auto day = calendar::turn_zero + 3_days + 12_hours;
+    const auto dawn = sunrise( day );
+    const auto dusk = sunset( day );
+    const auto next_dawn = sunrise( day + 1_days );
+    REQUIRE( dawn < dusk );
+    REQUIRE( dusk < next_dawn );
+    CHECK( read_world_clock( dawn ).sun_angle == 0.f );
+    CHECK( read_world_clock( dawn + ( dusk - dawn ) / 2 ).sun_angle == Approx( .25f ).margin( .001f ) );
+    CHECK( read_world_clock( dusk ).sun_angle == .5f );
+    const auto night = dusk + ( next_dawn - dusk ) / 2;
+    const auto clock = read_world_clock( night );
+    CHECK( clock.sun_angle == Approx( .75f ).margin( .001f ) );
+    CHECK( clock.moon_phase == ( static_cast<int>( get_moon_phase( night ) ) + 4 ) % MOON_PHASE_MAX );
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.sun_y = -1.f;
+    const fp3d_gpu_camera_math::matrix4 clip{ { 1, 0, 0, 0, 0, 1, 0, 0,
+                                               0, 0, 1, 0, 0, 0, 0, 1 } };
+    const auto frame = frame_history{}.prepare( scene, {}, clip, 64, 64, false, clock, 1 );
+    REQUIRE( frame );
+    const auto values = fp3d_gpu_world_qa::iris_scene_uniforms( *frame, fp3d_camera::near_clip,
+                        fp3d_camera::far_clip );
+    CHECK( std::get<std::vector<float>>( values.at( "shadowAngle" ) )[0] ==
+           Approx( .25f ).margin( .001f ) );
+    REQUIRE( values.count( "upPosition" ) == 1 );
+    const auto &up = std::get<std::vector<float>>( values.at( "upPosition" ) );
+    CHECK( std::hypot( up[0], up[1], up[2] ) == Approx( 100.f ) );
+}
+
+TEST_CASE( "fp3d_iris_atmosphere_uniforms_follow_native_weather", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.sky.daylight = 1.f;
+    scene.weather.fog_end = 60.f;
+    const auto clear = frame_history{}.prepare( scene, {}, {}, 64, 64, false, {}, 1 );
+    const auto flashed = frame_history{}.prepare( scene, {}, {}, 64, 64, false, {}, 1, {}, 1.f );
+    REQUIRE( clear );
+    REQUIRE( flashed );
+    CHECK( clear->sky_color[0] < clear->sky_color[2] );
+    CHECK( flashed->sky_color[0] > clear->sky_color[0] );
+    CHECK( flashed->sky_color[0] == flashed->sky_color[1] );
+    CHECK( flashed->sky_color[1] == flashed->sky_color[2] );
+    CHECK( flashed->fog_distance == 60.f );
+    CHECK( flashed->fog_start == 8.f );
+    CHECK( flashed->fog_color[0] > clear->fog_color[0] );
+    pack_text pack;
+    pack.files["shaders.properties"] =
+        "uniform.float.flashTest = if(equals(skyColor.r, skyColor.g, 0.01) && skyColor.r > 0.3, 1.0, 0.0)\n";
+    const auto properties = inspect_properties( pack );
+    auto values = native_frame_uniform_values( *flashed );
+    REQUIRE( apply_custom_uniforms( properties, { "flashTest" }, values ).empty() );
+    CHECK( std::get<std::vector<float>>( values.at( "flashTest" ) )[0] == 1.f );
+}
+
+TEST_CASE( "fp3d_iris_player_uniforms_preserve_vision_and_held_light", "[iris_custom_uniforms][nogame]" )
+{
+    using namespace fp3d_iris;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.player_darkness = true;
+    scene.player_night_vision = .45f;
+    scene.held_light = 30;
+    const auto frame = frame_history{}.prepare( scene, {}, {}, 64, 64, false, {}, 1 );
+    REQUIRE( frame );
+    const auto values = native_frame_uniform_values( *frame );
+    CHECK( std::get<std::vector<float>>( values.at( "blindness" ) )[0] == 0.f );
+    CHECK( std::get<std::vector<float>>( values.at( "darknessFactor" ) )[0] == 1.f );
+    CHECK( std::get<std::vector<float>>( values.at( "nightVision" ) )[0] == Approx( .45f ) );
+    CHECK( std::get<std::vector<std::int32_t>>( values.at( "heldBlockLightValue" ) )[0] == 15 );
+    CHECK( std::get<std::vector<std::int32_t>>( values.at( "heldBlockLightValue2" ) )[0] == 0 );
+    scene.player_blind = true;
+    const auto blind = frame_history{}.prepare( scene, {}, {}, 64, 64, false, {}, 1 );
+    REQUIRE( blind );
+    const auto blind_values = native_frame_uniform_values( *blind );
+    CHECK( std::get<std::vector<float>>( blind_values.at( "blindness" ) )[0] == 1.f );
+    CHECK( std::get<std::vector<float>>( blind_values.at( "nightVision" ) )[0] == 0.f );
+}
+
+TEST_CASE( "fp3d_iris_reports_real_pack_compile_coverage", "[.][iris_pack_coverage]" )
+{
+    using namespace fp3d_shaderpacks;
+    const char *pick = std::getenv( "CATA_IRIS_TEST_PACK_NAME" );
+    const char *folder = std::getenv( "CATA_IRIS_TEST_PACK_ROOT" );
+    REQUIRE( pick );
+    REQUIRE( folder );
+    REQUIRE( std::filesystem::u8path( directory() ) == std::filesystem::u8path( folder ) );
+    struct compiler_scope {
+        ~compiler_scope() {
+            stop_iris_compilation();
+        }
+    } compiler;
+    REQUIRE( choose( pick ) );
+    REQUIRE( poll_iris_compilation().running );
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes( 4 );
+    while( poll_iris_compilation().running && std::chrono::steady_clock::now() < deadline ) {
+        SDL_Delay( 20 );
+    }
+    const auto &compiled = poll_iris_compilation();
+    REQUIRE_FALSE( compiled.running );
+    const auto diagnostic_count = compiled.diagnostics.size();
+    WARN( "Iris pack coverage: " << pick << " compiled=" << compiled.stages.size() <<
+          " diagnostics=" << diagnostic_count );
+    for( const auto &stage : compiled.stages ) {
+        WARN( "Iris compiled: " << stage.program << " " << stage.stage );
+    }
+    for( const auto &[name, texture] : compiled.textures ) {
+        WARN( "Iris prepared texture: " << name << " " << texture.width << "x" << texture.height <<
+              "x" << texture.depth << " " << texture.bytes.size() << " bytes" );
+    }
+    for( const auto &diagnostic : compiled.diagnostics ) {
+        WARN( "Iris diagnostic: " << diagnostic );
+    }
+    for( const auto &program : compiled.unused_minecraft_programs ) {
+        WARN( "Iris inactive Minecraft-only draw: " << program );
+    }
+    if( std::getenv( "CATA_IRIS_TEST_GRAPH" ) ) {
+        for( const auto &diagnostic : compiled.diagnostics ) {
+            REQUIRE( diagnostic.compare( 0, 26, "Unsupported Iris program: " ) == 0 );
+        }
+        REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
+        struct video_scope {
+            ~video_scope() {
+                SDL_QuitSubSystem( SDL_INIT_VIDEO );
+            }
+        } graph_video;
+        std::unique_ptr<SDL_GPUDevice, decltype( &SDL_DestroyGPUDevice )> device(
+            SDL_CreateGPUDevice( SDL_GPU_SHADERFORMAT_DXIL, true, "direct3d12" ), SDL_DestroyGPUDevice );
+        REQUIRE( device );
+        auto subset = compiled;
+        subset.diagnostics.clear();
+        fp3d_iris::scene_post graph;
+        SDL_ClearError();
+        const bool ready = graph.update( device.get(), subset );
+        WARN( "Iris compiled-stage subset GPU graph: " << ( ready ? "ready" : SDL_GetError() ) );
+        if( std::getenv( "CATA_IRIS_TEST_FRAME" ) ) {
+            INFO( SDL_GetError() );
+            REQUIRE( ready );
+            using namespace fp3d_gpu_world_qa;
+            constexpr Uint32 extent = 64;
+            const auto make_color = [&]( Uint32 size ) {
+                return fp3d_iris::create_graph_texture( device.get(),
+                       { fp3d_gpu::scene_target::color_format(), size, size },
+                       SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER );
+            };
+            std::unique_ptr<SDL_Renderer, decltype( &SDL_DestroyRenderer )> renderer(
+                SDL_CreateGPURenderer( device.get(), nullptr ), SDL_DestroyRenderer );
+            REQUIRE( renderer );
+            fp3d_gpu::scene_target target;
+            REQUIRE( target.initialize( renderer.get(), extent, extent, true ) );
+            auto atlas = make_color( 1 );
+            REQUIRE( atlas );
+            const SDL_GPUTransferBufferCreateInfo download{ SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
+                      extent * extent * 4, 0 };
+            std::unique_ptr<SDL_GPUTransferBuffer, std::function<void( SDL_GPUTransferBuffer * )>> readback(
+                SDL_CreateGPUTransferBuffer( device.get(), &download ), [&]( SDL_GPUTransferBuffer *buffer ) {
+                    SDL_ReleaseGPUTransferBuffer( device.get(), buffer );
+                } );
+            REQUIRE( readback );
+            fp3d_snapshot::scene_snapshot scene;
+            scene.sky.sun_y = 1.f;
+            scene.sky.daylight = 1.f;
+            const auto brightness = fp3d_iris::eye_brightness_at( scene.origin,
+                                    { { scene.origin, 8 } }, { { scene.origin, 15 } } );
+            const fp3d_gpu_camera_math::matrix4 clip{ { 1, 0, 0, 0, 0, 1, 0, 0,
+                                                       0, 0, 1, 0, 0, 0, 0, 1 } };
+            fp3d_iris::frame_history history;
+            const auto frame = history.prepare( scene, {}, clip, extent, extent, false,
+                                               fp3d_iris::read_world_clock( calendar::turn_zero + 12_hours ),
+                                               compiled.revision, brightness );
+            REQUIRE( frame );
+            auto uniforms = iris_scene_uniforms( *frame, fp3d_camera::near_clip, fp3d_camera::far_clip );
+            if( graph.uses_shadow() ) {
+                uniforms.merge( iris_shadow_uniforms( clip ) );
+            }
+            fp3d_iris::scene_post::frame_slot slot;
+            auto *command = SDL_AcquireGPUCommandBuffer( device.get() );
+            REQUIRE( command );
+            constexpr SDL_FColor seed{ 1.f, 0.f, 1.f, 1.f };
+            SDL_GPUColorTargetInfo color{};
+            color.clear_color = seed;
+            color.load_op = SDL_GPU_LOADOP_CLEAR;
+            color.store_op = SDL_GPU_STOREOP_STORE;
+            color.texture = atlas.get();
+            auto *clear = SDL_BeginGPURenderPass( command, &color, 1, nullptr );
+            REQUIRE( clear );
+            SDL_EndGPURenderPass( clear );
+            color.texture = target.native_color();
+            SDL_GPUDepthStencilTargetInfo depth{};
+            depth.texture = target.depth();
+            depth.clear_depth = 1.f;
+            depth.load_op = SDL_GPU_LOADOP_CLEAR;
+            depth.store_op = SDL_GPU_STOREOP_STORE;
+            depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            clear = SDL_BeginGPURenderPass( command, &color, 1, &depth );
+            REQUIRE( clear );
+            SDL_EndGPURenderPass( clear );
+            // Exercise the original fullscreen stages and their GPU dependencies
+            // with an empty scene. Geometry coverage requires real draw providers.
+            const auto empty_geometry = []( auto &&... ) { return true; };
+            const bool recorded = graph.record( command, target, slot, 1.f, std::move( uniforms ),
+                                                { atlas.get(), { target.color_format(), 1, 1 } },
+                                                empty_geometry, {}, {}, empty_geometry, empty_geometry );
+            if( !recorded ) {
+                const std::string error = SDL_GetError();
+                SDL_CancelGPUCommandBuffer( command );
+                FAIL( "Iris compiled-stage subset frame: " << error );
+            }
+            SDL_GPUTextureRegion source{};
+            source.texture = target.native_color();
+            source.w = source.h = extent;
+            source.d = 1;
+            const SDL_GPUTextureTransferInfo destination{ readback.get(), 0, extent, extent };
+            auto *copy = SDL_BeginGPUCopyPass( command );
+            REQUIRE( copy );
+            SDL_DownloadFromGPUTexture( copy, &source, &destination );
+            SDL_EndGPUCopyPass( copy );
+            auto *fence = SDL_SubmitGPUCommandBufferAndAcquireFence( command );
+            REQUIRE( fence );
+            const bool finished = SDL_WaitForGPUFences( device.get(), true, &fence, 1 );
+            SDL_ReleaseGPUFence( device.get(), fence );
+            REQUIRE( finished );
+            const auto *pixel = static_cast<const Uint8 *>( SDL_MapGPUTransferBuffer( device.get(),
+                                readback.get(), false ) );
+            REQUIRE( pixel );
+            size_t changed = 0;
+            for( size_t i = 0; i < extent * extent * 4; i += 4 ) {
+                changed += pixel[i] != 255 || pixel[i + 1] != 0 || pixel[i + 2] != 255;
+            }
+            SDL_UnmapGPUTransferBuffer( device.get(), readback.get() );
+            WARN( "Iris compiled-stage subset frame: " << changed << " pixels written by final" );
+            CHECK( changed == extent * extent );
+        }
+    }
+    REQUIRE( choose( "off" ) );
+}
+
+TEST_CASE( "fp3d_iris_compiles_current_selection_in_background", "[.][iris_background_compile]" )
+{
+    using namespace fp3d_shaderpacks;
+    const char *folder = std::getenv( "CATA_IRIS_TEST_PACK_ROOT" );
+    REQUIRE( folder );
+    REQUIRE( std::filesystem::u8path( directory() ) == std::filesystem::u8path( folder ) );
+    struct compiler_scope {
+        ~compiler_scope() {
+            choose( "off" );
+            stop_iris_compilation();
+        }
+    } compiler;
+    REQUIRE( choose( "composite-test" ) );
+    const auto first = poll_iris_compilation().revision;
+    REQUIRE( poll_iris_compilation().running );
+    REQUIRE( choose( "off" ) );
+    CHECK_FALSE( poll_iris_compilation().running );
+    CHECK( poll_iris_compilation().stages.empty() );
+    REQUIRE( choose( "composite-test" ) );
+    const auto latest = poll_iris_compilation().revision;
+    CHECK( latest != first );
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds( 20 );
+    while( poll_iris_compilation().running && std::chrono::steady_clock::now() < deadline ) {
+        SDL_Delay( 10 );
+    }
+    const auto &compiled = poll_iris_compilation();
+    CHECK_FALSE( compiled.running );
+    CHECK( compiled.revision == latest );
+    INFO( ( compiled.diagnostics.empty() ? "No diagnostics" : compiled.diagnostics.front() ) );
+    REQUIRE( compiled.diagnostics.empty() );
+    REQUIRE( compiled.water_diagnostics.empty() );
+    REQUIRE( compiled.stages.size() == 38 );
+    for( const auto &stage : compiled.stages ) {
+        CHECK( ( stage.program == "gbuffers_water" || stage.program == "composite2" || stage.program == "composite10" ||
+                 stage.program == "deferred2" || stage.program == "deferred10" || fp3d_shaderpacks::is_iris_terrain_program( stage.program ) ||
+                 fp3d_shaderpacks::is_iris_model_program( stage.program ) ||
+                 fp3d_shaderpacks::is_iris_shadow_program( stage.program ) || stage.program == "shadowcomp" || stage.program == "final" ) );
+        CHECK( fp3d_iris::load_compiled_shader( stage.bytecode, stage.cache_key ).error.empty() );
+        CHECK( stage.layout.target_directive.has_value() == ( stage.stage == "frag" ) );
+    }
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
+    struct video_scope {
+        ~video_scope() {
+            SDL_QuitSubSystem( SDL_INIT_VIDEO );
+        }
+    } video;
+    std::unique_ptr<SDL_GPUDevice, decltype( &SDL_DestroyGPUDevice )> device(
+        SDL_CreateGPUDevice( SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_DXBC, true,
+                             "direct3d12" ), SDL_DestroyGPUDevice );
+    REQUIRE( device );
+    std::unique_ptr<SDL_Renderer, decltype( &SDL_DestroyRenderer )> renderer(
+        SDL_CreateGPURenderer( device.get(), nullptr ), SDL_DestroyRenderer );
+    REQUIRE( renderer );
+    fp3d_gpu::scene_target target;
+    REQUIRE( target.initialize( renderer.get(), 64, 1, true ) );
+    auto atlas = fp3d_iris::create_graph_texture( device.get(), { target.color_format(), 1, 1 },
+                 SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER );
+    REQUIRE( atlas );
+    fp3d_iris::scene_post post;
+    fp3d_iris::scene_post::frame_slot slot;
+    const bool loaded = post.update( device.get(), compiled );
+    INFO( SDL_GetError() );
+    REQUIRE( loaded );
+    auto *command = SDL_AcquireGPUCommandBuffer( device.get() );
+    REQUIRE( command );
+    using namespace fp3d_gpu_world_qa;
+    resources native_pipelines( device.get() );
+    native_pipelines.vs = shader( device.get(), fp3d_gpu_shader_bytes::base_vertex,
+                                  sizeof( fp3d_gpu_shader_bytes::base_vertex ), true, 1, 0 );
+    native_pipelines.fs = shader( device.get(), fp3d_gpu_shader_bytes::base_fragment,
+                                  sizeof( fp3d_gpu_shader_bytes::base_fragment ), false, 1, 6 );
+    REQUIRE( initialize_scene_pipelines( native_pipelines.pipelines, device.get(),
+                                         native_pipelines.vs, native_pipelines.fs ) );
+    prepared_world world;
+    world.camera.elements = { 1,0,0,0, 0,0,2,0, 0,1,0,.5f, 0,0,0,1 };
+    fp3d_geometry::quad_mesh_sink sink( world.geometry );
+    struct { float left, top, right, bottom; } uv{ 0, 0, 1, 1 };
+    fp3d_geometry::floor_face( sink, 0, 0, 0, uv, .5f );
+    fp3d_gpu::indexed_mesh mesh;
+    REQUIRE( mesh.initialize( device.get(), world.geometry ) );
+    world.instances.resize( 8 );
+    world.instances[6].offset = { -.5f, .35f, 0.f, 2.f };
+    world.instances[7].offset = { .5f, .3f, 0.f, 2.f };
+    world.instances[5].offset = { -.5f, .45f, 0.f, 2.f };
+    world.instances[4].offset = { .5f, .4f, 0.f, 2.f };
+    world.instances[0].offset[0] = -.5f;
+    world.instances[1].offset[0] = .5f;
+    world.instances[2].offset = { -.5f, -.25f, 0, 2 };
+    world.instances[3].offset = { .5f, .25f, 0, 2 };
+    world.instances[2].tint = world.instances[3].tint = { 1, 0, 0, .5f };
+    world.reflective_batches = {
+        { { 0, 6, 0, 1 }, {}, reflective_surface::water_shallow, {}, 10002 },
+        { { 0, 6, 1, 1 }, {}, reflective_surface::water_deep, {}, 10003 }
+    };
+    world.batches = { { 0, 6, 0, 2, false, false, true }, { 0, 6, 4, 1, false, false, false, 48, true },
+        { 0, 6, 5, 1, false, false, false, 48 },
+        { 0, 6, 6, 1, false, false, false, {}, false, iris_caster::block, 77 },
+        { 0, 6, 7, 1, false, false, false, {}, false, iris_caster::entity, 33, 91 },
+        { 0, 6, 6, 1, false, false, false, {}, false, iris_caster::block, {}, -1, true },
+        { 0, 6, 2, 1, false, false, false, {}, false, iris_caster::entity }, { 0, 6, 3, 1 }
+    };
+    world.opaque_batches = world.badge_end = 6;
+    world.blend_end = 8;
+    const tripoint_abs_ms origin( 12, 18, 0 );
+    const auto left = origin + tripoint_rel_ms( -1, 0, 0 );
+    assign_iris_water_lights( world, origin, { { left, 4 }, { origin, 12 } },
+    { { left, 2 }, { origin, 10 } } );
+    CHECK( world.reflective_batches[0].iris_lights == std::vector<std::uint8_t>{ 0x24 } );
+    CHECK( world.reflective_batches[1].iris_lights == std::vector<std::uint8_t>{ 0xac } );
+    assign_iris_terrain_lights( world, origin, { { left, 4 }, { origin, 12 } },
+    { { left, 2 }, { origin, 10 } } );
+    REQUIRE( world.iris_terrain_lights[0].size() == 8 );
+    CHECK( world.iris_terrain_lights[0][4] == 0xac );
+    // Resident offsets are anchored and the GPU stream starts with fixed pages.
+    prepared_world resident;
+    resident.resident_to_scene = { -128.f, 0.f, -64.f };
+    std::vector<fp3d_gpu::mesh_instance> pages( 2 );
+    pages[1].offset = { 127.f, fp3d_camera::floor_height, 64.f, 0.f };
+    resident.resident_pages = std::make_shared<const std::vector<fp3d_gpu::mesh_instance>>( pages );
+    resident.resident_instances.resize( 1 );
+    resident.resident_instances[0].offset = { 128.f, 0.f, 64.f, 0.f };
+    resident.batches = { { 0, 6, 1, 1, true, true, false, 48 }, { 0, 6, 2, 1, true, false, false, 48 } };
+    resident.opaque_batches = 2;
+    const auto upper_left = left + tripoint_rel_ms::above;
+    assign_iris_terrain_lights( resident, origin, { { upper_left, 2 }, { origin, 12 } },
+    { { upper_left, 15 }, { origin, 10 } } );
+    CHECK( resident.iris_terrain_lights[1] == std::vector<Uint32>{ 0, 0xf2, 0xac } );
+    fp3d_gpu::upload_buffer instances;
+    fp3d_gpu::upload_buffer terrain_light;
+    REQUIRE( stage_iris_terrain_lights( device.get(), world.iris_terrain_lights[0], terrain_light ) );
+    REQUIRE( stage_instances( device.get(), world.instances, instances, false ) );
+    REQUIRE( stage_draws( device.get(), world, native_pipelines.draw_commands ) );
+    auto *upload = SDL_BeginGPUCopyPass( command );
+    REQUIRE( upload );
+    REQUIRE( mesh.record( upload ) );
+    REQUIRE( instances.record( upload ) );
+    REQUIRE( terrain_light.record_delta( upload ) );
+    REQUIRE( native_pipelines.draw_commands.record( upload ) );
+    SDL_EndGPUCopyPass( upload );
+    SDL_GPUColorTargetInfo attachment{};
+    attachment.texture = atlas.get();
+    attachment.clear_color = { 1.f, 1.f, 1.f, 1.f };
+    attachment.load_op = SDL_GPU_LOADOP_CLEAR;
+    attachment.store_op = SDL_GPU_STOREOP_STORE;
+    auto *atlas_pass = SDL_BeginGPURenderPass( command, &attachment, 1, nullptr );
+    REQUIRE( atlas_pass );
+    SDL_EndGPURenderPass( atlas_pass );
+    attachment.texture = target.native_color();
+    attachment.clear_color = { .125f, .125f, .125f, 1.f };
+    attachment.load_op = SDL_GPU_LOADOP_CLEAR;
+    attachment.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPUDepthStencilTargetInfo depth{};
+    depth.texture = target.depth();
+    depth.clear_depth = 1.f;
+    depth.load_op = SDL_GPU_LOADOP_CLEAR;
+    depth.store_op = SDL_GPU_STOREOP_STORE;
+    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+    auto *native = SDL_BeginGPURenderPass( command, &attachment, 1, &depth );
+    REQUIRE( native );
+    SDL_EndGPURenderPass( native );
+    const fp3d_iris::material_id_map materials( post.properties().materials.at( "block.properties" ) );
+    const world_meshes meshes{ mesh, nullptr, {}, instances.get() };
+    const auto bind = [&]( const fp3d_iris::shader_layout &layout,
+                           const fp3d_iris::uniform_values &values, fp3d_iris::graphics_stage &stage ) {
+        const auto result = bind_iris_water_draws( world, meshes, layout, materials, values, {}, stage );
+        return result.error.empty() && result.missing.empty();
+    };
+    constexpr auto hdr = SDL_GPU_TEXTUREFORMAT_R11G11B10_UFLOAT;
+    scene_pipelines hdr_pipelines;
+    REQUIRE( initialize_scene_pipelines( hdr_pipelines, device.get(), native_pipelines.vs,
+                                         native_pipelines.fs, hdr ) );
+    const auto draw_glass = [&]( SDL_GPUTexture *color, SDL_GPUTexture *water_depth,
+    SDL_GPUTextureFormat format ) {
+        CHECK( format == hdr );
+        return record_world( command, target, world, atlas.get(), hdr_pipelines, meshes,
+                             instances.get(), native_pipelines.draw_commands.get(), {}, nullptr, false,
+                             nullptr, nullptr, nullptr, nullptr, false, { color, water_depth } );
+    };
+    fp3d_gpu::textured_pipeline behind_water;
+    REQUIRE( initialize_behind_water( device.get(), behind_water, hdr ) );
+    const auto draw_refracted_glass = [&]( SDL_GPUTexture *color, SDL_GPUTexture *opaque_depth,
+    SDL_GPUTexture *water_depth, SDL_GPUTextureFormat format ) {
+        CHECK( format == hdr );
+        CHECK( color == slot.images->textures.images().at( "colortex0:4" ) );
+        CHECK( color != target.native_color() );
+        CHECK( opaque_depth == slot.images->textures.images().at( "depthtex0:6" ) );
+        CHECK( opaque_depth != target.depth() );
+        CHECK( opaque_depth != water_depth );
+        return record_world( command, target, world, atlas.get(), native_pipelines.pipelines, meshes,
+                             instances.get(), native_pipelines.draw_commands.get(), {}, nullptr, false,
+                             nullptr, nullptr, nullptr, nullptr, false,
+                             { color, opaque_depth, water_depth, &behind_water } );
+    };
+    const auto bind_opaque = [&]( std::string_view name, const fp3d_iris::shader_layout &layout,
+                                  const fp3d_iris::shader_layout &fragment, const fp3d_iris::uniform_values &values,
+                                  fp3d_iris::graphics_stage &stage ) {
+        const auto result = bind_iris_opaque_draws( world, meshes, layout, fragment, values, stage,
+                            { terrain_light.get(), nullptr }, post, name );
+        INFO( result.error );
+        INFO( ( result.missing.empty() ? "" : result.missing.front() ) );
+        REQUIRE( result.error.empty() );
+        REQUIRE( result.missing.empty() );
+        const std::map<std::string_view, Uint32> first_instances{
+            { "gbuffers_terrain_solid", 4 }, { "gbuffers_terrain_cutout", 5 },
+            { "gbuffers_block", 6 }, { "gbuffers_entities", 7 }, { "gbuffers_basic", 6 }
+        };
+        const auto first = first_instances.find( name );
+        if( first == first_instances.end() ) {
+            CHECK( stage.draws.empty() );
+        } else {
+            REQUIRE( stage.draws.size() == 1 );
+            CHECK( stage.draws.front().first_instance == first->second );
+        }
+        return true;
+    };
+    const auto bind_shadow = [&]( std::string_view name, const fp3d_iris::shader_layout &layout,
+                                  const fp3d_iris::uniform_values &values, fp3d_iris::graphics_stage &stage ) {
+        const auto bound = bind_iris_shadow_draws( world, meshes, layout, values, stage, post, name, 10001 );
+        const std::map<std::string_view, std::vector<Uint32>> expected{
+            { "shadow_solid", { 4 } }, { "shadow_cutout", { 5 } },
+            { "shadow_block", { 6, 6 } }, { "shadow_entities", { 7 } },
+            { "shadow", {} }, { "shadow_water", { 0, 1 } },
+            { "shadow_translucent_block", {} }, { "shadow_translucent_entities", { 2 } },
+            { "shadow_translucent_geometry", { 3 } }
+        };
+        std::vector<Uint32> draws;
+        for( const auto &draw : stage.draws ) {
+            draws.push_back( draw.first_instance );
+        }
+        CHECK( draws == expected.at( name ) );
+        return bound.error.empty() && bound.missing.empty();
+    };
+    REQUIRE( post.uses_water() );
+    REQUIRE( post.uses_opaque_geometry() );
+    REQUIRE( post.uses_shadow() );
+    CHECK( post.shadow_resolution() == 32 );
+    const fp3d_gpu_camera_math::matrix4 shadow_clip{ { 1,0,0,0, 0,0,2,0, 0,1,0,.5f, 0,0,0,1 } };
+    fp3d_iris::frame_history history;
+    fp3d_snapshot::scene_snapshot snapshot;
+    snapshot.origin = tripoint_abs_ms( -18000000, 18, -2 );
+    snapshot.weather.particles = fp3d_weather::precipitation::rain;
+    snapshot.weather.intensity = .625f;
+    snapshot.player_underwater = true;
+    snapshot.sky.sun_x = .3f;
+    snapshot.sky.sun_y = -.4f;
+    snapshot.sky.sun_z = 0.f;
+    auto frame_clip = world.camera;
+    frame_clip.elements[13] = 1.f;
+    auto prior_clip = frame_clip;
+    prior_clip.elements[3] = .25f;
+    fp3d_camera::pose camera{};
+    camera.eye.x = -.25f;
+    camera.eye.height = 1.5f;
+    camera.eye.y = -.125f;
+    const auto noon = fp3d_iris::read_world_clock( calendar::turn_zero + 3_days + 12_hours );
+    const auto dawn = calendar::turn_zero + 3_days + 6_hours;
+    const auto before_dawn = fp3d_iris::read_world_clock( dawn - 1_seconds );
+    const auto at_dawn = fp3d_iris::read_world_clock( dawn );
+    CHECK( before_dawn.world_time == 23999 );
+    CHECK( before_dawn.world_day + 1 == at_dawn.world_day );
+    CHECK( at_dawn.world_time == 0 );
+    const auto prior = history.prepare( snapshot, camera, prior_clip, 64, 1, false, noon, latest );
+    REQUIRE( prior );
+    CHECK( prior->frame_counter == 0 );
+    history.presented( *prior );
+    camera.eye.x = .125f;
+    const auto frame = history.prepare( snapshot, camera, frame_clip, 64, 1, false, noon, latest );
+    REQUIRE( frame );
+    REQUIRE( frame->previous );
+    CHECK( frame->frame_counter == 1 );
+    const auto restarted = history.prepare( snapshot, camera, world.camera, 64, 1, false, {}, latest + 1 );
+    REQUIRE( restarted );
+    CHECK_FALSE( restarted->previous );
+    CHECK( restarted->frame_counter == 0 );
+    auto shifted = snapshot;
+    shifted.origin += tripoint_rel_ms::east;
+    auto shifted_camera = camera;
+    shifted_camera.eye.x -= 1.f;
+    const auto rebased = history.prepare( shifted, shifted_camera, world.camera, 64, 1, false, {}, latest );
+    REQUIRE( rebased );
+    CHECK_FALSE( rebased->previous );
+    const auto rebased_values = fp3d_iris::native_frame_uniform_values( *rebased );
+    CHECK( rebased_values.at( "cameraPositionInt" ) == rebased_values.at( "previousCameraPositionInt" ) );
+    CHECK( rebased_values.at( "cameraPositionFract" ) == rebased_values.at( "previousCameraPositionFract" ) );
+    auto uniforms = iris_scene_uniforms( *frame, fp3d_camera::near_clip, fp3d_camera::far_clip );
+    CHECK( uniforms.at( "cameraPositionInt" ) == rebased_values.at( "cameraPositionInt" ) );
+    CHECK( uniforms.at( "cameraPositionFract" ) == rebased_values.at( "cameraPositionFract" ) );
+    auto daylight = *frame;
+    daylight.sun_direction[1] *= -1.f;
+    const auto daylight_values = iris_scene_uniforms( daylight, fp3d_camera::near_clip,
+                                 fp3d_camera::far_clip );
+    CHECK( daylight_values.at( "shadowLightPosition" ) == daylight_values.at( "sunPosition" ) );
+    CHECK( uniforms.at( "shadowLightPosition" ) == uniforms.at( "moonPosition" ) );
+    uniforms.merge( iris_shadow_uniforms( shadow_clip ) );
+    REQUIRE( post.record( command, target, slot, 0.f, std::move( uniforms ),
+                          { atlas.get(), { target.color_format(), 1, 1 } }, bind, draw_glass,
+                          draw_refracted_glass, bind_opaque, bind_shadow ) );
+    REQUIRE( slot.images );
+    CHECK( slot.images->specs.at( "colortex0:0" ).format == hdr );
+    CHECK( slot.images->textures.images().at( "colortex0:0" ) != target.native_color() );
+    CHECK( slot.images->specs.at( "shadowtex0:4" ).width == 32 );
+    CHECK( slot.images->specs.at( "shadowcolor0:10" ).height == 32 );
+    CHECK( slot.images->textures.images().at( "shadowtex0:4" ) !=
+           slot.images->textures.images().at( "shadowtex1:5" ) );
+    CHECK( slot.images->specs.at( "colortex1:1" ).format == SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT );
+    CHECK( slot.images->specs.at( "colortex1:1" ).width == 32 );
+    CHECK( slot.images->specs.at( "colortex5:1" ).format == SDL_GPU_TEXTUREFORMAT_R32_FLOAT );
+    CHECK( slot.images->specs.at( "colortex7:1" ).format == SDL_GPU_TEXTUREFORMAT_R16G16_FLOAT );
+    CHECK( slot.images->specs.at( "colortex9:1" ).opaque_alpha );
+    CHECK( slot.images->specs.at( "colortex10:1" ).opaque_alpha );
+    CHECK( slot.images->specs.at( "colortex15:0" ).clear_color == std::array<float, 4>{ 1.25f, -2.f, .5f, .25f } );
+    CHECK( slot.images->textures.images().at( "depthtex1:0" ) == target.depth() );
+    CHECK( slot.images->textures.images().at( "depthtex0:7" ) !=
+           slot.images->textures.images().at( "depthtex0:6" ) );
+    const SDL_GPUTransferBufferCreateInfo info{ SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, 256, 0 };
+    auto *readback = SDL_CreateGPUTransferBuffer( device.get(), &info );
+    REQUIRE( readback );
+    auto *copy = SDL_BeginGPUCopyPass( command );
+    REQUIRE( copy );
+    SDL_GPUTextureRegion source{};
+    source.texture = target.native_color();
+    source.w = 64;
+    source.h = source.d = 1;
+    const SDL_GPUTextureTransferInfo destination{ readback, 0, 64, 1 };
+    SDL_DownloadFromGPUTexture( copy, &source, &destination );
+    SDL_EndGPUCopyPass( copy );
+    auto *fence = SDL_SubmitGPUCommandBufferAndAcquireFence( command );
+    REQUIRE( fence );
+    REQUIRE( SDL_WaitForGPUFences( device.get(), true, &fence, 1 ) );
+    const auto *pixel = static_cast<const Uint8 *>( SDL_MapGPUTransferBuffer( device.get(), readback, false ) );
+    REQUIRE( pixel );
+    for( int x = 0; x < 64; ++x ) {
+        if( x < 32 ) {
+            CHECK( std::abs( static_cast<int>( pixel[x * 4] ) - 159 ) <= 4 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 1] ) - 235 ) <= 4 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 2] ) - 91 ) <= 4 );
+        } else if( x < 56 ) {
+            CHECK( std::abs( static_cast<int>( pixel[x * 4] ) - 64 ) <= 4 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 1] ) - 88 ) <= 4 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 2] ) - 24 ) <= 4 );
+        } else {
+            CHECK( std::abs( static_cast<int>( pixel[x * 4] ) - 191 ) <= 4 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 1] ) - 223 ) <= 4 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 2] ) - 111 ) <= 4 );
+        }
+    }
+    SDL_UnmapGPUTransferBuffer( device.get(), readback );
+    SDL_ReleaseGPUTransferBuffer( device.get(), readback );
+    SDL_ReleaseGPUFence( device.get(), fence );
+    // With no viable water stage the native scene still draws the water and
+    // the pack's composite/final programs transform that colour.
+    world.batches.resize( 1 );
+    world.opaque_batches = world.badge_end = world.blend_end = 1;
+    world.width = 64;
+    world.height = 1;
+    for( size_t i = 0; i < 2; ++i ) {
+        world.instances[i].offset[3] = 2.f;
+        world.instances[i].tint = { .2f, .5f, .75f, 1.f };
+    }
+    REQUIRE( stage_instances( device.get(), world.instances, instances, false ) );
+    REQUIRE( stage_draws( device.get(), world, native_pipelines.draw_commands ) );
+    auto fallback = compiled;
+    const auto keep = []( const auto &stage ) {
+        return stage.program == "gbuffers_water" || stage.program == "composite2" ||
+               stage.program == "composite10" || stage.program == "final";
+    };
+    fallback.stages.erase( std::remove_if( fallback.stages.begin(), fallback.stages.end(),
+    [&]( const auto &stage ) { return !keep( stage ); } ), fallback.stages.end() );
+    fallback.properties.materials.erase( "block.properties" );
+    for( int variant = 0; variant < 4; ++variant ) {
+        CAPTURE( variant );
+        if( variant == 1 ) {
+            fallback.stages.erase( std::remove_if( fallback.stages.begin(), fallback.stages.end(),
+            []( const auto &stage ) { return stage.program == "gbuffers_water"; } ), fallback.stages.end() );
+        }
+        if( variant >= 2 ) {
+            REQUIRE( choose( variant == 2 ? "broken-water" : "unsupported-water-resource" ) );
+            const auto fallback_deadline = std::chrono::steady_clock::now() + std::chrono::seconds( 20 );
+            while( poll_iris_compilation().running && std::chrono::steady_clock::now() < fallback_deadline ) {
+                SDL_Delay( 10 );
+            }
+            fallback = poll_iris_compilation();
+            REQUIRE_FALSE( fallback.running );
+            REQUIRE( fallback.diagnostics.empty() );
+            if( variant == 2 ) {
+                REQUIRE( fallback.water_diagnostics.size() == 1 );
+                CHECK( fallback.water_diagnostics.front().find( "gbuffers_water.fsh" ) != std::string::npos );
+                CHECK( fallback.water_diagnostics.front().find( "P7_WATER_COMPILE_FAILURE" ) != std::string::npos );
+                CHECK( fallback.stages.size() == 6 );
+                CHECK( status().find( "水面程序编译失败" ) != std::string::npos );
+            } else {
+                REQUIRE( fallback.water_diagnostics.empty() );
+                REQUIRE( fallback.stages.size() == 8 );
+            }
+        }
+        // The first two graphs are derived from the currently compiled fixture.
+        // Give each a distinct revision solely for the GPU slot cache.
+        fallback.revision = latest + 10 + variant;
+        REQUIRE( post.update( device.get(), fallback ) );
+        CHECK_FALSE( post.uses_water() );
+        const std::array<std::string_view, 4> reasons{
+            "pack does not map minecraft:water in block.properties",
+            "pack does not provide gbuffers_water",
+            "gbuffers_water compilation failed:",
+            "gbuffers_water GPU setup failed: Missing Iris sampler resource: waterOnlyTexture"
+        };
+        CHECK( post.water_fallback_reason().compare( 0, reasons[variant].size(), reasons[variant] ) == 0 );
+        command = SDL_AcquireGPUCommandBuffer( device.get() );
+        REQUIRE( command );
+        if( variant == 0 ) {
+            auto *transfer = SDL_BeginGPUCopyPass( command );
+            REQUIRE( transfer );
+            REQUIRE( instances.record( transfer ) );
+            REQUIRE( native_pipelines.draw_commands.record( transfer ) );
+            SDL_EndGPUCopyPass( transfer );
+        }
+        REQUIRE( record_world( command, target, world, atlas.get(), native_pipelines.pipelines, meshes,
+                               instances.get(), native_pipelines.draw_commands.get() ) );
+        REQUIRE( post.record( command, target, slot, 0.f ) );
+        CHECK( slot.images->specs.count( "depthtex0:1" ) == 0 );
+        readback = SDL_CreateGPUTransferBuffer( device.get(), &info );
+        REQUIRE( readback );
+        copy = SDL_BeginGPUCopyPass( command );
+        REQUIRE( copy );
+        const SDL_GPUTextureTransferInfo fallback_destination{ readback, 0, 64, 1 };
+        SDL_DownloadFromGPUTexture( copy, &source, &fallback_destination );
+        SDL_EndGPUCopyPass( copy );
+        fence = SDL_SubmitGPUCommandBufferAndAcquireFence( command );
+        REQUIRE( fence );
+        REQUIRE( SDL_WaitForGPUFences( device.get(), true, &fence, 1 ) );
+        pixel = static_cast<const Uint8 *>( SDL_MapGPUTransferBuffer( device.get(), readback, false ) );
+        REQUIRE( pixel );
+        for( int x : { 16, 48 } ) {
+            CHECK( std::abs( static_cast<int>( pixel[x * 4] ) - 64 ) <= 1 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 1] ) - 127 ) <= 1 );
+            CHECK( std::abs( static_cast<int>( pixel[x * 4 + 2] ) - 204 ) <= 1 );
+        }
+        SDL_UnmapGPUTransferBuffer( device.get(), readback );
+        SDL_ReleaseGPUTransferBuffer( device.get(), readback );
+        SDL_ReleaseGPUFence( device.get(), fence );
+    }
+    // Make the unavailable resource a non-water requirement as well. The
+    // successful water-only fallback must not hide a shared dependency error.
+    const auto final_fragment = std::find_if( fallback.stages.begin(), fallback.stages.end(),
+    []( const auto &stage ) { return stage.program == "final" && stage.stage == "frag"; } );
+    REQUIRE( final_fragment != fallback.stages.end() );
+    final_fragment->layout.samplers.push_back( { "waterOnlyTexture", "sampler2D" } );
+    ++fallback.revision;
+    REQUIRE_FALSE( post.update( device.get(), fallback ) );
+    CHECK( std::string_view( SDL_GetError() ).find( "without gbuffers_water" ) != std::string_view::npos );
+    CHECK( post.water_fallback_reason().empty() );
+
+    REQUIRE( choose( "history-test" ) );
+    const auto history_deadline = std::chrono::steady_clock::now() + std::chrono::seconds( 20 );
+    while( poll_iris_compilation().running && std::chrono::steady_clock::now() < history_deadline ) {
+        SDL_Delay( 10 );
+    }
+    const auto &history_pack = poll_iris_compilation();
+    REQUIRE_FALSE( history_pack.running );
+    REQUIRE( history_pack.diagnostics.empty() );
+    REQUIRE( history_pack.stages.size() == 4 );
+    REQUIRE( post.update( device.get(), history_pack ) );
+    if( history_pack.properties.documents.count( "item.properties" ) ) {
+        CHECK( post.held_item_id( "flashlight_on" ) == 42 );
+        CHECK( post.held_item_id( "flashlight" ) == -1 );
+        CHECK( post.held_item_id( "" ) == -1 );
+    }
+    fp3d_iris::scene_post::frame_slot history_slot;
+    const bool tests_wetness = std::any_of( history_pack.stages.begin(), history_pack.stages.end(),
+    []( const auto &stage ) {
+        return stage.layout.wetness_half_life == 2.f && stage.layout.dryness_half_life == 4.f;
+    } );
+    const bool tests_brightness = std::any_of( history_pack.stages.begin(), history_pack.stages.end(),
+    []( const auto &stage ) {
+        return stage.layout.uniforms.count( "screenBrightness" ) != 0;
+    } );
+    override_option brightness( "FP3D_IRIS_BRIGHTNESS", "0.5" );
+    const auto read_history = [&]( fp3d_iris::scene_post::frame_slot &draw_slot,
+                                   const fp3d_iris::scene_post::frame_slot *prior_slot,
+                                   float time, int expected_transition, bool retain_render_history = true ) {
+        auto *cmd = SDL_AcquireGPUCommandBuffer( device.get() );
+        REQUIRE( cmd );
+        fp3d_iris::uniform_values weather{
+            { "rainStrength", std::vector<float>{ time == .2f ? 1.f : 0.f } }
+        };
+        REQUIRE( post.record( cmd, target, draw_slot, time, std::move( weather ),
+                              {}, {}, {}, {}, {}, {}, prior_slot, retain_render_history ) );
+        CHECK( draw_slot.images->textures.images().count( "colortex5:0" ) == 1 );
+        CHECK( draw_slot.images->textures.images().count( "colortex5:alt" ) == 1 );
+        auto *transfer = SDL_CreateGPUTransferBuffer( device.get(), &info );
+        REQUIRE( transfer );
+        auto *download = SDL_BeginGPUCopyPass( cmd );
+        REQUIRE( download );
+        const SDL_GPUTextureTransferInfo location{ transfer, 0, 64, 1 };
+        SDL_DownloadFromGPUTexture( download, &source, &location );
+        SDL_EndGPUCopyPass( download );
+        auto *complete = SDL_SubmitGPUCommandBufferAndAcquireFence( cmd );
+        REQUIRE( complete );
+        REQUIRE( SDL_WaitForGPUFences( device.get(), true, &complete, 1 ) );
+        const auto *mapped = static_cast<const Uint8 *>( SDL_MapGPUTransferBuffer( device.get(), transfer, false ) );
+        REQUIRE( mapped );
+        const int red = mapped[0];
+        if( history_pack.properties.uniform_expressions.count( "historyFade" ) ) {
+            CHECK( std::abs( static_cast<int>( mapped[1] ) - expected_transition ) <= 1 );
+        }
+        if( tests_wetness ) {
+            CHECK( std::abs( static_cast<int>( mapped[2] ) - expected_transition ) <= 1 );
+        }
+        SDL_UnmapGPUTransferBuffer( device.get(), transfer );
+        SDL_ReleaseGPUTransferBuffer( device.get(), transfer );
+        SDL_ReleaseGPUFence( device.get(), complete );
+        return red;
+    };
+    CHECK( read_history( slot, nullptr, 0.f, 0 ) == 64 );
+    CHECK( std::abs( read_history( history_slot, &slot, .2f, 128 ) - 128 ) <= 1 );
+    CHECK( read_history( slot, &history_slot, .6f, 64 ) == 191 );
+    CHECK( read_history( history_slot, &slot, .6f, 64, false ) == 64 );
+    CHECK( read_history( history_slot, nullptr, .6f, 0 ) == 64 );
+    if( tests_brightness ) {
+        override_option dim( "FP3D_IRIS_BRIGHTNESS", "0.25" );
+        CHECK( read_history( slot, nullptr, .6f, 0 ) == 32 );
+    }
+    REQUIRE( choose( "off" ) );
+    CHECK( poll_iris_compilation().stages.empty() );
+    CHECK_FALSE( post.update( device.get(), poll_iris_compilation() ) );
+}
+
+TEST_CASE( "fp3d_selected_iris_pack_tracks_selection_and_refresh", "[.][iris_selection]" )
+{
+    using namespace fp3d_shaderpacks;
+    const char *folder = std::getenv( "CATA_IRIS_TEST_PACK_ROOT" );
+    REQUIRE( folder );
+    REQUIRE( std::filesystem::u8path( directory() ) == std::filesystem::u8path( folder ) );
+    const auto off = selected_iris_pack();
+    CHECK_FALSE( off.source );
+    REQUIRE( choose( "photon_v1.4.zip" ) );
+    const auto photon = selected_iris_pack();
+    REQUIRE( photon.source );
+    INFO( photon.source->error );
+    REQUIRE( photon.source->error.empty() );
+    CHECK( photon.source->program_directory == "world0" );
+    CHECK( std::find( photon.source->programs.begin(), photon.source->programs.end(),
+                      "world0/gbuffers_water" ) != photon.source->programs.end() );
+    const auto without_bloom = fp3d_iris::prepare_pack_compilation( *photon.source, { { "BLOOM", "0" } } );
+    const auto with_bloom = fp3d_iris::prepare_pack_compilation( *photon.source, { { "BLOOM", "1" } } );
+    INFO( without_bloom.error );
+    REQUIRE( without_bloom.error.empty() );
+    INFO( with_bloom.error );
+    REQUIRE( with_bloom.error.empty() );
+    const auto contains = []( const fp3d_iris::pack_compilation &plan, const std::string &name ) {
+        return std::any_of( plan.programs.begin(), plan.programs.end(), [&]( const auto &job ) {
+            return job.name == name;
+        } );
+    };
+    CHECK_FALSE( contains( without_bloom, "composite11" ) );
+    CHECK( contains( with_bloom, "composite11" ) );
+    CHECK( contains( without_bloom, "gbuffers_water" ) );
+    CHECK( selected_iris_pack().source == photon.source );
+    request_reload();
+    CHECK( selected_iris_pack().revision != photon.revision );
+    CHECK( selected_iris_pack().source != photon.source );
+    REQUIRE( choose( "dimension-test" ) );
+    const auto custom = selected_iris_pack();
+    REQUIRE( custom.source );
+    REQUIRE( custom.source->error.empty() );
+    CHECK( custom.source->program_directory == "main" );
+    CHECK( custom.source->programs == std::vector<std::string>{ "main/final" } );
+    REQUIRE( choose( "off" ) );
+    CHECK_FALSE( selected_iris_pack().source );
+    CHECK( photon.source->program_directory == "world0" );
+}
+
+TEST_CASE( "fp3d_iris_loads_verified_d3d12_artifacts", "[.][iris_artifact_gpu]" )
+{
+    const char *folder = std::getenv( "CATA_IRIS_TEST_ARTIFACTS" );
+    REQUIRE( folder );
+    const auto path = std::filesystem::u8path( folder );
+    const auto vertex = path / "vert.dxil";
+    const auto fragment = path / "frag.dxil";
+    const auto modified = path / "modified.dxil";
+    const auto damaged = fp3d_iris::load_compiled_shader( modified );
+    CHECK( damaged.error.find( "SHA-256 mismatch" ) != std::string::npos );
+    CHECK( damaged.bytecode.empty() );
+    const auto missing = fp3d_iris::load_compiled_shader( path / "absent.dxil" );
+    CHECK( missing.error.find( "absent.dxil.json" ) != std::string::npos );
+    REQUIRE( SDL_InitSubSystem( SDL_INIT_VIDEO ) );
+    struct video_scope {
+        ~video_scope() {
+            SDL_QuitSubSystem( SDL_INIT_VIDEO );
+        }
+    } video;
+    const auto destroy = []( SDL_GPUDevice *device ) { SDL_DestroyGPUDevice( device ); };
+    std::unique_ptr<SDL_GPUDevice, decltype( destroy )> device(
+        SDL_CreateGPUDevice( SDL_GPU_SHADERFORMAT_DXIL, true, "direct3d12" ), destroy );
+    INFO( SDL_GetError() );
+    REQUIRE( device );
+    constexpr auto color = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    auto loaded = fp3d_iris::load_graphics_program( device.get(), { vertex, {} }, { fragment, {} }, {},
+                  { { color, {} } } );
+    INFO( SDL_GetError() );
+    REQUIRE( loaded.program );
+    CHECK( loaded.program->stage().pipeline );
+    CHECK( loaded.vertex.input_locations.empty() );
+    CHECK( loaded.fragment.output_locations == std::vector<unsigned>{ 0 } );
+    REQUIRE( loaded.fragment.samplers.size() == 1 );
+    CHECK( loaded.fragment.samplers.front().name == "colortex0" );
+    REQUIRE( !loaded.fragment.cache_key.empty() );
+    CHECK( fp3d_iris::load_compiled_shader( fragment, loaded.fragment.cache_key ).error.empty() );
+    CHECK( fp3d_iris::load_compiled_shader( fragment, loaded.vertex.cache_key ).error.find(
+               "cache key mismatch" ) != std::string::npos );
+    CHECK_FALSE( fp3d_iris::load_graphics_program( device.get(), { fragment, {} }, { vertex, {} }, {},
+                 { { color, {} } } ).program );
+
+    using namespace fp3d_iris;
+    const auto water_vertex_path = path / "water" / "vert.dxil";
+    const auto water_fragment_path = path / "water" / "frag.dxil";
+    const auto water_vertex = load_compiled_shader( water_vertex_path );
+    const auto water_fragment = load_compiled_shader( water_fragment_path );
+    REQUIRE( water_vertex.error.empty() );
+    REQUIRE( water_fragment.error.empty() );
+    graphics_pass_artifacts water{
+        { water_vertex_path, water_vertex.layout.cache_key },
+        { water_fragment_path, water_fragment.layout.cache_key },
+        fp3d_gpu::native_mesh_vertex_input(), {}
+    };
+    for( const auto *layout : { &water_vertex.layout, &water_fragment.layout } ) {
+        for( const auto &sampler : layout->samplers ) {
+            water.sampler_images.emplace( sampler.name, "fixture" );
+        }
+    }
+    pack_fullscreen_program water_pass{ "gbuffers_water", {}, {}, color_buffer_bank::scene,
+                                        pass_kind::geometry, "depthtex0" };
+    REQUIRE( bind_compiled_program( water_pass, water_vertex.layout, water_fragment.layout,
+                                    water.sampler_images ).empty() );
+    auto mismatched = water_fragment.layout;
+    mismatched.target_directive = "/* RENDERTARGETS: 3 */";
+    CHECK( bind_compiled_program( water_pass, water_vertex.layout, mismatched, water.sampler_images ).find(
+               "disagree" ) != std::string::npos );
+    pack_fullscreen_program final_pass{ "final", {}, {} };
+    REQUIRE( bind_compiled_program( final_pass, loaded.vertex, loaded.fragment,
+    { { "colortex0", "colortex13" } } ).empty() );
+    const auto plan = build_pack_fullscreen_graph( { "fixture" }, { water_pass, final_pass }, "display" );
+    REQUIRE( plan.error.empty() );
+    CHECK( plan.passes.front().writes == std::vector<std::string>{ "colortex3:1", "colortex13:1" } );
+    std::map<std::string, graphics_pass_artifacts> artifacts{
+        { "gbuffers_water", water },
+        { "final", { { vertex, loaded.vertex.cache_key }, { fragment, loaded.fragment.cache_key }, {},
+            { { "colortex0", "colortex13" } } } }
+    };
+    const std::map<std::string, graph_image_spec> specs{
+        { "colortex3:1", { color, 64, 64 } }, { "colortex13:1", { color, 64, 64 } },
+        { "display:1", { color, 64, 64 } },
+        { "depthtex0:1", { SDL_GPU_TEXTUREFORMAT_D32_FLOAT, 64, 64 } }
+    };
+    graphics_program_set active;
+    REQUIRE( load_graphics_programs( device.get(), plan, artifacts, specs, active ) );
+    REQUIRE( active.size() == 2 );
+    const auto *final_pipeline = active.at( "final" ).program->stage().pipeline;
+    REQUIRE( final_pipeline );
+    artifacts.at( "final" ).fragment.cache_key = loaded.vertex.cache_key;
+    CHECK_FALSE( load_graphics_programs( device.get(), plan, artifacts, specs, active ) );
+    CHECK( std::string( SDL_GetError() ).find( "Iris pass final: Iris cache key mismatch" ) != std::string::npos );
+    CHECK( active.at( "final" ).program->stage().pipeline == final_pipeline );
+    artifacts.at( "final" ).fragment.cache_key = loaded.fragment.cache_key;
+    artifacts.at( "final" ).sampler_images.at( "colortex0" ) = "fixture";
+    CHECK_FALSE( load_graphics_programs( device.get(), plan, artifacts, specs, active ) );
+    CHECK( std::string( SDL_GetError() ).find( "sampler bindings changed for final" ) != std::string::npos );
+    CHECK( active.at( "final" ).program->stage().pipeline == final_pipeline );
+}
+#endif
+
+TEST_CASE( "fp3d_iris_water_camera_matches_native_clip", "[fp3d][iris_water]" )
+{
+    fp3d_gpu_camera_math::camera camera;
+    camera.yaw_degrees = 27.f;
+    camera.pitch_degrees = -19.f;
+    camera.eye_east = 12.f;
+    camera.eye_height = 3.f;
+    camera.eye_south = -7.f;
+    camera.aspect = 1.6f;
+    const auto native = fp3d_gpu_camera_math::clip_from_world( camera );
+    REQUIRE( native );
+    const auto values = fp3d_gpu_world_qa::iris_camera_uniforms( *native, camera.near_clip, camera.far_clip );
+    const auto multiply = [&]( const char *name, const std::array<float, 4> &v ) {
+        const auto &m = std::get<std::vector<float>>( values.at( name ) );
+        std::array<float, 4> result{};
+        for( int row = 0; row < 4; ++row ) {
+            for( int col = 0; col < 4; ++col ) {
+                result[row] += m[col * 4 + row] * v[col];
+            }
+        }
+        return result;
+    };
+    const std::array<float, 4> world{ 15.f, 0.f, -14.f, 1.f };
+    const auto view = multiply( "gbufferModelView", world );
+    const auto clip = multiply( "gbufferProjection", view );
+    const auto projected = native->transform( world[0], world[1], world[2] );
+    CHECK( clip[0] == Approx( projected[0] ).margin( .00001f ) );
+    CHECK( clip[1] == Approx( projected[1] ).margin( .00001f ) );
+    CHECK( ( clip[2] + clip[3] ) * .5f == Approx( projected[2] ).margin( .00001f ) );
+    CHECK( clip[3] == Approx( projected[3] ).margin( .00001f ) );
+    const auto eye = multiply( "gbufferProjectionInverse", clip );
+    const auto back = multiply( "gbufferModelViewInverse", view );
+    for( int i = 0; i < 4; ++i ) {
+        CHECK( eye[i] == Approx( view[i] ).margin( .00001f ) );
+        CHECK( back[i] == Approx( world[i] ).margin( .00001f ) );
+    }
+}
+
+TEST_CASE( "fp3d_iris_layout_binds_named_resources_and_std140_uniforms", "[fp3d][iris_water]" )
+{
+    using namespace fp3d_iris;
+    const std::string source = R"({
+        "version":1, "stage":"frag", "format":"dxil",
+        "bytecode_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "samplers":[{"name":"depthtex1","type":"sampler2D","slot":0},
+                    {"name":"shadowtex1","type":"sampler2DShadow","slot":1}],
+        "frame":{"size":80,"members":[{"name":"matrix","type":"mat3","offset":0,"matrix_stride":16},
+                                     {"name":"isEyeInWater","type":"int","offset":48},
+                                     {"name":"view_res","type":"vec2","offset":56},
+                                     {"name":"spare","type":"uint","offset":64}]}
+    })";
+    const auto layout = parse_shader_layout( source );
+    INFO( layout.error );
+    REQUIRE( layout.error.empty() );
+    REQUIRE( layout.samplers.size() == 2 );
+    CHECK( layout.samplers[1].type == "sampler2DShadow" );
+    const auto inputs = resolve_sampler_inputs( layout,
+    { { "shadowtex1", "shadowtex1:1" }, { "depthtex1", "depthtex1:0" } } );
+    CHECK( inputs.error.empty() );
+    CHECK( inputs.images == std::vector<std::string>{ "depthtex1:0", "shadowtex1:1" } );
+    CHECK( !resolve_sampler_inputs( layout, { { "depthtex1", "depthtex1:0" } } ).error.empty() );
+    shader_layout vertex;
+    vertex.stage = "vert";
+    vertex.format = "dxil";
+    vertex.samplers = { { "noise", "sampler2D" } };
+    pack_fullscreen_program water{ "water", "/* RENDERTARGETS: 3 */", {},
+                                  color_buffer_bank::scene, pass_kind::geometry };
+    REQUIRE( bind_program_sampler_inputs( water, vertex, layout,
+    { { "noise", "noise" }, { "shadowtex1", "shadowtex1" }, { "depthtex1", "depthtex1" } } ).empty() );
+    const auto graph = build_pack_fullscreen_graph( { "noise", "depthtex1", "shadowtex1" },
+                       { water }, "colortex3" );
+    REQUIRE( graph.error.empty() );
+    CHECK( graph.passes[0].vertex_reads == std::vector<std::string>{ "noise:0" } );
+    CHECK( graph.passes[0].reads == std::vector<std::string>{ "depthtex1:0", "shadowtex1:0" } );
+    CHECK_FALSE( bind_program_sampler_inputs( water, vertex, layout, { { "noise", "other" } } ).empty() );
+    CHECK( water.vertex_samplers == std::vector<std::string>{ "noise" } );
+    frame_inputs frame{};
+    frame.current.width = 800;
+    frame.current.height = 600;
+    frame.current.eye_in_water = 1;
+    auto values = native_frame_uniform_values( frame );
+    values.emplace( "matrix", std::vector<float>{ 1, 2, 3, 4, 5, 6, 7, 8, 9 } );
+    const auto packed = pack_frame_uniforms( layout, values );
+    REQUIRE( packed.error.empty() );
+    REQUIRE( packed.bytes.size() == 80 );
+    std::array<float, 12> matrix;
+    std::memcpy( matrix.data(), packed.bytes.data(), sizeof( matrix ) );
+    CHECK( matrix == std::array<float, 12>{ 1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0 } );
+    std::int32_t eye = 0;
+    std::memcpy( &eye, packed.bytes.data() + 48, sizeof( eye ) );
+    CHECK( eye == 1 );
+    std::array<float, 2> resolution;
+    std::memcpy( resolution.data(), packed.bytes.data() + 56, sizeof( resolution ) );
+    CHECK( resolution == std::array<float, 2>{ 800, 600 } );
+    CHECK( packed.missing == std::vector<std::string>{ "spare" } );
+    CHECK( !pack_frame_uniforms( layout, { { "isEyeInWater", std::vector<float>{ 1 } } } ).error.empty() );
+    auto overlapping = source;
+    overlapping.replace( overlapping.find( "\"offset\":56" ), 11, "\"offset\":48" );
+    CHECK( parse_shader_layout( overlapping ).error.find( "Overlapping" ) != std::string::npos );
+}
 
 TEST_CASE( "fp3d_input_frame_advances_only_with_sdl_presentation",
            "[fp3d][gpu_presentation]" )
@@ -76,7 +1214,7 @@ TEST_CASE( "fp3d_iris_collects_prepared_water_without_wet_pavement", "[fp3d][iri
     scene.origin = tripoint_abs_ms( 64, 64, 0 );
     scene.weather.particles = fp3d_weather::precipitation::rain;
     scene.weather.intensity = 1.f;
-    for( const char *terrain : { "t_water_sh", "t_water_dp", "t_pavement" } ) {
+    for( const char *terrain : { "modded_current", "t_water_dp", "t_pavement" } ) {
         const int x = static_cast<int>( scene.cells.size() ) - 1;
         auto &tile = scene.cells.emplace_back();
         tile.position = scene.origin + tripoint_rel_ms( x, -3, 0 );
@@ -84,7 +1222,19 @@ TEST_CASE( "fp3d_iris_collects_prepared_water_without_wet_pavement", "[fp3d][iri
     }
     fp3d_camera::pose pose;
     pose.eye.height = 1.5f;
-    const auto world = prepare( scene, pose, false, 512, 512, true );
+    scene.cells[0].water = fp3d_snapshot::water_traits{ fp3d_snapshot::water_depth::shallow, true, true };
+    fp3d_snapshot::connect_ground_terrain( scene );
+    CHECK( scene.cells[0].ground_connections == 2 );
+    CHECK( scene.cells[1].ground_connections == 4 );
+    terrain_index index;
+    const fp3d_iris::material_id_map water_materials( {
+        { 10001, { "minecraft:water" } },
+        { 10002, { "cdda:modded_current:flowing=true:salt=true" } },
+        { 10003, { "cdda:t_water_dp:depth=deep" } }
+    } );
+    const auto world = prepare( scene, pose, false, 512, 512, true, false, false, false, nullptr,
+                               nullptr, &index, false, nullptr, nullptr, 1.f, nullptr, nullptr, nullptr,
+                               &water_materials );
     REQUIRE( world );
     REQUIRE( std::any_of( world->reflective_batches.begin(), world->reflective_batches.end(),
     []( const reflective_batch &entry ) { return entry.surface == reflective_surface::asphalt; } ) );
@@ -100,6 +1250,7 @@ TEST_CASE( "fp3d_iris_collects_prepared_water_without_wet_pavement", "[fp3d][iri
         [surface]( const water_geometry_draw &entry ) { return entry.surface == surface; } );
         REQUIRE( source != world->reflective_batches.end() );
         REQUIRE( draw != selected.end() );
+        CHECK( draw->iris_water_material == ( surface == reflective_surface::water_shallow ? 10002 : 10003 ) );
         CHECK( draw->draw.first_index == source->draws.first_index );
         CHECK( draw->draw.index_count == source->draws.index_count );
         CHECK( draw->draw.first_instance == source->draws.first_instance );
@@ -114,6 +1265,33 @@ TEST_CASE( "fp3d_iris_collects_prepared_water_without_wet_pavement", "[fp3d][iri
     CHECK( anchored[0].draw.mesh == &resident );
     CHECK( anchored[0].draw.first_instance == 21 );
     CHECK( anchored[0].anchor_to_scene == meshes.resident_to_scene );
+
+    resident_water.reflective_batches.push_back( { { 0, 6, 0, 1 }, {},
+                                                 reflective_surface::water_shallow } );
+    fp3d_iris::shader_layout vertex;
+    vertex.stage = "vert";
+    vertex.frame_size = 32;
+    using scalar = fp3d_iris::uniform_scalar;
+    vertex.uniforms = {
+        { "cata_iris_anchor", { scalar::floating, 0, 3, 1, 0 } },
+        { "cata_iris_lightmap", { scalar::floating, 16, 2, 1, 0 } },
+        { "cata_iris_material", { scalar::floating, 24, 1, 1, 0 } }
+    };
+    fp3d_iris::graphics_stage stage;
+    REQUIRE_FALSE( bind_iris_water_draws( resident_water, meshes, vertex,
+                   fp3d_iris::material_id_map( {} ), {}, {}, stage ).error.empty() );
+    CHECK( stage.draws.empty() );
+    const fp3d_iris::material_id_map materials( { { 10001, { "water" } } } );
+    const auto bound = bind_iris_water_draws( resident_water, meshes, vertex, materials, {},
+                       { 16.f, 240.f }, stage );
+    REQUIRE( bound.error.empty() );
+    REQUIRE( stage.draw_vertex_constants.size() == 2 );
+    std::array<float, 8> resident_constants;
+    std::array<float, 8> dynamic_constants;
+    std::memcpy( resident_constants.data(), stage.draw_vertex_constants[0].data(), 32 );
+    std::memcpy( dynamic_constants.data(), stage.draw_vertex_constants[1].data(), 32 );
+    CHECK( resident_constants == std::array<float, 8>{ 4, 2, -3, 0, 16, 240, 10001, 0 } );
+    CHECK( dynamic_constants == std::array<float, 8>{ 0, 0, 0, 0, 16, 240, 10001, 0 } );
 }
 
 TEST_CASE( "fp3d_pickup_highlight_is_scoped_to_the_selected_container",
@@ -920,6 +2098,64 @@ TEST_CASE( "fp3d_open_structure_reuses_resident_mesh_with_sorted_alpha_and_shado
     CHECK( near->open_structure_shadows.size() == 1 );
     CHECK( near->batches.at( near->badge_end ).first_instance <
            near->batches.at( near->badge_end + 1 ).first_instance );
+}
+
+TEST_CASE( "fp3d_overhead_open_contents_fade_and_pointer_stays_on_avatar_storey",
+           "[fp3d][overhead][open_structure]" )
+{
+    using namespace fp3d_gpu_world_qa;
+    fp3d_snapshot::scene_snapshot scene;
+    scene.origin = tripoint_abs_ms( 0, 0, 4 );
+    for( int z = 4; z <= 5; ++z ) {
+        auto &tile = scene.cells.emplace_back();
+        tile.position = tripoint_abs_ms( 0, 0, z );
+        tile.terrain = "t_floor";
+        tile.furniture = fp3d_furniture::describe( "f_table" );
+        REQUIRE( tile.furniture );
+        tile.open_structure_above = z > 4;
+        auto &item = scene.sprites.emplace_back();
+        item.position = tile.position;
+        item.kind = fp3d_snapshot::sprite_kind::item;
+        item.id = "rock";
+        item.height = .5f;
+        item.elevation = 1.25f;
+    }
+    const fp3d_camera::offset eye{ 0.f, 0.f, 12.f };
+    const auto unrestricted = fp3d_targeting::ray( scene, 0, 89, eye, 20, 0, 0, 1, true );
+    const auto pointer = fp3d_targeting::ray( scene, 0, 89, eye, 20, 0, 0, 1, true, true );
+    REQUIRE( unrestricted );
+    REQUIRE( pointer );
+    CHECK( unrestricted->position == scene.cells.back().position );
+    CHECK( pointer->position == scene.origin );
+    CHECK( pointer->type != fp3d_targeting::kind::terrain );
+
+    const auto view = fp3d_camera::orbit_pose( {}, 0, 0 );
+    const auto near = prepare( scene, view, true, 512, 512, true, false, false, false, nullptr,
+                               nullptr, nullptr, false, nullptr, nullptr, .1f );
+    const auto far = prepare( scene, view, true, 512, 512, true );
+    REQUIRE( near );
+    REQUIRE( far );
+    const auto has_draw = []( const prepared_world &world, Uint32 begin, Uint32 end,
+    float height, float opacity, bool furniture ) {
+        for( Uint32 i = begin; i < end; ++i ) {
+            const auto &draw = world.batches[i];
+            for( Uint32 n = 0; n < draw.instance_count; ++n ) {
+                const auto &instance = world.instances.at( draw.first_instance + n );
+                if( instance.offset[1] == Approx( height ) && instance.tint[3] == Approx( opacity ) &&
+                    ( draw.index_count > 6 ) == furniture ) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    const float upper = fp3d_camera::floor_height;
+    CHECK( has_draw( *near, near->badge_end, near->blend_end, upper, .1f, true ) );
+    CHECK( has_draw( *near, near->badge_end, near->blend_end, upper + 1.25f, .1f, false ) );
+    CHECK( has_draw( *near, 0, near->opaque_batches, 0.f, 1.f, true ) );
+    CHECK( has_draw( *near, 0, near->opaque_batches, 1.25f, 1.f, false ) );
+    CHECK( has_draw( *far, 0, far->opaque_batches, upper, 1.f, true ) );
+    CHECK( has_draw( *far, 0, far->opaque_batches, upper + 1.25f, 1.f, false ) );
 }
 
 TEST_CASE( "fp3d_pointer_cutaway_lowers_only_near_walls_in_cached_and_direct_geometry",

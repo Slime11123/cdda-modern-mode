@@ -2723,6 +2723,11 @@ void options_manager::add_options_graphics()
              to_translation( "Sets which video display will be used to show the game.  Requires restart." ),
              display_list,
              display_list.front().first, COPT_CURSES_HIDE );
+#if defined(ENABLE_FP3D)
+        add( "FP3D_IRIS_BRIGHTNESS", page_id, to_translation( "Iris 光影亮度" ),
+             to_translation( "传给当前光影包的亮度参数。使用该参数的光影包会按自身算法调节亮度。" ),
+             0.0f, 1.0f, 0.5f, 0.05f, COPT_CURSES_HIDE );
+#endif
 #endif
 
 #if !defined(__ANDROID__) || !defined(__EMSCRIPTEN__) // Android and Emscripten are always fullscreen

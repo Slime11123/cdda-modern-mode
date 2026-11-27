@@ -32,6 +32,11 @@ struct graph_pass {
     std::optional<graph_viewport> viewport{};
     // Inherit an earlier depth image before writing this stage's depth version.
     std::string depth_load{};
+    std::vector<std::string> vertex_reads{};
+    // Color version retained for native draws immediately around this pass.
+    std::string native_color{};
+    // Logical sampler aliases which borrow a snapshot of a different buffer.
+    std::map<std::string, std::string> sampler_aliases{};
 };
 
 inline std::vector<std::string> graph_outputs( const graph_pass &pass )
@@ -67,11 +72,22 @@ inline graph_validation validate_graph( const std::vector<std::string> &external
         if( pass.program.empty() || !programs.insert( pass.program ).second ) {
             return { "Invalid program: " + pass.program, {} };
         }
-        for( const auto &image : pass.reads ) {
-            if( images.count( image ) == 0 ) {
-                return { pass.program + " reads unavailable image: " + image, {} };
+        if( pass.kind == pass_kind::compute && !pass.vertex_reads.empty() ) {
+            return { pass.program + " has vertex inputs on a compute stage", {} };
+        }
+        for( const auto *reads : { &pass.reads, &pass.vertex_reads } ) {
+            for( const auto &image : *reads ) {
+                if( images.count( image ) == 0 ) {
+                    return { pass.program + " reads unavailable image: " + image, {} };
+                }
+                result.last_use[image] = index;
             }
-            result.last_use[image] = index;
+        }
+        if( !pass.native_color.empty() ) {
+            if( images.count( pass.native_color ) == 0 ) {
+                return { pass.program + " needs unavailable native color: " + pass.native_color, {} };
+            }
+            result.last_use[pass.native_color] = index;
         }
         for( const auto &[destination, source] : pass.color_loads ) {
             if( pass.kind == pass_kind::compute ||

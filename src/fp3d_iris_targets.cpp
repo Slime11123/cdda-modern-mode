@@ -2,6 +2,7 @@
 
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <utility>
 
@@ -149,7 +150,8 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
     const std::vector<std::string> &initial_images,
     const std::vector<pack_fullscreen_program> &programs, const std::string &final_image,
     const pack_buffer_flips &flips, const std::vector<std::string> &initial_alternates,
-    const std::map<std::string, graph_viewport> &viewports )
+    const std::map<std::string, graph_viewport> &viewports, const std::set<std::string> &clearable,
+    const std::set<std::string> &persistent )
 {
     struct buffer_versions {
         std::string current;
@@ -175,6 +177,17 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
         buffer->second.alternate = image + ":alt";
         result.external.push_back( buffer->second.alternate );
     }
+    const auto ensure_persistent = [&]( const std::string &image ) {
+        if( persistent.count( image ) && versions.count( image ) == 0 ) {
+            auto &buffer = versions[image];
+            buffer.current = versioned( image, 0 );
+            buffer.alternate = image + ":alt";
+            result.external.push_back( buffer.current );
+            result.external.push_back( buffer.alternate );
+            result.history.emplace( buffer.current, "" );
+            result.history.emplace( buffer.alternate, "" );
+        }
+    };
     for( const auto &program : programs ) {
         if( program.kind == pass_kind::compute ||
             ( program.kind == pass_kind::geometry &&
@@ -185,25 +198,59 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
         if( !targets.error.empty() ) {
             return { {}, {}, {}, program.name + ": " + targets.error };
         }
-        if( targets.slots.empty() ) {
+        const bool display = targets.slots.empty() && program.name == "final" &&
+                             program.bank == color_buffer_bank::scene && program.kind == pass_kind::fullscreen;
+        if( targets.slots.empty() && !display &&
+            !( program.kind == pass_kind::geometry && !program.depth_buffer.empty() ) ) {
             return { {}, {}, {}, program.name + " requires an explicit color target layout" };
         }
         graph_pass pass{ program.name, {}, {} };
         pass.kind = program.kind;
+        if( program.needs_native_color ) {
+            const auto color = versions.find( "colortex0" );
+            if( color == versions.end() || color->second.current.empty() ) {
+                return { {}, {}, {}, program.name + " needs a current colortex0 for native draws" };
+            }
+            pass.native_color = color->second.current;
+        }
         if( const auto viewport = viewports.find( program.name ); viewport != viewports.end() ) {
             pass.viewport = viewport->second;
         }
-        for( const auto &sampler : program.samplers ) {
-            const auto image = versions.find( sampler );
-            if( image == versions.end() || image->second.current.empty() ) {
-                return { {}, {}, {}, program.name + " samples unavailable pack image: " + sampler };
+        const std::array read_lists{ std::make_pair( &program.samplers, &pass.reads ),
+                                     std::make_pair( &program.vertex_samplers, &pass.vertex_reads ) };
+        for( const auto &sampled : read_lists ) {
+            for( const auto &sampler : *sampled.first ) {
+                ensure_persistent( sampler );
+                auto image = versions.find( sampler );
+                if( image == versions.end() && clearable.count( sampler ) ) {
+                    auto &buffer = versions[sampler];
+                    buffer.current = versioned( sampler, 0 );
+                    result.external.push_back( buffer.current );
+                    image = versions.find( sampler );
+                }
+                if( image == versions.end() || image->second.current.empty() ) {
+                    return { {}, {}, {}, program.name + " samples unavailable pack image: " + sampler };
+                }
+                const auto &version = image->second.current;
+                if( version.compare( 0, version.find( ':' ), sampler ) != 0 ) {
+                    pass.sampler_aliases.emplace( sampler, version );
+                }
+                sampled.second->push_back( version );
             }
-            pass.reads.push_back( image->second.current );
         }
         const auto overrides = flips.find( program.name );
         const auto &stage_flips = overrides == flips.end() ? no_flips : overrides->second;
+        if( display ) {
+            auto &buffer = versions["display"];
+            if( !buffer.current.empty() || !stage_flips.empty() || pass.viewport ) {
+                return { {}, {}, {}, "Iris final display target cannot be imported, flipped or scaled" };
+            }
+            buffer.current = versioned( "display", ++buffer.writes );
+            pass.writes.push_back( buffer.current );
+        }
         for( const auto slot : targets.slots ) {
             const auto image = color_name( program.bank, slot );
+            ensure_persistent( image );
             auto &buffer = versions[image];
             auto write = versioned( image, ++buffer.writes );
             auto &target = program.kind == pass_kind::geometry ? buffer.current : buffer.alternate;
@@ -221,6 +268,7 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
         // attachments not touched by this pass.
         for( const auto &[image, flip] : stage_flips ) {
             if( flip ) {
+                ensure_persistent( image );
                 auto &buffer = versions[image];
                 std::swap( buffer.current, buffer.alternate );
             }
@@ -236,6 +284,9 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
             pass.depth_load = buffer.current;
             pass.depth_write = versioned( program.depth_buffer, ++buffer.writes );
             buffer.current = pass.depth_write;
+            if( !program.depth_snapshot.empty() ) {
+                versions[program.depth_snapshot].current = pass.depth_write;
+            }
         }
         result.passes.push_back( std::move( pass ) );
     }
@@ -244,6 +295,11 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
         return { {}, {}, {}, "Unavailable final pack image: " + final_image };
     }
     result.output = output->second.current;
+    for( auto &[initial, final] : result.history ) {
+        const auto separator = initial.find( ':' );
+        const auto &buffer = versions.at( initial.substr( 0, separator ) );
+        final = initial.substr( separator ) == ":alt" ? buffer.alternate : buffer.current;
+    }
     const auto validation = validate_graph( result.external, result.passes, result.output );
     if( !validation.error.empty() ) {
         return { {}, {}, {}, validation.error };

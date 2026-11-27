@@ -69,6 +69,8 @@ class scene_target
                 reset();
                 return false;
             }
+            width_ = info.width;
+            height_ = info.height;
             return true;
         }
 
@@ -84,6 +86,8 @@ class scene_target
             color_ = nullptr;
             native_ = nullptr;
             device_ = nullptr;
+            width_ = 0;
+            height_ = 0;
         }
 
         static constexpr SDL_GPUTextureFormat color_format() {
@@ -107,6 +111,12 @@ class scene_target
         SDL_GPUDevice *device() const {
             return device_;
         }
+        Uint32 width() const {
+            return width_;
+        }
+        Uint32 height() const {
+            return height_;
+        }
 
     private:
         SDL_GPUDevice *device_ = nullptr; // borrowed from the SDL renderer
@@ -114,6 +124,8 @@ class scene_target
         SDL_GPUTexture *native_ = nullptr; // borrowed from color_
         SDL_GPUTexture *depth_ = nullptr; // owned GPU texture
         bool sampleable_depth_ = false;
+        Uint32 width_ = 0;
+        Uint32 height_ = 0;
 };
 } // namespace fp3d_gpu
 #endif // CATA_SRC_FP3D_GPU_TARGET_H

@@ -4,6 +4,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <string>
 #include <string_view>
+#include <set>
 #include <vector>
 
 #include "fp3d_iris_properties.h"
@@ -34,6 +35,9 @@ struct pack_fullscreen_program {
     color_buffer_bank bank = color_buffer_bank::scene;
     pass_kind kind = pass_kind::fullscreen;
     std::string depth_buffer{};
+    std::vector<std::string> vertex_samplers{};
+    bool needs_native_color = false;
+    std::string depth_snapshot{};
 };
 
 struct pack_fullscreen_graph {
@@ -41,6 +45,7 @@ struct pack_fullscreen_graph {
     std::vector<graph_pass> passes;
     std::string output;
     std::string error;
+    std::map<std::string, std::string> history{};
 };
 
 // Build ordered graphics passes. Fullscreen stages write the alternate side,
@@ -50,7 +55,9 @@ pack_fullscreen_graph build_pack_fullscreen_graph(
     const std::vector<std::string> &initial_images,
     const std::vector<pack_fullscreen_program> &programs, const std::string &final_image,
     const pack_buffer_flips &flips = {}, const std::vector<std::string> &initial_alternates = {},
-    const std::map<std::string, graph_viewport> &viewports = {} );
+    const std::map<std::string, graph_viewport> &viewports = {},
+    const std::set<std::string> &clearable = {},
+    const std::set<std::string> &persistent = {} );
 } // namespace fp3d_iris
 #endif
 #endif

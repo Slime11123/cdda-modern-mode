@@ -75,10 +75,38 @@ terrain_kind terrain_shape( const std::string &id );
 bool is_glass_roof( const std::string &id );
 // Door/frame parts in their east-west orientation, shared by drawing and picking.
 const std::vector<fp3d_furniture::part> &door_parts( terrain_kind kind );
+inline bool broken_glass_wall( const std::string &id )
+{
+    return id.compare( 0, 20, "t_broken_glass_wall_" ) == 0;
+}
+inline bool broken_glass_door( const std::string &id )
+{
+    return id.compare( 0, 20, "t_broken_glass_door_" ) == 0;
+}
+inline bool broken_window_glass( const std::string &id )
+{
+    return id == "t_window_frame" || id == "t_vitrified_window_frame";
+}
+std::string closed_door_id( const std::string &id );
+fp3d_furniture::part swing_door_part( fp3d_furniture::part part, float inward );
 std::vector<fp3d_furniture::part> fence_parts( const std::array<bool, 4> &neighbours,
         bool posts_only = false );
 // True when adjacent segments belong to one continuous real-world railing.
 bool fence_connects( const std::string &left, const std::string &right );
+// Ground exposed by the terrain definition when a road guardrail is removed.
+inline const char *guardrail_ground( const std::string &id )
+{
+    if( id == "t_guardrail" ) {
+        return "t_pavement";
+    }
+    if( id == "t_guardrail_bg_dp" ) {
+        return "t_pavement_bg_dp";
+    }
+    if( id == "t_guardrail_hw_air" ) {
+        return "t_pavement_hw_air";
+    }
+    return nullptr;
+}
 std::vector<fp3d_furniture::part> glass_barrier_parts( bool railing,
         const std::array<bool, 4> &neighbours );
 // Chain-link fence gates use a dedicated open steel-frame model, including the
@@ -93,12 +121,18 @@ inline bool is_metal_gate( const std::string &id )
 {
     return id == "t_gate_metal_c" || id == "t_gate_metal_o";
 }
+inline bool is_prison_barrier( const std::string &id )
+{
+    return id == "t_bars" || id == "t_door_bar_c" ||
+           id == "t_door_bar_locked" || id == "t_door_bar_o";
+}
 bool chain_gate_along_x( const std::array<bool, 4> &neighbours );
-std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x );
+std::vector<fp3d_furniture::part> chain_gate_parts( const std::string &id, bool along_x,
+        float inward = -1.f );
 // Custom solid models shared by scene drawing and pointer targeting. Empty
 // for terrain that retains the existing world geometry path.
 std::vector<fp3d_furniture::part> terrain_model_parts( const std::string &id,
-        const std::array<bool, 4> &neighbours = {} );
+        const std::array<bool, 4> &neighbours = {}, float inward = -1.f );
 
 struct stair_section {
     int rows = 1;
@@ -228,6 +262,14 @@ struct cutaway_room {
     bool clipped = false;
 };
 
+enum class landscape_climate { plains, forest, wetland, river, lake, ocean, beach, underground };
+
+struct scene_biome {
+    landscape_climate landscape = landscape_climate::plains;
+    float mean_temperature_c = 0.f;
+    float mean_humidity = 0.f;
+};
+
 struct scene_snapshot {
     tripoint_abs_ms origin;
     std::optional<cutaway_room> pointer_room;
@@ -236,6 +278,7 @@ struct scene_snapshot {
     season_type season = SPRING;
     fp3d_sky::state sky;
     fp3d_weather::state weather;
+    scene_biome biome;
     fp3d_hud::data hud;
     std::vector<cell> cells;
     // Knowledge gaps only, with no live terrain identity or contents. Used
@@ -260,6 +303,11 @@ struct scene_snapshot {
     unsigned enumerated_vehicles = 0;
     unsigned visible_vehicle_parts = 0;
     std::optional<sprite> held_item;
+    std::string held_item_type;
+    int held_light = 0;
+    bool player_blind = false;
+    bool player_darkness = false;
+    float player_night_vision = 0.f;
     bool player_crouching = false;
     bool player_underwater = false;
     int min_z = 0;

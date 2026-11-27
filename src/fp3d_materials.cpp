@@ -3,6 +3,7 @@
 #if defined(TILES) && defined(ENABLE_FP3D)
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,6 +43,7 @@ unsigned material_revision = 0;
 std::unordered_map<std::string, unsigned> slots;
 // Colour-atlas insertion order is the authoritative 64x64 slot order.
 std::vector<std::string> slot_keys;
+std::bitset<max_slots> opaque_slots;
 std::unordered_map<unsigned, sprite_alpha_mask> sprite_alpha_masks;
 std::size_t auxiliary_cursor = 0;
 std::unordered_map<std::string, fp3d_material_aux::maps> auxiliary_cache;
@@ -71,6 +73,7 @@ void clear_slots()
 {
     slots.clear();
     slot_keys.clear();
+    opaque_slots.reset();
     sprite_alpha_masks.clear();
     auxiliary_cursor = 0;
     auxiliary_slots.clear();
@@ -126,7 +129,7 @@ struct saved_renderer_state {
     }
 };
 
-bool paint( int index, const SDL_Rect &slot )
+bool paint( int index, const SDL_Rect &slot, bool *opaque = nullptr )
 {
     if( index < 0 ) {
         return false;
@@ -143,7 +146,112 @@ bool paint( int index, const SDL_Rect &slot )
     const int w = std::max( 1, static_cast<int>( width * scale ) );
     const int h = std::max( 1, static_cast<int>( height * scale ) );
     const SDL_Rect dest{ slot.x + ( slot_size - w ) / 2, slot.y + ( slot_size - h ) / 2, w, h };
-    return sprite->render_copy_ex( *renderer_owner, &dest, 0, nullptr, SDL_FLIP_NONE ) == 0;
+    const bool drawn = sprite->render_copy_ex( *renderer_owner, &dest, 0, nullptr, SDL_FLIP_NONE ) == 0;
+    if( drawn && opaque && *opaque ) {
+        *opaque = sprite->preserves_opaque_destination();
+    }
+    return drawn;
+}
+
+bool paint_trimmed( SDL_Renderer *renderer, const SDL_Rect &slot, Uint8 *pixels, int width,
+                    int height )
+{
+    int left = width;
+    int top = height;
+    int right = -1;
+    int bottom = -1;
+    for( int y = 0; y < height; ++y ) {
+        for( int x = 0; x < width; ++x ) {
+            if( pixels[( y * width + x ) * 4 + 3] > 0 ) {
+                left = std::min( left, x );
+                top = std::min( top, y );
+                right = std::max( right, x );
+                bottom = std::max( bottom, y );
+            }
+        }
+    }
+    if( right < left || bottom < top ) {
+        return false;
+    }
+    SDL_Surface_Ptr surface( CreateSurfaceFromPixels( pixels, width, height, 32, width * 4,
+                             SDL_PIXELFORMAT_RGBA32 ) );
+    SDL_Texture_Ptr cropped( surface ? SDL_CreateTextureFromSurface( renderer, surface.get() ) : nullptr );
+    if( !cropped ) {
+        return false;
+    }
+    SDL_SetTextureScaleMode( cropped.get(), SDL_SCALEMODE_NEAREST );
+    SDL_SetTextureBlendMode( cropped.get(), SDL_BLENDMODE_NONE );
+    SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
+    RenderFillRectPixels( renderer, &slot );
+    const SDL_Rect source{ left, top, right - left + 1, bottom - top + 1 };
+    const float scale = ( slot_size - 4.f ) / std::max( source.w, source.h );
+    const int w = std::max( 1, static_cast<int>( source.w * scale ) );
+    const int h = std::max( 1, static_cast<int>( source.h * scale ) );
+    const SDL_Rect dest{ slot.x + ( slot_size - w ) / 2, slot.y + ( slot_size - h ) / 2, w, h };
+    return RenderTexturePixels( renderer, cropped.get(), &source, &dest ) == 0;
+}
+
+void remove_baked_tree_shadow( SDL_Renderer *renderer, const SDL_Rect &slot )
+{
+    std::array<Uint8, slot_size * slot_size * 4> rgba{};
+    if( ReadRenderPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32, rgba.data(), slot_size * 4 ) != 0 ) {
+        return;
+    }
+    bool changed = false;
+    // UndeadPeople draws the contact shadow as translucent black near the roots.
+    // Keep the existing atlas placement and the colored bark around it.
+    for( size_t i = slot_size * ( slot_size * 3 / 4 ) * 4; i < rgba.size(); i += 4 ) {
+        if( rgba[i + 3] > 0 && rgba[i + 3] < 255 &&
+            std::max( { rgba[i], rgba[i + 1], rgba[i + 2] } ) <= 2 ) {
+            rgba[i + 3] = 0;
+            changed = true;
+        }
+    }
+    if( changed ) {
+        SDL_Surface_Ptr surface( CreateSurfaceFromPixels( rgba.data(), slot_size, slot_size, 32,
+                                 slot_size * 4, SDL_PIXELFORMAT_RGBA32 ) );
+        SDL_Texture_Ptr clean( surface ? SDL_CreateTextureFromSurface( renderer, surface.get() ) : nullptr );
+        if( clean ) {
+            SDL_SetTextureBlendMode( clean.get(), SDL_BLENDMODE_NONE );
+            RenderTexturePixels( renderer, clean.get(), nullptr, &slot );
+        }
+    }
+}
+
+bool paint_native_badge( int index, const SDL_Rect &slot )
+{
+    const texture *sprite = index < 0 ? nullptr : selected->get_tile( index );
+    if( !sprite ) {
+        return false;
+    }
+    const auto [width, height] = sprite->dimension();
+    SDL_Renderer *renderer = renderer_owner->get();
+    SDL_Texture_Ptr native( SDL_CreateTexture( renderer, SDL_PIXELFORMAT_RGBA32,
+                            SDL_TEXTUREACCESS_TARGET, width, height ) );
+    if( !native ) {
+        return false;
+    }
+    std::vector<Uint8> rgba( static_cast<size_t>( width ) * height * 4 );
+    {
+        saved_renderer_state saved( renderer );
+        if( !SDL_SetRenderTarget( renderer, native.get() ) ) {
+            return false;
+        }
+        SetLogicalRenderSize( renderer, 0, 0 );
+        SDL_SetRenderScale( renderer, 1, 1 );
+        SDL_SetRenderViewport( renderer, nullptr );
+        SDL_SetRenderClipRect( renderer, nullptr );
+        SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
+        const SDL_Rect full{ 0, 0, width, height };
+        // A badge may occupy only three source pixels, including a one-pixel
+        // stroke. Crop at native resolution before downscaling that canvas.
+        if( !SDL_RenderClear( renderer ) ||
+            sprite->render_copy_ex( *renderer_owner, &full, 0, nullptr, SDL_FLIP_NONE ) != 0 ||
+            ReadRenderPixels( renderer, &full, SDL_PIXELFORMAT_RGBA32, rgba.data(), width * 4 ) != 0 ) {
+            return false;
+        }
+    }
+    return paint_trimmed( renderer, slot, rgba.data(), width, height );
 }
 
 bool paint_sprite( const fp3d_snapshot::sprite &image, const SDL_Rect &slot,
@@ -791,6 +899,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         // tileset's own weighted list maps back to this exact frame.
         bool animated_frame = false;
         unsigned sprite_loc_rand = 0;
+        bool water_art = false;
     };
     std::vector<request> pending;
     std::unordered_set<std::string> model_keys;
@@ -840,6 +949,12 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         }
     }
     const auto prioritize_cell = [&]( const fp3d_snapshot::cell &tile ) {
+        if( const auto *prop = fp3d_furniture::world_prop( tile.terrain ) ) {
+            std::string key = std::string( "$prop:" ) + prop->art;
+            if( pending.size() < max_slots && model_keys.insert( key ).second ) {
+                pending.push_back( { std::move( key ), nullptr, false, false, true } );
+            }
+        }
         if( ( tile.kind == fp3d_snapshot::terrain_kind::ladder ||
               tile.kind == fp3d_snapshot::terrain_kind::downspout ) && pending.size() < max_slots ) {
             std::string key = tile.terrain == "t_vitrified_downspout" ? "t_vitrified_floor" : "t_metal_floor";
@@ -847,7 +962,9 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 pending.push_back( { std::move( key ), nullptr } );
             }
         }
-        if( ( tile.kind == fp3d_snapshot::terrain_kind::fence ||
+        if( ( ( tile.kind == fp3d_snapshot::terrain_kind::fence &&
+                !fp3d_snapshot::guardrail_ground( tile.terrain ) &&
+                !fp3d_snapshot::is_prison_barrier( tile.terrain ) ) ||
               fp3d_snapshot::is_picket_gate( tile.terrain ) ) && pending.size() < max_slots ) {
             std::string key = fp3d_snapshot::is_picket_gate( tile.terrain ) ?
                               "$fence:t_fence" : "$fence:" + tile.terrain;
@@ -874,7 +991,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                 model_keys.insert( "t_metal_floor" ).second ) {
                 pending.push_back( { "t_metal_floor", nullptr } );
             }
-            std::string key = "$furniture:" + tile.furniture->id;
+            const auto *prop = fp3d_furniture::world_prop( tile.furniture->id );
+            std::string key = prop ? std::string( "$prop:" ) + prop->art : "$furniture:" + tile.furniture->id;
             if( pending.size() < max_slots && model_keys.insert( key ).second ) {
                 pending.push_back( { std::move( key ), nullptr, false, false, true } );
             }
@@ -938,22 +1056,37 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         clear_slots();
     }
     pending.erase( std::remove_if( pending.begin(), pending.end(), resident ), pending.end() );
-    const auto add = [&]( const std::string & key, const fp3d_snapshot::sprite * image ) {
+    const auto add = [&]( const std::string &key, const fp3d_snapshot::sprite *image,
+                          bool water_art = false ) {
         if( !slots.count( key ) && slots.size() + pending.size() < max_slots &&
         std::none_of( pending.begin(), pending.end(), [&]( const request & entry ) {
         return entry.key == key;
     } ) ) {
             pending.push_back( { key, image } );
+            pending.back().water_art = water_art;
         }
     };
     const auto add_cell = [&]( const fp3d_snapshot::cell &tile ) {
+        if( fp3d_furniture::world_prop( tile.terrain ) ) {
+            add( tile.ceiling_present || tile.glass_ceiling || tile.cutaway_ceiling ? "t_floor" : "t_dirt", nullptr );
+        }
+        if( tile.kind == fp3d_snapshot::terrain_kind::open_door ) {
+            const auto closed = fp3d_snapshot::closed_door_id( tile.terrain );
+            if( !closed.empty() ) {
+                add( closed, nullptr );
+            }
+        }
         if( tile.terrain == "t_column" || tile.terrain == "t_pillar" ||
             tile.terrain == "t_little_column" || tile.terrain == "t_column_halfway" ||
-            tile.terrain == "t_concrete_railing" ||
-            tile.terrain.compare( 0, 11, "t_guardrail" ) == 0 ) {
+            tile.terrain == "t_concrete_railing" ) {
             add( "t_concrete", nullptr );
         }
-        if( tile.kind == fp3d_snapshot::terrain_kind::ladder ) {
+        if( const char *road_surface = fp3d_snapshot::guardrail_ground( tile.terrain ) ) {
+            add( road_surface, nullptr );
+            add( "t_pavement", nullptr );
+        } else if( fp3d_snapshot::is_prison_barrier( tile.terrain ) ) {
+            add( "t_floor", nullptr );
+        } else if( tile.kind == fp3d_snapshot::terrain_kind::ladder ) {
             add( "t_concrete", nullptr );
         } else if( tile.kind == fp3d_snapshot::terrain_kind::downspout ||
                    tile.kind == fp3d_snapshot::terrain_kind::fence ||
@@ -978,9 +1111,10 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         } else if( tile.kind != fp3d_snapshot::terrain_kind::glass &&
                    tile.terrain.compare( 0, 9, "t_treetop" ) != 0 ) {
-            add( terrain_key( tile ), nullptr );
-            if( tile.ground_connections >= 0 && tile.ground_connections < 15 &&
-                fp3d_scene::water_surface_offset( tile.terrain ) < 0.f ) {
+            const bool connected_water = tile.ground_connections >= 0 &&
+                                         fp3d_scene::water_surface_offset( tile ) < 0.f;
+            add( terrain_key( tile ), nullptr, connected_water );
+            if( connected_water && tile.ground_connections < 15 ) {
                 add( "t_dirt", nullptr );
             }
         }
@@ -1098,15 +1232,16 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
     for( const request &entry : pending ) {
         const std::string &id = entry.key;
         const bool ground_art = id.compare( 0, 8, "$ground:" ) == 0;
+        const bool prop_art = id.compare( 0, 6, "$prop:" ) == 0;
         const auto ground_separator = ground_art ? id.find( ':', 8 ) : std::string::npos;
-        const bool water_art = ground_separator != std::string::npos &&
-                               fp3d_scene::water_surface_offset( id.substr( ground_separator + 1 ) ) < 0.f;
+        const bool water_art = entry.water_art && ground_separator != std::string::npos;
         const unsigned index = slots.size();
         const SDL_Rect slot{ static_cast<int>( index % slots_per_row ) * slot_size,
                              static_cast<int>( index / slots_per_row ) * slot_size, slot_size, slot_size };
         const bool transparent = entry.image || entry.plant || entry.window || entry.field ||
                                  entry.field_sprite >= 0 ||
                                  entry.fence || entry.vehicle || entry.status || water_art;
+        bool opaque = !transparent;
         SDL_SetRenderDrawColor( renderer, transparent ? 0 : 180, transparent ? 0 : 180,
                                 transparent ? 0 : 180, transparent ? 0 : 255 );
         RenderFillRectPixels( renderer, &slot );
@@ -1177,7 +1312,8 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         } else {
             tile = entry.fence ? resolve_terrain( *selected, id.substr( 7 ), season ) :
                    entry.image ? nullptr : entry.furniture ?
-                                resolve_vegetation( *selected, id.substr( 11 ), season ) : entry.window ?
+                                resolve_vegetation( *selected, id.substr( prop_art ? 6 : 11 ), season ) :
+                                entry.window ?
                                 resolve_terrain( *selected, id.substr( 8 ), season ) : entry.plant ?
                                 resolve_vegetation( *selected, id.substr( 7 ), season ) :
                                 resolve_terrain( *selected, id, season );
@@ -1229,11 +1365,19 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
             }
         }
         bool painted = false;
+        bool trimmed_badge = false;
         if( tile ) {
             const auto sprites = choose_sprites( *tile, id );
-            if( ( !roof_art && !ground_art && !entry.plant && !entry.window && !entry.field && !entry.fence ) ||
+            const auto *prop_frames = prop_art ? tile->fg.pick( 0 ) : nullptr;
+            if( prop_art && prop_frames && !prop_frames->empty() ) {
+                painted = paint( prop_frames->front(), slot, &opaque );
+            }
+            if( entry.status ) {
+                trimmed_badge = paint_native_badge( sprites.foreground, slot );
+            }
+            if( ( !prop_art && !roof_art && !ground_art && !entry.plant && !entry.window && !entry.field && !entry.fence ) ||
                 ( entry.window && sprites.foreground < 0 ) ) {
-                painted = paint( sprites.background, slot );
+                painted = paint( sprites.background, slot, &opaque );
             }
             if( roof_art || ground_art || entry.field ) {
                 // Connected ground, coverings and roof edges fill the tile without padding.
@@ -1251,12 +1395,16 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
                     const texture *source = selected->get_tile( index );
                     if( source ) {
                         const double angle = foreground && choices->size() == 1 ? -90.0 * rotation : 0;
-                        painted = source->render_copy_ex( *renderer_owner, &slot,
-                                  angle, nullptr, SDL_FLIP_NONE ) == 0 || painted;
+                        const bool drawn = source->render_copy_ex( *renderer_owner, &slot, angle,
+                                           nullptr, SDL_FLIP_NONE ) == 0;
+                        if( drawn && opaque ) {
+                            opaque = source->preserves_opaque_destination();
+                        }
+                        painted |= drawn;
                     }
                 }
-            } else {
-                painted = paint( sprites.foreground, slot ) || painted;
+            } else if( !prop_art ) {
+                painted = trimmed_badge || paint( sprites.foreground, slot, &opaque ) || painted;
             }
         }
         if( entry.image ) {
@@ -1267,42 +1415,19 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         if( entry.field_sprite >= 0 ) {
             painted = paint( entry.field_sprite, slot );
         }
-        if( painted && ( entry.status || id == "$plant:f_planter_seedling" ) ) {
+        if( painted && entry.plant && selected->get_tileset_id() == "UNDEAD_PEOPLE_BASE" ) {
+            const ter_str_id plant( id.substr( 7 ) );
+            if( plant.is_valid() && ( plant->has_flag( ter_furn_flag::TFLAG_TREE ) ||
+                                      plant->has_flag( ter_furn_flag::TFLAG_YOUNG ) ) ) {
+                remove_baked_tree_shadow( renderer, slot );
+            }
+        }
+        if( painted && ( ( entry.status && !trimmed_badge ) || id == "$plant:f_planter_seedling" ) ) {
             // Fit badges and isolated planter foliage inside their 3D quads.
             std::array<Uint8, slot_size * slot_size * 4> pixels{};
             if( ReadRenderPixels( renderer, &slot, SDL_PIXELFORMAT_RGBA32,
                                       pixels.data(), slot_size * 4 ) == 0 ) {
-                int left = slot_size;
-                int top = slot_size;
-                int right = -1;
-                int bottom = -1;
-                for( int y = 0; y < slot_size; ++y ) {
-                    for( int x = 0; x < slot_size; ++x ) {
-                        if( pixels[( y * slot_size + x ) * 4 + 3] > 0 ) {
-                            left = std::min( left, x );
-                            top = std::min( top, y );
-                            right = std::max( right, x );
-                            bottom = std::max( bottom, y );
-                        }
-                    }
-                }
-                if( right >= left && bottom >= top ) {
-                    SDL_Surface_Ptr surface( CreateSurfaceFromPixels( pixels.data(),
-                                             slot_size, slot_size, 32, slot_size * 4, SDL_PIXELFORMAT_RGBA32 ) );
-                    SDL_Texture_Ptr cropped( surface ? SDL_CreateTextureFromSurface( renderer, surface.get() ) :
-                                             nullptr );
-                    if( cropped ) {
-                        SDL_SetRenderDrawColor( renderer, 0, 0, 0, 0 );
-                        RenderFillRectPixels( renderer, &slot );
-                        const SDL_Rect source{ left, top, right - left + 1, bottom - top + 1 };
-                        const float scale = ( slot_size - 4.f ) / std::max( source.w, source.h );
-                        const int w = std::max( 1, static_cast<int>( source.w * scale ) );
-                        const int h = std::max( 1, static_cast<int>( source.h * scale ) );
-                        const SDL_Rect dest{ slot.x + ( slot_size - w ) / 2,
-                                             slot.y + ( slot_size - h ) / 2, w, h };
-                        RenderTexturePixels( renderer, cropped.get(), &source, &dest );
-                    }
-                }
+                paint_trimmed( renderer, slot, pixels.data(), slot_size, slot_size );
             }
         }
         if( !painted && entry.field ) {
@@ -1417,6 +1542,7 @@ void prepare( const fp3d_snapshot::scene_snapshot &scene, const fp3d_snapshot::c
         } else {
             sprite_alpha_masks.erase( index );
         }
+        opaque_slots.set( index, opaque );
         slots.emplace( id, index );
         slot_keys.push_back( id );
     }
@@ -1471,6 +1597,20 @@ std::optional<uv_rect> lookup_gpu( const std::string &id )
                     ( y + slot_size - inset ) / atlas_size };
 }
 
+
+bool gpu_rect_is_opaque( const uv_rect &uv )
+{
+    if( !( uv.left >= 0 && uv.top >= 0 && uv.right < 1 && uv.bottom < 1 &&
+           uv.left < uv.right && uv.top < uv.bottom ) ) {
+        return false;
+    }
+    const auto slot = []( float u, float v ) {
+        return static_cast<int>( v * slots_per_row ) * slots_per_row +
+               static_cast<int>( u * slots_per_row );
+    };
+    const auto index = slot( uv.left, uv.top );
+    return index == slot( uv.right, uv.bottom ) && opaque_slots[index];
+}
 
 std::optional<uv_rect> picket_wood_gpu()
 {
@@ -1659,6 +1799,42 @@ const std::vector<auxiliary_tile> &auxiliary_tiles()
 static furniture_uv furniture_surfaces( const std::string &id, unsigned part_index,
         std::optional<uv_rect> ( *lookup_surface )( const std::string & ) )
 {
+    if( const auto *prop = fp3d_furniture::world_prop( id ) ) {
+        if( !selected || selected->get_tileset_id() != "UNDEAD_PEOPLE_BASE" ) {
+            return {};
+        }
+        auto art = selected->find_tile_type_by_season( prop->art, season );
+        const auto *frames = art ? art->tile().fg.pick( 0 ) : nullptr;
+        const auto *sprite = frames && !frames->empty() ? selected->get_tile( frames->front() ) : nullptr;
+        if( !sprite ) {
+            return {};
+        }
+        const auto source = lookup_surface( std::string( "$prop:" ) + prop->art );
+        if( !source ) {
+            return {};
+        }
+        const auto [width, height] = sprite->dimension();
+        const int extent = std::max( width, height );
+        const float u = ( source->right - source->left ) * width / ( 31.f * extent );
+        const float v = ( source->bottom - source->top ) * height / ( 31.f * extent );
+        const float left = ( source->left + source->right - 31.f * u ) * .5f;
+        const float top = ( source->top + source->bottom - 31.f * v ) * .5f;
+        const auto crop = [&]( const std::array<int, 4> &patch ) {
+            return uv_rect{ left + patch[0] * u, top + patch[1] * v,
+                            left + patch[2] * u, top + patch[3] * v };
+        };
+        const auto shell = crop( fp3d_furniture::world_prop_shell( *prop, part_index ) );
+        furniture_uv result{ shell, shell, shell, shell };
+        if( prop->panel_part >= 0 && part_index == static_cast<unsigned>( prop->panel_part ) ) {
+            if( prop->shape == fp3d_furniture::kind::prop_pedestal ||
+                prop->shape == fp3d_furniture::kind::prop_hatch ) {
+                result.top = crop( prop->panel );
+            } else {
+                result.front = crop( prop->panel );
+            }
+        }
+        return result;
+    }
     const auto surface = lookup_surface( "$furniture:" + id );
     furniture_uv result{ surface, surface, surface };
     const bool display_rack = id == "f_rack" || id == "f_rack_l" || id == "f_rack_wood";

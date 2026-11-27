@@ -338,42 +338,9 @@ std::vector<property_record> parse_properties( std::string_view source )
     size_t number = 0;
     size_t start = 0;
     bool continued = false;
-    for( std::string line; std::getline( input, line ); ) {
-        ++number;
-        if( !line.empty() && line.back() == '\r' ) {
-            line.pop_back();
-        }
-        if( !continued ) {
-            start = number;
-            logical.clear();
-        }
-        const auto content = left_trim( line );
-        if( !continued && !content.empty() && ( content.front() == '#' || content.front() == '!' ) ) {
-            if( content.front() == '#' ) {
-                auto body = left_trim( content.substr( 1 ) );
-                const auto command = body.substr( 0, body.find_first_of( whitespace ) );
-                if( command == "if" || command == "ifdef" || command == "ifndef" ) {
-                    ++conditional_depth;
-                }
-                if( command == "if" || command == "ifdef" || command == "ifndef" ||
-                    command == "elif" || command == "else" || command == "endif" ||
-                    command == "define" || command == "undef" || command == "include" ) {
-                    records.push_back( { std::string( command ),
-                                         std::string( left_trim( body.substr( command.size() ) ) ),
-                                         number, true, conditional_depth != 0 } );
-                }
-                if( command == "endif" && conditional_depth ) {
-                    --conditional_depth;
-                }
-            }
-            continue;
-        }
-        auto last = content.find_last_not_of( '\\' );
-        const auto backslashes = last == content.npos ? content.size() : content.size() - last - 1;
-        continued = backslashes % 2 != 0 && input.peek() != std::char_traits<char>::eof();
-        logical += content.substr( 0, content.size() - ( continued ? 1 : 0 ) );
-        if( continued || logical.empty() ) {
-            continue;
+    const auto append_property = [&]() {
+        if( logical.empty() ) {
+            return;
         }
         size_t split = 0;
         for( ; split < logical.size(); ++split ) {
@@ -391,6 +358,51 @@ std::vector<property_record> parse_properties( std::string_view source )
         }
         records.push_back( { unescape( text.substr( 0, split ) ), unescape( value ), start, false,
                              conditional_depth != 0 } );
+    };
+    for( std::string line; std::getline( input, line ); ) {
+        ++number;
+        if( !line.empty() && line.back() == '\r' ) {
+            line.pop_back();
+        }
+        if( !continued ) {
+            start = number;
+            logical.clear();
+        }
+        const auto content = left_trim( line );
+        if( !content.empty() && ( content.front() == '#' || content.front() == '!' ) ) {
+            if( content.front() == '#' ) {
+                auto body = left_trim( content.substr( 1 ) );
+                const auto command = body.substr( 0, body.find_first_of( whitespace ) );
+                if( command == "if" || command == "ifdef" || command == "ifndef" ||
+                    command == "elif" || command == "else" || command == "endif" ||
+                    command == "define" || command == "undef" || command == "include" ) {
+                    if( continued ) {
+                        append_property();
+                        logical.clear();
+                        continued = false;
+                    }
+                    if( command == "if" || command == "ifdef" || command == "ifndef" ) {
+                        ++conditional_depth;
+                    }
+                    records.push_back( { std::string( command ),
+                                         std::string( left_trim( body.substr( command.size() ) ) ),
+                                         number, true, conditional_depth != 0 } );
+                }
+                if( command == "endif" && conditional_depth ) {
+                    --conditional_depth;
+                }
+            }
+            if( !continued ) {
+                continue;
+            }
+        }
+        auto last = content.find_last_not_of( '\\' );
+        const auto backslashes = last == content.npos ? content.size() : content.size() - last - 1;
+        continued = backslashes % 2 != 0 && input.peek() != std::char_traits<char>::eof();
+        logical += content.substr( 0, content.size() - ( continued ? 1 : 0 ) );
+        if( !continued ) {
+            append_property();
+        }
     }
     return records;
 }
@@ -455,7 +467,37 @@ pack_properties inspect_properties( const pack_text &pack, const property_macros
             } else if( file == "shaders.properties" ) {
                 constexpr std::string_view program_prefix = "program.";
                 constexpr std::string_view enabled_suffix = ".enabled";
-                if( key.compare( 0, 5, "flip." ) == 0 ) {
+                const bool variable = key.compare( 0, 9, "variable." ) == 0;
+                if( variable || key.compare( 0, 8, "uniform." ) == 0 ) {
+                    const size_t first = variable ? 9 : 8;
+                    const auto separator = key.find( '.', first );
+                    if( separator == key.npos || separator == first || separator + 1 == key.size() ||
+                        record.value.empty() ) {
+                        result.error = file + ":" + std::to_string( record.line ) + ": invalid custom uniform " + key;
+                        return result;
+                    }
+                    result.uniform_expressions.insert_or_assign( key.substr( separator + 1 ),
+                    custom_uniform_expression{ key.substr( first, separator - first ),
+                                               record.value, record.line, variable } );
+                } else if( key == "texture.noise" ) {
+                    result.noise_texture = record.value;
+                } else if( key.compare( 0, 8, "texture." ) == 0 ||
+                           key.compare( 0, 14, "customTexture." ) == 0 ) {
+                    const bool global = key.compare( 0, 14, "customTexture." ) == 0;
+                    const auto separator = global ? 13 : key.find( '.', 8 );
+                    if( separator == key.npos || separator + 1 == key.size() ) {
+                        continue;
+                    }
+                    const auto suffix = key.find( '.', separator + 1 );
+                    const auto sampler = key.substr( separator + 1, suffix - separator - 1 );
+                    auto parts = words( record.value );
+                    if( !parts.empty() ) {
+                        const std::string type = parts.size() > 1 && parts[1] == "TEXTURE_3D" ?
+                                                 "sampler3D" : "sampler2D";
+                        result.custom_textures[{ global ? "" : key.substr( 8, separator - 8 ),
+                                                 sampler, type }] = std::move( parts );
+                    }
+                } else if( key.compare( 0, 5, "flip." ) == 0 ) {
                     const auto separator = key.rfind( '.' );
                     const auto buffer = color_buffer_name( std::string_view( key ).substr( separator + 1 ) );
                     if( separator <= 5 || buffer.empty() ||
@@ -506,6 +548,108 @@ pack_properties inspect_properties( const pack_text &pack, const property_macros
                 }
             }
         }
+    }
+    return result;
+}
+pack_source prepare_pack_source( const std::filesystem::path &path )
+{
+    pack_source result;
+    result.path = path;
+    result.inventory = inspect_pack( path );
+    result.text = load_pack_text( path, result.inventory );
+    if( !result.text.error.empty() ) {
+        result.error = result.text.error;
+        return result;
+    }
+    result.properties = inspect_properties( result.text );
+    if( !result.properties.error.empty() ) {
+        result.error = result.properties.error;
+        return result;
+    }
+    if( result.text.files.count( "dimension.properties" ) ) {
+        std::string wildcard;
+        for( const auto &[folder, dimensions] : result.properties.dimensions ) {
+            if( folder.empty() || folder == "." || folder == ".." ||
+                folder.find_first_of( "/\\:" ) != std::string::npos ) {
+                result.error = "Invalid Iris dimension folder: " + folder;
+                return result;
+            }
+            for( const auto &dimension : dimensions ) {
+                auto *selected = dimension == "overworld" || dimension == "minecraft:overworld" ||
+                                 dimension == "the_overworld" || dimension == "minecraft:the_overworld" ?
+                                 &result.program_directory : dimension == "*" ? &wildcard : nullptr;
+                if( selected ) {
+                    if( !selected->empty() && *selected != folder ) {
+                        result.error = "Conflicting Iris dimension mapping: " + dimension;
+                        return result;
+                    }
+                    *selected = folder;
+                }
+            }
+        }
+        if( result.program_directory.empty() ) {
+            result.program_directory = wildcard;
+        }
+    } else {
+        for( const auto &file : result.inventory.files ) {
+            const std::string_view name( file );
+            const auto folder = name.substr( 0, name.find( '/' ) );
+            if( folder.substr( 0, 5 ) == "world" && folder.size() > 5 && folder.size() < name.size() ) {
+                const auto suffix = folder.substr( folder[5] == '-' ? 6 : 5 );
+                if( !suffix.empty() && suffix.find_first_not_of( "0123456789" ) == suffix.npos ) {
+                    result.program_directory = "world0";
+                    break;
+                }
+            }
+        }
+    }
+    for( const auto &entry : result.inventory.programs ) {
+        const auto &program = entry.first;
+        const auto slash = program.rfind( '/' );
+        const auto directory = slash == program.npos ? std::string{} : program.substr( 0, slash );
+        if( directory == result.program_directory ) {
+            result.programs.push_back( program );
+        }
+    }
+    if( result.programs.empty() ) {
+        result.error = "No Iris programs for the Overworld";
+    }
+    return result;
+}
+pack_compilation prepare_pack_compilation( const pack_source &pack, const property_macros &options )
+{
+    pack_compilation result;
+    if( !pack.error.empty() ) {
+        result.error = pack.error;
+        return result;
+    }
+    result.properties = inspect_properties( pack.text, &options );
+    if( !result.properties.error.empty() ) {
+        result.error = result.properties.error;
+        return result;
+    }
+    for( const auto &path : pack.programs ) {
+        const auto slash = path.rfind( '/' );
+        const auto name = slash == path.npos ? path : path.substr( slash + 1 );
+        auto condition = result.properties.program_enabled.find( path );
+        if( condition == result.properties.program_enabled.end() ) {
+            condition = result.properties.program_enabled.find( name );
+        }
+        if( condition != result.properties.program_enabled.end() && !condition->second ) {
+            continue;
+        }
+        const auto program = pack.inventory.programs.find( path );
+        if( program == pack.inventory.programs.end() ) {
+            result.error = "Missing Iris program inventory entry: " + path;
+            return result;
+        }
+        program_source_job job{ name, program->second, {} };
+        const bool vertex = job.stages.count( shader_stage::vertex );
+        const bool fragment = job.stages.count( shader_stage::fragment );
+        if( vertex != fragment ) {
+            job.error = "Missing graphics stage in Iris program: " + path;
+        }
+        result.programs.push_back( std::move( job ) );
     }
     return result;
 }

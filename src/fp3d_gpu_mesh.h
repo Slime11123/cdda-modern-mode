@@ -4,6 +4,7 @@
 
 #include "fp3d_geometry.h"
 #include "fp3d_gpu_buffer.h"
+#include <type_traits>
 
 namespace fp3d_gpu
 {
@@ -17,44 +18,57 @@ class indexed_mesh
         indexed_mesh &operator=( const indexed_mesh & ) = delete;
 
         bool initialize( SDL_GPUDevice *device, const fp3d_geometry::mesh &mesh ) {
+            return initialize( device, mesh.vertices, mesh.indices );
+        }
+
+        // The pipeline declares the input layout for this vertex stream.
+        template<typename Vertex>
+        bool initialize( SDL_GPUDevice *device, const std::vector<Vertex> &vertices,
+                         const std::vector<std::uint32_t> &indices ) {
+            static_assert( std::is_trivially_copyable_v<Vertex> );
             if( count_ ) {
                 return SDL_SetError( "FP3D indexed mesh already initialized" );
             }
-            return stage( device, mesh );
+            return stage_vertices( device, vertices.data(), vertices.size(), sizeof( Vertex ), indices, false );
         }
 
         // A slot must retire its previous GPU use before staging another mesh.
         bool stage( SDL_GPUDevice *device, const fp3d_geometry::mesh &mesh, bool retain = false ) {
+            return stage_vertices( device, mesh.vertices.data(), mesh.vertices.size(),
+                                   sizeof( fp3d_geometry::vertex ), mesh.indices, retain );
+        }
+
+    private:
+        bool stage_vertices( SDL_GPUDevice *device, const void *vertices, size_t vertex_count,
+                             size_t stride, const std::vector<std::uint32_t> &indices, bool retain ) {
             count_ = 0;
             uploaded_ = false;
             retained_ = retain;
-            if( mesh.vertices.empty() || mesh.indices.empty() ||
-                mesh.indices.size() % 3 != 0 ||
-                mesh.vertices.size() > SDL_MAX_UINT32 / sizeof( fp3d_geometry::vertex ) ||
-                mesh.indices.size() > SDL_MAX_UINT32 / sizeof( std::uint32_t ) ) {
+            if( !vertex_count || indices.empty() || indices.size() % 3 != 0 ||
+                vertex_count > SDL_MAX_UINT32 / stride ||
+                indices.size() > SDL_MAX_UINT32 / sizeof( std::uint32_t ) ) {
                 return SDL_SetError( "Invalid FP3D indexed mesh" );
             }
-            for( const auto index : mesh.indices ) {
-                if( index >= mesh.vertices.size() ) {
+            for( const auto index : indices ) {
+                if( index >= vertex_count ) {
                     return SDL_SetError( "FP3D vertex index out of range" );
                 }
             }
-            const Uint32 vb = static_cast<Uint32>( mesh.vertices.size() *
-                                                  sizeof( fp3d_geometry::vertex ) );
-            const Uint32 ib = static_cast<Uint32>( mesh.indices.size() * sizeof( std::uint32_t ) );
+            const Uint32 vb = static_cast<Uint32>( vertex_count * stride );
+            const Uint32 ib = static_cast<Uint32>( indices.size() * sizeof( std::uint32_t ) );
             if( !vertices_.reserve( device, vb, SDL_GPU_BUFFERUSAGE_VERTEX ) ||
                 !indices_.reserve( device, ib, SDL_GPU_BUFFERUSAGE_INDEX ) ||
-                !( retain ? vertices_.stage_delta( mesh.vertices.data(), vb ) :
-                   vertices_.stage( mesh.vertices.data(), vb ) ) ||
-                !( retain ? indices_.stage_delta( mesh.indices.data(), ib ) :
-                   indices_.stage( mesh.indices.data(), ib ) ) ) {
+                !( retain ? vertices_.stage_delta( vertices, vb ) : vertices_.stage( vertices, vb ) ) ||
+                !( retain ? indices_.stage_delta( indices.data(), ib ) :
+                   indices_.stage( indices.data(), ib ) ) ) {
                 reset();
                 return false;
             }
-            count_ = static_cast<Uint32>( mesh.indices.size() );
+            count_ = static_cast<Uint32>( indices.size() );
             return true;
         }
 
+    public:
         // The copy pass and later render pass must be on ordered GPU commands.
         bool record( SDL_GPUCopyPass *pass ) {
             if( !count_ || uploaded_ || !pass ) {
@@ -157,6 +171,7 @@ struct indexed_draw {
     Uint32 first_instance;
     Uint32 instance_count;
     SDL_GPUBuffer *instances;
+    SDL_GPUBuffer *instance_light = nullptr;
 
     indexed_draw( const indexed_mesh *mesh, Uint32 first_index, Uint32 index_count,
                   Uint32 first_instance, Uint32 instance_count, SDL_GPUBuffer *instances ) :
@@ -177,6 +192,10 @@ struct indexed_draw {
         if( instances ) {
             const SDL_GPUBufferBinding binding{ instances, 0 };
             SDL_BindGPUVertexBuffers( pass, 1, &binding, 1 );
+        }
+        if( instance_light ) {
+            const SDL_GPUBufferBinding binding{ instance_light, 0 };
+            SDL_BindGPUVertexBuffers( pass, 2, &binding, 1 );
         }
         return mesh->draw_range( pass, first_index, index_count, instance_count, first_instance );
     }

@@ -44,6 +44,10 @@ struct block_light_source {
 using block_light_topology = std::unordered_map<tripoint_abs_ms, block_light_cell>;
 using block_light_levels = std::unordered_map<tripoint_abs_ms, std::uint8_t>;
 
+int light_level_at( const block_light_levels &levels, const tripoint_abs_ms &position );
+std::array<int, 2> eye_brightness_at( const tripoint_abs_ms &position,
+                                     const block_light_levels &block, const block_light_levels &sky );
+
 // The input contains only cells with known render topology. Unlisted cells do
 // not propagate or expose light. Sky light and native brightness are separate.
 block_light_levels propagate_block_light( const block_light_topology &topology,

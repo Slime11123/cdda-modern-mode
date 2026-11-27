@@ -13,6 +13,7 @@
 
 #include "fp3d_iris_render_graph.h"
 #if defined(TILES) && defined(ENABLE_FP3D)
+#include "fp3d_gpu_target.h"
 #include "fp3d_iris_targets.h"
 #endif
 
@@ -22,13 +23,40 @@ struct graph_image_spec {
     SDL_GPUTextureFormat format;
     Uint32 width;
     Uint32 height;
+    Uint32 depth = 1;
+    SDL_GPUTextureType type = SDL_GPU_TEXTURETYPE_2D;
+    bool opaque_alpha = false;
+    std::array<float, 4> clear_color{};
 
     bool operator==( const graph_image_spec &other ) const {
-        return format == other.format && width == other.width && height == other.height;
+        return format == other.format && width == other.width && height == other.height &&
+               depth == other.depth && type == other.type && opaque_alpha == other.opaque_alpha &&
+               clear_color == other.clear_color;
     }
 };
 
 #if defined(TILES) && defined(ENABLE_FP3D)
+struct borrowed_graph_image {
+    SDL_GPUTexture *texture = nullptr;
+    graph_image_spec spec{};
+};
+
+struct borrowed_scene_images {
+    borrowed_graph_image color;
+    borrowed_graph_image depth;
+};
+
+// Call after recording the native pass that stores both attachments. The
+// frame slot owns the target until the Iris command buffer has retired.
+inline borrowed_scene_images borrow_scene_images( const fp3d_gpu::scene_target &target )
+{
+    return {
+        { target.native_color(), { target.color_format(), target.width(), target.height() } },
+        { target.sampleable_depth() ? target.depth() : nullptr,
+          { target.depth_format(), target.width(), target.height() } }
+    };
+}
+
 // Resolve every logical version against the same description of its buffer.
 // The caller uses the resulting specs for external textures as well as graph outputs.
 inline bool resolve_pack_image_specs( const pack_fullscreen_graph &plan,
@@ -72,6 +100,39 @@ inline bool resolve_pack_image_specs( const pack_fullscreen_graph &plan,
     resolved = std::move( result );
     return true;
 }
+
+// Borrowed textures are keyed by their exact graph versions. Resolve their
+// descriptions alongside new attachments and check the real dimensions
+// against the pack settings before any command can use a borrowed resource.
+inline bool resolve_pack_resources( const pack_fullscreen_graph &plan,
+                                    const pack_properties &properties,
+                                    std::map<std::string, graph_image_spec> base_specs,
+                                    const std::map<std::string, borrowed_graph_image> &available,
+                                    std::map<std::string, SDL_GPUTexture *> &external,
+                                    std::map<std::string, graph_image_spec> &specs )
+{
+    std::map<std::string, SDL_GPUTexture *> imports;
+    for( const auto &name : plan.external ) {
+        const auto image = available.find( name );
+        if( image == available.end() || !image->second.texture ) {
+            return SDL_SetError( "Missing Iris frame texture: %s", name.c_str() );
+        }
+        base_specs.emplace( name.substr( 0, name.find( ':' ) ), image->second.spec );
+        imports.emplace( name, image->second.texture );
+    }
+    std::map<std::string, graph_image_spec> layout;
+    if( !resolve_pack_image_specs( plan, properties, base_specs, layout ) ) {
+        return false;
+    }
+    for( const auto &name : plan.external ) {
+        if( !( available.at( name ).spec == layout.at( name ) ) ) {
+            return SDL_SetError( "Iris frame texture description mismatch: %s", name.c_str() );
+        }
+    }
+    external = std::move( imports );
+    specs = std::move( layout );
+    return true;
+}
 #endif
 
 struct release_graph_texture {
@@ -87,17 +148,18 @@ inline graph_texture create_graph_texture( SDL_GPUDevice *device, const graph_im
 {
     graph_texture texture( nullptr, release_graph_texture{ device } );
     if( !device || !spec.width || !spec.height ||
-        !SDL_GPUTextureSupportsFormat( device, spec.format, SDL_GPU_TEXTURETYPE_2D, usage ) ) {
+        !spec.depth || !SDL_GPUTextureSupportsFormat( device, spec.format, spec.type, usage ) ) {
         SDL_SetError( "Unsupported Iris texture description" );
         return texture;
     }
     SDL_GPUTextureCreateInfo info{};
-    info.type = SDL_GPU_TEXTURETYPE_2D;
+    info.type = spec.type;
     info.format = spec.format;
     info.usage = usage;
     info.width = spec.width;
     info.height = spec.height;
-    info.layer_count_or_depth = info.num_levels = 1;
+    info.layer_count_or_depth = spec.depth;
+    info.num_levels = 1;
     texture.reset( SDL_CreateGPUTexture( device, &info ) );
     return texture;
 }
@@ -110,7 +172,8 @@ class graph_images
         bool initialize( SDL_GPUDevice *device,
                          const std::map<std::string, SDL_GPUTexture *> &external,
                          const std::vector<graph_pass> &passes, const std::string &output,
-                         const std::map<std::string, graph_image_spec> &declared ) {
+                         const std::map<std::string, graph_image_spec> &declared,
+                         const std::map<std::string, std::string> &history = {} ) {
             if( !device || initialized_ ) {
                 return SDL_SetError( "Invalid or already initialized Iris graph images" );
             }
@@ -140,6 +203,10 @@ class graph_images
                     first = &spec;
                 }
             }
+            std::set<std::string> retained;
+            for( const auto &[initial, final] : history ) {
+                retained.insert( final );
+            }
             std::vector<slot> owned;
             auto images = external;
             for( size_t first_write = 0; first_write < passes.size(); ++first_write ) {
@@ -150,7 +217,7 @@ class graph_images
                             ( pass.kind == pass_kind::compute ? SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE :
                               name == pass.depth_write ? SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET :
                               SDL_GPU_TEXTUREUSAGE_COLOR_TARGET );
-                    const auto last_use = plan.last_use.at( name );
+                    const auto last_use = retained.count( name ) ? passes.size() : plan.last_use.at( name );
                     const auto available = std::find_if( owned.begin(), owned.end(), [&]( const slot &entry ) {
                         return entry.last_use < first_write && entry.spec == spec && entry.usage == usage;
                     } );
@@ -189,6 +256,27 @@ class graph_images
         std::vector<slot> owned_;
         bool initialized_ = false;
 };
+
+#if defined(TILES) && defined(ENABLE_FP3D)
+struct pack_graph_images {
+    graph_images textures;
+    std::map<std::string, graph_image_spec> specs;
+};
+
+inline std::unique_ptr<pack_graph_images> prepare_pack_graph_images( SDL_GPUDevice *device,
+        const pack_fullscreen_graph &plan, const pack_properties &properties,
+        const std::map<std::string, graph_image_spec> &outputs,
+        const std::map<std::string, borrowed_graph_image> &available )
+{
+    auto frame = std::make_unique<pack_graph_images>();
+    std::map<std::string, SDL_GPUTexture *> external;
+    if( !resolve_pack_resources( plan, properties, outputs, available, external, frame->specs ) ||
+        !frame->textures.initialize( device, external, plan.passes, plan.output, frame->specs, plan.history ) ) {
+        return nullptr;
+    }
+    return frame;
+}
+#endif
 
 // Own a pair of persistent color attachments. The caller serializes history
 // writes on the GPU queue and keeps both textures alive until its fences retire.

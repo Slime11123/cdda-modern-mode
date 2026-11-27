@@ -108,6 +108,10 @@ Texture2D<float> point_depth : register(t4, space2);
 SamplerState point_sampler : register(s4, space2);
 Texture2D<float4> pbr_material : register(t5, space2);
 SamplerState pbr_sampler : register(s5, space2);
+#ifdef FP3D_BEHIND_WATER
+Texture2D<float> water_depth : register(t6, space2);
+SamplerState water_sampler : register(s6, space2);
+#endif
 cbuffer Atmosphere : register(b0, space3) {
     float4 fog_color_start;
     float4 fog_inverse_range_and_padding;
@@ -313,6 +317,13 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0,
             float forward_depth : TEXCOORD2, float3 world_position : TEXCOORD3,
             float3 world_normal : TEXCOORD4, float3 ambient_color : TEXCOORD5) : SV_Target0 {
     float4 c = material_color(uv, color, material_mode);
+#ifdef FP3D_BEHIND_WATER
+    uint width, height;
+    water_depth.GetDimensions(width, height);
+    float surface = water_depth.SampleLevel(water_sampler, pos.xy / float2(width, height), 0);
+    if (pos.z <= surface)
+        discard;
+#endif
     if (material_mode == 3.0 || abs(material_mode) == 4.0)
         return c;
     bool lit = (material_mode >= -1.0 && material_mode <= 1.0) || material_mode == -3.0 ||
@@ -359,6 +370,28 @@ struct mesh_instance {
     std::array<float, 4> uv_rect{0,0,1,1};
     std::array<float, 4> tint{1,1,1,1};
 };
+
+inline SDL_GPUVertexInputState native_mesh_vertex_input( bool terrain_light = false )
+{
+    static constexpr SDL_GPUVertexBufferDescription buffers[] = {
+        { 0, sizeof( fp3d_geometry::vertex ), SDL_GPU_VERTEXINPUTRATE_VERTEX, 0 },
+        { 1, sizeof( mesh_instance ), SDL_GPU_VERTEXINPUTRATE_INSTANCE, 0 },
+        { 2, sizeof( Uint32 ), SDL_GPU_VERTEXINPUTRATE_INSTANCE, 0 }
+    };
+    static constexpr SDL_GPUVertexAttribute attributes[] = {
+        { 0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof( fp3d_geometry::vertex, position ) },
+        { 1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof( fp3d_geometry::vertex, uv ) },
+        { 2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof( fp3d_geometry::vertex, color ) },
+        { 3, 1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof( mesh_instance, offset ) },
+        { 4, 1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof( mesh_instance, uv_rect ) },
+        { 5, 1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof( mesh_instance, tint ) },
+        { 6, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof( fp3d_geometry::vertex, normal ) },
+        { 7, 2, SDL_GPU_VERTEXELEMENTFORMAT_UINT, 0 }
+    };
+    const Uint32 extra = terrain_light ? 0 : 1;
+    return { buffers, static_cast<Uint32>( SDL_arraysize( buffers ) ) - extra,
+             attributes, static_cast<Uint32>( SDL_arraysize( attributes ) ) - extra };
+}
 
 struct directional_light {
     std::array<float, 4> direction_ambient{ 0, 1, 0, 1 };
@@ -419,7 +452,8 @@ class textured_pipeline
         // Vertex and fragment resources can be released after pipeline creation.
         // Caller owns borrowed atlas and instance buffer until frame retirement.
         bool initialize( SDL_GPUDevice *device, SDL_GPUShader *vs, SDL_GPUShader *fs,
-                         mesh_pass state = mesh_pass::opaque ) {
+                         mesh_pass state = mesh_pass::opaque,
+                         SDL_GPUTextureFormat format = scene_target::color_format() ) {
             if( !device || !vs || !fs || pipeline_ || sampler_ ) {
                 return SDL_SetError( "Invalid FP3D textured pipeline" );
             }
@@ -434,21 +468,8 @@ class textured_pipeline
                 reset();
                 return false;
             }
-            const SDL_GPUVertexBufferDescription buffers[] = {
-                {0, sizeof(fp3d_geometry::vertex), SDL_GPU_VERTEXINPUTRATE_VERTEX, 0},
-                {1, sizeof(mesh_instance), SDL_GPU_VERTEXINPUTRATE_INSTANCE, 0}
-            };
-            const SDL_GPUVertexAttribute attributes[] = {
-                {0,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(fp3d_geometry::vertex,position)},
-                {1,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,offsetof(fp3d_geometry::vertex,uv)},
-                {2,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(fp3d_geometry::vertex,color)},
-                {3,1,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(mesh_instance,offset)},
-                {4,1,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(mesh_instance,uv_rect)},
-                {5,1,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4,offsetof(mesh_instance,tint)},
-                {6,0,SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,offsetof(fp3d_geometry::vertex,normal)}
-            };
             SDL_GPUColorTargetDescription color{};
-            color.format = scene_target::color_format();
+            color.format = format;
             if( state == mesh_pass::blend ) {
                 color.blend_state.enable_blend = true;
                 color.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
@@ -461,7 +482,7 @@ class textured_pipeline
             SDL_GPUGraphicsPipelineCreateInfo info{};
             info.vertex_shader = vs;
             info.fragment_shader = fs;
-            info.vertex_input_state = {buffers,2,attributes,7};
+            info.vertex_input_state = native_mesh_vertex_input();
             info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
             info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
             info.depth_stencil_state.enable_depth_test = state != mesh_pass::overlay;
@@ -487,7 +508,8 @@ class textured_pipeline
                    SDL_GPUTexture *atlas, const fp3d_gpu_camera_math::matrix4 &camera,
                    SDL_GPUBuffer *instances, const directional_light &light = {},
                    const atmosphere_uniforms &atmosphere = {},
-                   const shadow_maps &maps = {}, SDL_GPUTexture *pbr = nullptr ) const {
+                   const shadow_maps &maps = {}, SDL_GPUTexture *pbr = nullptr,
+                   SDL_GPUTexture *water_depth = nullptr ) const {
             if( !cmd || !pass || !atlas || !instances || !pipeline_ || !sampler_ ) {
                 return SDL_SetError( "FP3D textured pipeline resources missing" );
             }
@@ -503,12 +525,17 @@ class textured_pipeline
                 { maps.sun ? maps.sun : atlas, sampler_ },
                 { maps.far_sun ? maps.far_sun : atlas, sampler_ },
                 { maps.point ? maps.point : atlas, sampler_ },
-                { pbr ? pbr : atlas, sampler_ }
+                { pbr ? pbr : atlas, sampler_ },
+                { water_depth, sampler_ }
             };
-            SDL_BindGPUFragmentSamplers( pass, 0, textures, shadow_caster_ || mask_ ? 1 : 6 );
+            const Uint32 sampler_count = shadow_caster_ || mask_ ? 1 : ( water_depth ? 7 : 6 );
+            SDL_BindGPUFragmentSamplers( pass, 0, textures, sampler_count );
             const SDL_GPUBufferBinding data{ instances, 0 };
             SDL_BindGPUVertexBuffers( pass, 1, &data, 1 );
             return true;
+        }
+        bool ready() const {
+            return pipeline_ != nullptr;
         }
         void reset() {
             if( pipeline_ ) SDL_ReleaseGPUGraphicsPipeline( device_, pipeline_ );

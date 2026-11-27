@@ -22,6 +22,8 @@
 #include "game.h"
 #include "field_type.h"
 #include "fp3d_camera.h"
+#include "fp3d_geometry_curved.h"
+#include "fp3d_gpu_camera_math.h"
 #include "fp3d_iris_block_light.h"
 #include "fp3d_iris_frame.h"
 #include "fp3d_iris_materials.h"
@@ -87,6 +89,49 @@ size_t world_sprite_count( const fp3d_snapshot::scene_snapshot &scene )
     } ) );
 }
 } // namespace
+
+TEST_CASE( "fp3d_reverse_trike_connects_the_native_front_wheel_slots", "[fp3d][geometry]" )
+{
+    prepare_scene();
+    avatar &you = get_avatar();
+    map &here = get_map();
+    const auto mount = you.pos_bub( here ) + tripoint_rel_ms( 2, 3, 0 );
+    REQUIRE( here.add_vehicle( vproto_id( "motorcycle_3wheel" ), mount, 0_degrees, 100, 0 ) );
+    refresh_vision( here, mount.z() );
+    const auto scene = fp3d_snapshot::capture( you, here );
+    REQUIRE( scene.vehicles.size() == 1 );
+    fp3d_geometry::mesh mesh;
+    std::vector<fp3d_geometry::draw_range> ranges;
+    const auto counts = fp3d_vehicle::append_gpu_vehicle_geometry( scene, {}, {}, 800, 600, mesh, ranges );
+    CHECK( counts.wheels == 3 );
+    CHECK( counts.connected_shells == 0 );
+    const auto &vehicle = scene.vehicles.front();
+    const auto rel = vehicle.origin - scene.origin;
+    for( const float side : { -1.f, 1.f } ) {
+        CHECK( std::any_of( mesh.vertices.begin(), mesh.vertices.end(), [&]( const auto &vertex ) {
+            const auto [x, y, z] = vertex.position;
+            return std::abs( x - rel.x() - ( 2.f - vehicle.pivot_x ) ) < .4f &&
+                   y > .43f && y < .54f &&
+                   std::abs( z - rel.y() - ( side * .42f - vehicle.pivot_y ) ) < .08f;
+        } ) );
+    }
+}
+
+TEST_CASE( "fp3d_satellite_reflector_rim_projects_ahead_of_its_center", "[fp3d][geometry]" )
+{
+    const auto dish = fp3d_furniture::describe( "f_small_satellite_dish" );
+    REQUIRE( dish );
+    REQUIRE( dish->shape == fp3d_furniture::kind::udp_dish );
+    const auto &reflector = fp3d_furniture::parts( dish->shape ).at( 2 );
+    fp3d_geometry::mesh mesh;
+    std::vector<fp3d_geometry::draw_range> ranges;
+    fp3d_geometry::primitive_mesh_sink sink( mesh, ranges );
+    fp3d_geometry::satellite_reflector( sink, reflector );
+    REQUIRE_FALSE( mesh.indices.empty() );
+    CHECK( std::any_of( mesh.vertices.begin(), mesh.vertices.end(), [&]( const auto &vertex ) {
+        return vertex.position[0] > .4f && vertex.position[2] > reflector.z + .10f;
+    } ) );
+}
 
 TEST_CASE( "fp3d_radio_tower_has_open_steel_lattice_picking_geometry", "[fp3d][geometry]" )
 {
@@ -320,6 +365,10 @@ TEST_CASE( "fp3d_iris_water_uses_native_terrain_definitions", "[fp3d][iris_water
     REQUIRE( volume );
     CHECK( volume->submerged );
     CHECK( volume->depth == water_depth::deep );
+    fp3d_snapshot::cell submerged;
+    submerged.terrain = "t_water_cube";
+    submerged.water = volume;
+    CHECK( fp3d_scene::water_surface_offset( submerged ) == 0.f );
     CHECK_FALSE( traits( "t_water_pump" ) );
     CHECK_FALSE( traits( "t_lava" ) );
 
@@ -2988,12 +3037,25 @@ TEST_CASE( "fp3d_shore_connects_water_depths_without_connecting_to_land", "[fp3d
     land.terrain = "t_grass";
     cell upstairs = shallow;
     upstairs.position += tripoint_rel_ms::north + tripoint_rel_ms::above;
-    scene.cells = { shallow, deep, land, upstairs };
+    cell volume = shallow;
+    volume.position += tripoint_rel_ms::west;
+    volume.terrain = "modded_water_volume";
+    volume.water = water_traits{ water_depth::deep, false, false, false, true };
+    scene.cells = { shallow, deep, land, upstairs, volume };
     connect_ground_terrain( scene );
     CHECK( scene.cells[0].ground_connections == 2 );
     CHECK( scene.cells[1].ground_connections == 4 );
     CHECK( scene.cells[2].ground_connections == 0 );
     CHECK( scene.cells[3].ground_connections == 0 );
+    CHECK( scene.cells[4].ground_connections == -1 );
+    const cell flooded_floor = [&]() {
+        cell tile = upstairs;
+        tile.terrain = "modded_flood";
+        tile.floor_present = false;
+        tile.water = water_traits{ water_depth::shallow };
+        return tile;
+    }();
+    CHECK( fp3d_scene::upper_floor_owns_cap( &flooded_floor ) );
     CHECK( fp3d_materials::terrain_key( scene.cells[0] ) == "$ground:2:t_water_sh" );
 }
 
